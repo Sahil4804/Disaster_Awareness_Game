@@ -1,0 +1,61 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: #0b1120;
+  color: #f1f5f9;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Better default text contrast */
+h1, h2, h3, h4, h5, h6 {
+  color: #f8fafc;
+}
+
+p {
+  color: #cbd5e1;
+  line-height: 1.7;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Button hover states */
+button {
+  font-family: inherit;
+  color: #f1f5f9;
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Selection color */
+::selection {
+  background: #2563eb;
+  color: #fff;
+}
