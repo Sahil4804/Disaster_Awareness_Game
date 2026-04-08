@@ -1,652 +1,823 @@
-import { useState, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const CHALLENGES = [
+// ── PLACEMENT LOCATIONS ──
+const LOCATIONS = [
   {
-    id: 'water',
-    title: 'Challenge 1: Contaminated Water',
-    emoji: '🚰',
-    description: 'Floodwater has contaminated your only water source. The water is brown and murky. You need safe drinking water to survive.',
-    scene: 'water',
+    id: 'garage',
+    label: 'Inside Garage',
+    x: 60, y: 160, w: 120, h: 100,
+    room: 'garage',
+    inside: true,
+    baseCO: 800,
+    description: 'Enclosed space — CO fills the house rapidly',
   },
   {
-    id: 'power',
-    title: 'Challenge 2: Generator Safety',
-    emoji: '⚡',
-    description: 'Power is out. You found a portable generator. Where do you set it up?',
-    scene: 'power',
+    id: 'kitchen',
+    label: 'Inside Kitchen',
+    x: 200, y: 60, w: 130, h: 100,
+    room: 'kitchen',
+    inside: true,
+    baseCO: 700,
+    description: 'Enclosed space — CO accumulates fast indoors',
   },
   {
-    id: 'mold',
-    title: 'Challenge 3: Mold Cleanup',
-    emoji: '🦠',
-    description: 'Mold is spreading on the walls after the flood. It must be cleaned, but mold spores are extremely dangerous.',
-    scene: 'mold',
+    id: 'outside_5ft',
+    label: 'Outside, 5ft from window',
+    x: 380, y: 60, w: 80, h: 60,
+    room: 'outside',
+    inside: false,
+    distanceFt: 5,
+    baseCO: 250,
+    description: 'Too close to open window — CO seeps inside',
   },
   {
-    id: 'food',
-    title: 'Challenge 4: Flood-Touched Food',
-    emoji: '🥫',
-    description: 'The flood has receded. Your pantry was partially flooded. Which foods are safe to keep?',
-    scene: 'food',
+    id: 'outside_15ft',
+    label: 'Outside, 15ft from window',
+    x: 420, y: 160, w: 80, h: 60,
+    room: 'outside',
+    inside: false,
+    distanceFt: 15,
+    baseCO: 120,
+    description: 'Still within danger zone of open window',
   },
   {
-    id: 'structure',
-    title: 'Challenge 5: Re-entering Your Home',
-    emoji: '🏚️',
-    description: 'The flood has receded. Before going back inside, what must you check?',
-    scene: 'structure',
+    id: 'outside_20ft',
+    label: 'Outside, 20ft+ downwind',
+    x: 440, y: 280, w: 80, h: 60,
+    room: 'outside',
+    inside: false,
+    distanceFt: 22,
+    baseCO: 25,
+    description: 'Safe distance, downwind from all openings',
+  },
+  {
+    id: 'outside_25ft',
+    label: 'Outside, 25ft+, windows closed',
+    x: 380, y: 360, w: 80, h: 60,
+    room: 'outside',
+    inside: false,
+    distanceFt: 25,
+    baseCO: 8,
+    description: 'Maximum safety — far away, all openings sealed',
   },
 ]
 
-const WATER_STEPS = [
-  { id: 'drink', label: 'Drink it directly 🥤', correct: false, feedback: '☠️ NEVER drink floodwater! It contains sewage, chemicals, bacteria, and parasites. Drinking it directly causes severe illness — cholera, dysentery, and worse.' },
-  { id: 'filter_only', label: 'Filter through cloth only 🧽', correct: false, feedback: '⚠️ Filtering removes sediment but NOT bacteria or viruses. Cloth filtering is only step 1 — you still need to boil or disinfect!' },
-  { id: 'boil_muddy', label: 'Boil the muddy water 🔥', correct: false, feedback: '⚠️ Boiling kills germs but doesn\'t remove sediment, chemicals, or heavy metals. Filter FIRST through cloth to remove particles, THEN boil!' },
-  { id: 'filter_then_boil', label: 'Filter through cloth, THEN boil 1 min ✅', correct: true, feedback: '✅ Perfect! Step 1: Filter through cloth to remove sediment. Step 2: Bring to a rolling boil for 1 minute to kill pathogens. This is the safest field method!' },
-  { id: 'bleach', label: 'Add 8 drops of bleach per gallon, wait 30 min 🧪', correct: true, feedback: '✅ Also correct! When boiling isn\'t possible, 8 drops of unscented liquid bleach per gallon, waited 30 minutes, is the EPA-recommended alternative. The water should have a slight chlorine smell.' },
-  { id: 'solar', label: 'Leave in sunlight for a few hours ☀️', correct: false, feedback: '⚠️ SODIS (solar disinfection) works but takes 6+ hours in clear bottles in direct sun. In a flood emergency, you may not have that time. Boiling or bleach is faster and more reliable.' },
-  { id: 'iodine', label: 'Add iodine tablets 💊', correct: false, feedback: '⚠️ Iodine tablets work for biological contaminants but NOT for chemical contamination common in floods. Also, they\'re not safe for pregnant women or those with thyroid conditions.' },
+// ── WINDOW DEFINITIONS ──
+const WINDOWS = [
+  { id: 'win_kitchen', label: 'Kitchen Window', x: 330, y: 80, side: 'right', roomId: 'kitchen' },
+  { id: 'win_living', label: 'Living Room Window', x: 330, y: 220, side: 'right', roomId: 'living' },
+  { id: 'win_garage', label: 'Garage Window', x: 60, y: 270, side: 'bottom', roomId: 'garage' },
 ]
 
-const FOOD_OPTIONS = [
-  { id: 'sealed_cans', label: 'Unopened cans with intact seals — wash with bleach solution 🥫', correct: true, feedback: '✅ Intact sealed cans can be saved! Wash the outside with a bleach/water solution (1 tbsp bleach per gallon water), dry, and relabel if labels fell off.' },
-  { id: 'cardboard_food', label: 'Food in cardboard boxes (cereal, pasta) 📦', correct: false, feedback: '❌ Cardboard absorbs floodwater like a sponge. Even sealed inner bags can be compromised by floodwater bacteria seeping through micro-tears. Discard ALL cardboard-packaged food.' },
-  { id: 'fridge_food', label: 'Refrigerator food — power was out for 3 days 🧊', correct: false, feedback: '❌ After 4 hours without power, refrigerated food is unsafe. After 48 hours, even frozen food thaws and breeds dangerous bacteria. The "smell test" is unreliable — discard it all.' },
-  { id: 'root_veggies', label: 'Unpackaged root vegetables from the garden 🥔', correct: false, feedback: '❌ Any unpackaged food that contacted floodwater must be discarded. Floodwater carries sewage, chemicals, and pathogens that absorb into porous food surfaces.' },
+// CO facts for result screen
+const CO_FACTS = [
+  'Carbon monoxide (CO) is completely odorless and colorless — you cannot detect it without a monitor.',
+  'At 400+ PPM, CO causes headaches, dizziness, and death within 2-3 hours of exposure.',
+  'At 800+ PPM, unconsciousness occurs within minutes, death within the hour.',
+  'The OSHA safe workplace limit is 50 PPM over 8 hours. Home detectors alarm at 70 PPM.',
+  'Generators must be placed at least 20 feet from ANY opening — doors, windows, vents.',
+  'More people die from CO poisoning during power outages than from the disaster itself.',
+  'Even placing a generator in an open garage is lethal — CO accumulates in partially enclosed spaces.',
+  'Symptoms of CO poisoning mimic the flu: headache, nausea, confusion — making it easy to ignore.',
 ]
 
-const STRUCTURE_OPTIONS = [
-  { id: 'check_structure', label: 'Look for cracks, shifted foundation, sagging before entering 🔍', correct: true, feedback: '✅ Correct! Floods undermine foundations and weaken load-bearing walls. If you see cracks, sagging roofs, or shifted walls, do NOT enter. Call a structural engineer.' },
-  { id: 'rush_in', label: 'Go right in — it\'s your home! 🏠', correct: false, feedback: '❌ Rushing into a flood-damaged home is extremely dangerous. Floors can collapse, walls can fall, and hidden gas leaks can cause explosions. Always inspect from outside first.' },
-  { id: 'check_electric', label: 'Turn the power back on to see inside 💡', correct: false, feedback: '❌ NEVER turn power on in a flood-damaged home without professional inspection! Wet wiring causes fires and electrocution. A licensed electrician must clear it first.' },
-  { id: 'document_only', label: 'Just take photos for insurance and leave 📸', correct: false, feedback: '⚠️ Photos are smart, but you should also do a visual structural check from outside. Check for gas smells (leave immediately if you smell gas), and don\'t touch standing water inside.' },
-]
+// Calculate CO PPM based on placement and window state
+function calculateCO(location, windowStates, elapsed) {
+  if (!location) return 0
+  const loc = LOCATIONS.find(l => l.id === location)
+  if (!loc) return 0
 
-const PPE_ITEMS = [
-  { id: 'mask', name: 'N95 Mask', emoji: '😷', color: '#38bdf8' },
-  { id: 'gloves', name: 'Rubber Gloves', emoji: '🧤', color: '#22c55e' },
-  { id: 'goggles', name: 'Safety Goggles', emoji: '🥽', color: '#f97316' },
-]
+  // Time ramp factor (0 to 1 over 20 seconds)
+  const ramp = Math.min(elapsed / 12, 1)
 
-const POINTS_PER_CHALLENGE = 100
+  let basePPM = loc.baseCO
 
-export default function ToxicCleanupModule() {
+  // If outside and windows are closed, reduce CO infiltration significantly
+  if (!loc.inside) {
+    const openWindows = WINDOWS.filter(w => windowStates[w.id])
+    if (openWindows.length === 0) {
+      basePPM = Math.max(basePPM * 0.15, 5)
+    } else {
+      // More open windows = more CO entry for close placements
+      const ventFactor = 0.6 + (openWindows.length * 0.15)
+      basePPM = basePPM * ventFactor
+    }
+  } else {
+    // Inside placement: open windows help slightly by venting some CO out
+    const openWindows = WINDOWS.filter(w => windowStates[w.id])
+    const ventReduction = openWindows.length * 0.08
+    basePPM = basePPM * (1 - ventReduction)
+  }
+
+  // Apply time ramp with slight randomness
+  const noise = 0.95 + Math.random() * 0.1
+  return Math.round(basePPM * ramp * noise)
+}
+
+// Determine safety outcome
+function getOutcome(peakCO) {
+  if (peakCO >= 400) return { level: 'lethal', label: 'LETHAL EXPOSURE', color: '#dc2626', score: 0, passed: false }
+  if (peakCO >= 100) return { level: 'dangerous', label: 'DANGEROUS EXPOSURE', color: '#f59e0b', score: 30, passed: false }
+  if (peakCO >= 50) return { level: 'elevated', label: 'ELEVATED RISK', color: '#eab308', score: 55, passed: false }
+  if (peakCO >= 35) return { level: 'borderline', label: 'BORDERLINE SAFE', color: '#84cc16', score: 70, passed: true }
+  return { level: 'safe', label: 'SAFE PLACEMENT', color: '#22c55e', score: 100, passed: true }
+}
+
+export default function Module9_ToxicCleanup() {
   const { dispatch } = useGame()
 
-  const [phase, setPhase] = useState('intro') // intro | challenge | feedback | result
-  const [challengeIdx, setChallengeIdx] = useState(0)
-  const [scores, setScores] = useState([])
-  const [feedbackMsg, setFeedbackMsg] = useState('')
-  const [feedbackOk, setFeedbackOk] = useState(false)
-  // Power challenge
-  const [generatorPlaced, setGeneratorPlaced] = useState(false)
-  // Mold challenge
-  const [equippedPPE, setEquippedPPE] = useState([])
-  const [moldAttempted, setMoldAttempted] = useState(false)
+  // Phase: intro | placement | simulation | result
+  const [phase, setPhase] = useState('intro')
+  const [placedLocation, setPlacedLocation] = useState(null)
+  const [hoveredLocation, setHoveredLocation] = useState(null)
+  const [windowStates, setWindowStates] = useState({
+    win_kitchen: true,
+    win_living: true,
+    win_garage: false,
+  })
 
-  const challenge = CHALLENGES[challengeIdx] || CHALLENGES[0]
+  // Simulation state
+  const [coPPM, setCoPPM] = useState(0)
+  const [peakCO, setPeakCO] = useState(0)
+  const [simElapsed, setSimElapsed] = useState(0)
+  const [simDone, setSimDone] = useState(false)
+  const [clickDelay, setClickDelay] = useState(0)
+  const [gameOver, setGameOver] = useState(false)
+  const simRef = useRef(null)
+  const startTimeRef = useRef(null)
 
-  const showFeedback = useCallback((ok, msg, pts) => {
-    setFeedbackOk(ok)
-    setFeedbackMsg(msg)
-    setScores(prev => [...prev, pts])
-    setPhase('feedback')
+  // Grayscale and blur derived from CO PPM
+  const grayscale = Math.min((coPPM / 600) * 100, 100)
+  const blur = coPPM > 200 ? Math.min((coPPM - 200) / 300 * 3, 4) : 0
+  const screenOpacity = coPPM > 600 ? Math.max(1 - (coPPM - 600) / 400, 0) : 1
+
+  // Update click delay based on CO PPM
+  useEffect(() => {
+    if (coPPM > 400) setClickDelay(500)
+    else if (coPPM > 200) setClickDelay(200)
+    else setClickDelay(0)
+  }, [coPPM])
+
+  // Silent game over at extreme CO
+  useEffect(() => {
+    if (coPPM > 800 && !gameOver) {
+      setGameOver(true)
+      if (simRef.current) {
+        clearInterval(simRef.current)
+        simRef.current = null
+      }
+    }
+  }, [coPPM, gameOver])
+
+  // Simulation loop
+  useEffect(() => {
+    if (phase !== 'simulation' || simDone || gameOver) return
+
+    startTimeRef.current = Date.now()
+    simRef.current = setInterval(() => {
+      const elapsed = (Date.now() - startTimeRef.current) / 1000
+      setSimElapsed(elapsed)
+
+      const ppm = calculateCO(placedLocation, windowStates, elapsed)
+      setCoPPM(ppm)
+      setPeakCO(prev => Math.max(prev, ppm))
+
+      if (elapsed >= 20) {
+        clearInterval(simRef.current)
+        simRef.current = null
+        setSimDone(true)
+      }
+    }, 200)
+
+    return () => {
+      if (simRef.current) {
+        clearInterval(simRef.current)
+        simRef.current = null
+      }
+    }
+  }, [phase, placedLocation, windowStates, simDone, gameOver])
+
+  // Delayed click wrapper to simulate hypoxia sluggishness
+  const delayedAction = useCallback((fn) => {
+    if (clickDelay > 0) {
+      setTimeout(fn, clickDelay)
+    } else {
+      fn()
+    }
+  }, [clickDelay])
+
+  const handlePlaceGenerator = useCallback((locId) => {
+    setPlacedLocation(locId)
   }, [])
 
-  // Water challenge handler
-  const handleWaterChoice = useCallback((step) => {
-    if (step.correct) {
-      showFeedback(true, step.feedback, POINTS_PER_CHALLENGE)
-    } else {
-      showFeedback(false, step.feedback, 0)
-    }
-  }, [showFeedback])
+  const toggleWindow = useCallback((winId) => {
+    if (phase === 'simulation') return
+    setWindowStates(prev => ({ ...prev, [winId]: !prev[winId] }))
+  }, [phase])
 
-  // Power challenge handler
-  const handleGeneratorPlace = useCallback((location) => {
-    if (location === 'outside') {
-      showFeedback(true,
-        '✅ Correct! Generators must ALWAYS run OUTSIDE, at least 20 feet from windows and doors. Carbon monoxide (CO) is colorless and odorless — it kills hundreds of people every year during power outages!',
-        POINTS_PER_CHALLENGE
-      )
-    } else {
-      showFeedback(false,
-        '☠️ DEADLY MISTAKE! Running a generator indoors produces carbon monoxide (CO), a colorless, odorless gas. CO poisoning kills within minutes in enclosed spaces. MORE people die from generator CO poisoning after floods than from the flood itself!',
-        0
-      )
-    }
-  }, [showFeedback])
+  const startSimulation = useCallback(() => {
+    if (!placedLocation) return
+    setCoPPM(0)
+    setPeakCO(0)
+    setSimElapsed(0)
+    setSimDone(false)
+    setGameOver(false)
+    setPhase('simulation')
+  }, [placedLocation])
 
-  // Food challenge handler
-  const handleFoodChoice = useCallback((option) => {
-    if (option.correct) {
-      showFeedback(true, option.feedback, POINTS_PER_CHALLENGE)
-    } else {
-      showFeedback(false, option.feedback, 0)
-    }
-  }, [showFeedback])
+  const goToResult = useCallback(() => {
+    delayedAction(() => setPhase('result'))
+  }, [delayedAction])
 
-  // Structure challenge handler
-  const handleStructureChoice = useCallback((option) => {
-    if (option.correct) {
-      showFeedback(true, option.feedback, POINTS_PER_CHALLENGE)
-    } else {
-      showFeedback(false, option.feedback, 0)
-    }
-  }, [showFeedback])
-
-  // Mold challenge handlers
-  const togglePPE = useCallback((ppeId) => {
-    setEquippedPPE(prev =>
-      prev.includes(ppeId) ? prev.filter(id => id !== ppeId) : [...prev, ppeId]
-    )
-  }, [])
-
-  const handleMoldClean = useCallback(() => {
-    if (equippedPPE.length === 3) {
-      showFeedback(true,
-        '✅ Excellent! You wore ALL required PPE: mask (prevents inhaling spores), gloves (prevents skin contact), goggles (prevents eye exposure). Mold spores cause severe respiratory illness, skin rashes, and eye infections. Full PPE is non-negotiable!',
-        POINTS_PER_CHALLENGE
-      )
-    } else {
-      const missing = PPE_ITEMS.filter(p => !equippedPPE.includes(p.id))
-      const missingNames = missing.map(p => `${p.emoji} ${p.name}`).join(', ')
-      setMoldAttempted(true)
-      showFeedback(false,
-        `🚫 STOP! You're missing: ${missingNames}. Mold spores are microscopic and extremely dangerous. Without full PPE, you risk: ${missing.some(m => m.id === 'mask') ? '🫁 Respiratory infection from inhaled spores. ' : ''}${missing.some(m => m.id === 'gloves') ? '🖐️ Skin rashes and allergic reactions. ' : ''}${missing.some(m => m.id === 'goggles') ? '👁️ Severe eye irritation and infection. ' : ''}ALWAYS wear ALL three items!`,
-        0
-      )
-    }
-  }, [equippedPPE, showFeedback])
-
-  const nextChallenge = useCallback(() => {
-    if (challengeIdx + 1 >= CHALLENGES.length) {
-      setPhase('result')
-    } else {
-      setChallengeIdx(c => c + 1)
-      setGeneratorPlaced(false)
-      setEquippedPPE([])
-      setMoldAttempted(false)
-      setPhase('challenge')
-    }
-  }, [challengeIdx])
-
-  const totalScore = scores.reduce((a, b) => a + b, 0)
-  const maxPossible = CHALLENGES.length * POINTS_PER_CHALLENGE
-  const normalizedScore = Math.round((totalScore / maxPossible) * 100)
-  const passed = totalScore >= POINTS_PER_CHALLENGE * 3
-
-  const finishModule = () => {
-    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-9', result: { score: normalizedScore, passed } } })
+  const handleFinish = useCallback(() => {
+    const outcome = getOutcome(peakCO)
+    dispatch({
+      type: 'RECORD_SCORE',
+      payload: { key: 'flood-9', result: { score: outcome.score, passed: outcome.passed } },
+    })
     dispatch({ type: 'BACK_TO_MODULES' })
-  }
+  }, [peakCO, dispatch])
 
-  // ── INTRO ──
+  const resetAndRetry = useCallback(() => {
+    setPhase('placement')
+    setPlacedLocation(null)
+    setCoPPM(0)
+    setPeakCO(0)
+    setSimElapsed(0)
+    setSimDone(false)
+    setGameOver(false)
+    setClickDelay(0)
+    setWindowStates({ win_kitchen: true, win_living: true, win_garage: false })
+  }, [])
+
+  // ────────────────────────────────────────────
+  // INTRO PHASE
+  // ────────────────────────────────────────────
   if (phase === 'intro') {
     return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <div style={{ fontSize: 64 }}>☣️</div>
-          <h1 style={styles.title}>Module 9: Toxic Cleanup</h1>
-          <p style={styles.text}>
-            The flood has receded, but deadly hazards remain. Contaminated water,
-            carbon monoxide, and toxic mold kill hundreds of people AFTER floods end.
+      <div style={styles.outerContainer}>
+        <div style={styles.centeredCard}>
+          <div style={{ fontSize: 56, marginBottom: 8 }}>&#9889;</div>
+          <h1 style={styles.title}>Module 9: Carbon Monoxide Danger</h1>
+          <p style={styles.bodyText}>
+            Power is out after the flood. You have a portable generator to run a sump pump
+            and keep your basement from reflooding. But where you place that generator could
+            be the difference between life and death.
           </p>
-          <div style={{ ...styles.infoBox, background: 'rgba(239,68,68,0.1)', borderColor: '#ef4444' }}>
-            <p style={{ ...styles.text, fontWeight: 'bold', color: '#ef4444' }}>⚠️ Post-flood dangers:</p>
-            <p style={styles.text}>🚰 Contaminated water causes cholera & dysentery</p>
-            <p style={styles.text}>⚡ Generators produce deadly carbon monoxide</p>
-            <p style={styles.text}>🦠 Mold spores cause severe respiratory illness</p>
-            <p style={styles.text}>🥫 Flood-touched food harbors invisible bacteria</p>
-            <p style={styles.text}>🏚️ Structural damage makes re-entry deadly</p>
+          <div style={styles.warningBox}>
+            <p style={{ ...styles.bodyText, color: '#fbbf24', fontWeight: 600, margin: 0 }}>
+              The Silent Killer
+            </p>
+            <p style={{ ...styles.bodyText, margin: '8px 0 0 0', fontSize: 13 }}>
+              Carbon monoxide is odorless, colorless, and tasteless. You cannot see it, smell it,
+              or taste it. By the time you feel symptoms, it may be too late. Hundreds die each year
+              from generator CO poisoning during power outages.
+            </p>
           </div>
-          <p style={{ ...styles.text, color: '#fbbf24' }}>
-            Complete 5 survival challenges to pass this module.
+          <p style={{ ...styles.bodyText, color: '#94a3b8', fontSize: 13, marginTop: 12 }}>
+            You will choose where to place the generator, then watch what happens.
+            Pay attention to the PPM reading.
           </p>
-          <button style={styles.btnPrimary} onClick={() => setPhase('challenge')}>
-            Begin Cleanup ☣️
+          <button style={styles.btnPrimary} onClick={() => setPhase('placement')}>
+            Begin Scenario
           </button>
-          <button style={styles.btnBack} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-            ← Back to Modules
+          <button
+            style={styles.btnBack}
+            onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}
+          >
+            Back to Modules
           </button>
         </div>
       </div>
     )
   }
 
-  // ── RESULT ──
+  // ────────────────────────────────────────────
+  // RESULT PHASE
+  // ────────────────────────────────────────────
   if (phase === 'result') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <div style={{ fontSize: 64 }}>{passed ? '🏠' : '🏚️'}</div>
-          <h1 style={styles.title}>{passed ? 'Home Safe!' : 'Dangerous Mistakes'}</h1>
-          <div style={{ ...styles.scoreBox, borderColor: passed ? '#22c55e' : '#ef4444' }}>
-            <span style={{ fontSize: 36, fontWeight: 'bold', color: passed ? '#22c55e' : '#ef4444' }}>
-              {normalizedScore}%
-            </span>
-            <span style={styles.text}> ({totalScore} / {maxPossible} pts)</span>
-          </div>
-          <div style={{ width: '100%', marginTop: 12 }}>
-            {CHALLENGES.map((c, i) => (
-              <div key={c.id} style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '8px 12px', margin: '4px 0', borderRadius: 8,
-                background: scores[i] > 0 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-              }}>
-                <span style={styles.text}>{c.emoji} {c.title}</span>
-                <span style={{ ...styles.text, color: scores[i] > 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
-                  {scores[i] > 0 ? `+${scores[i]}` : 'Failed'}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div style={{ ...styles.infoBox, background: 'rgba(251,191,36,0.1)', borderColor: '#fbbf24', marginTop: 12 }}>
-            <p style={styles.text}>
-              💡 <strong>Key takeaways:</strong> Filter THEN boil water (or use bleach). Generators go OUTSIDE only.
-              Full PPE for mold — mask, gloves, AND goggles. Discard all flood-touched food except intact sealed cans.
-              Never re-enter without checking structure first. These rules save lives after every flood.
-            </p>
-          </div>
-          <button style={styles.btnPrimary} onClick={finishModule}>
-            {passed ? 'Complete Module ✅' : 'Finish ❌'}
-          </button>
-        </div>
-      </div>
-    )
-  }
+    const outcome = getOutcome(peakCO)
+    const loc = LOCATIONS.find(l => l.id === placedLocation)
 
-  // ── FEEDBACK ──
-  if (phase === 'feedback') {
     return (
-      <div style={styles.container}>
-        <div style={styles.card}>
-          <div style={{ fontSize: 56 }}>{feedbackOk ? '✅' : '☠️'}</div>
-          <h2 style={{ ...styles.title, fontSize: 20, color: feedbackOk ? '#22c55e' : '#ef4444' }}>
-            {challenge.title}
-          </h2>
-          <p style={{ ...styles.text, fontSize: 16, lineHeight: 1.7, textAlign: 'center' }}>
-            {feedbackMsg}
+      <div style={styles.outerContainer}>
+        <div style={{ ...styles.centeredCard, maxWidth: 620 }}>
+          <div style={{ fontSize: 48, marginBottom: 4 }}>
+            {outcome.level === 'lethal' ? '\u2620\uFE0F' : outcome.level === 'dangerous' ? '\u26A0\uFE0F' : '\u2705'}
+          </div>
+          <h1 style={{ ...styles.title, color: outcome.color }}>{outcome.label}</h1>
+          <p style={{ ...styles.bodyText, fontSize: 15, textAlign: 'center' }}>
+            You placed the generator: <strong style={{ color: '#e2e8f0' }}>{loc ? loc.label : '—'}</strong>
           </p>
-          <button style={styles.btnPrimary} onClick={nextChallenge}>
-            {challengeIdx + 1 >= CHALLENGES.length ? 'See Results' : 'Next Challenge →'}
-          </button>
+          <div style={{
+            display: 'flex', justifyContent: 'center', gap: 32,
+            margin: '12px 0', padding: '12px 20px',
+            background: 'rgba(255,255,255,0.04)', borderRadius: 10,
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: outcome.color }}>{peakCO}</div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Peak PPM</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: outcome.color }}>{outcome.score}%</div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Score</div>
+            </div>
+          </div>
+
+          {/* Outcome narrative */}
+          {outcome.level === 'lethal' && (
+            <div style={{ ...styles.warningBox, borderColor: '#dc2626', background: 'rgba(220,38,38,0.08)' }}>
+              <p style={{ ...styles.bodyText, margin: 0, fontSize: 13 }}>
+                {gameOver
+                  ? 'The screen faded to black. You lost consciousness from carbon monoxide poisoning before you could react. In real life, this happens silently — no alarm, no smell, no warning.'
+                  : `Peak CO reached ${peakCO} PPM. At this concentration, severe headache, confusion, and loss of consciousness occur within minutes. Death follows without immediate rescue and fresh air.`
+                }
+              </p>
+            </div>
+          )}
+          {outcome.level === 'dangerous' && (
+            <div style={{ ...styles.warningBox, borderColor: '#f59e0b', background: 'rgba(245,158,11,0.08)' }}>
+              <p style={{ ...styles.bodyText, margin: 0, fontSize: 13 }}>
+                CO reached {peakCO} PPM inside the house. At this level, you would experience
+                headaches, dizziness, and nausea within an hour. Prolonged exposure causes
+                brain damage and death. The generator was too close to an opening.
+              </p>
+            </div>
+          )}
+          {(outcome.level === 'safe' || outcome.level === 'borderline') && (
+            <div style={{ ...styles.warningBox, borderColor: '#22c55e', background: 'rgba(34,197,94,0.08)' }}>
+              <p style={{ ...styles.bodyText, margin: 0, fontSize: 13 }}>
+                CO stayed at safe levels. Placing the generator 20+ feet from any opening
+                and ensuring windows near it are closed is the correct approach. Well done.
+              </p>
+            </div>
+          )}
+
+          {/* CO Education Facts */}
+          <div style={{
+            width: '100%', marginTop: 16, padding: '14px 16px',
+            background: 'rgba(255,255,255,0.03)', borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.06)',
+          }}>
+            <p style={{ margin: '0 0 10px 0', color: '#e2e8f0', fontWeight: 600, fontSize: 14 }}>
+              Carbon Monoxide Facts
+            </p>
+            {CO_FACTS.map((fact, i) => (
+              <p key={i} style={{ ...styles.bodyText, fontSize: 12, margin: '6px 0', lineHeight: 1.5 }}>
+                {'\u2022'} {fact}
+              </p>
+            ))}
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button style={styles.btnSecondary} onClick={resetAndRetry}>
+              Try Again
+            </button>
+            <button style={styles.btnPrimary} onClick={handleFinish}>
+              {outcome.passed ? 'Complete Module' : 'Finish'}
+            </button>
+          </div>
         </div>
       </div>
     )
   }
 
-  // ── CHALLENGE SCENES ──
+  // ────────────────────────────────────────────
+  // PLACEMENT + SIMULATION PHASES (shared layout)
+  // ────────────────────────────────────────────
+  const isSimulating = phase === 'simulation'
+  const simProgress = Math.min(simElapsed / 20, 1)
+
+  // Build the filter string for desaturation effect
+  const filterParts = []
+  if (grayscale > 0) filterParts.push(`grayscale(${grayscale.toFixed(1)}%)`)
+  if (blur > 0) filterParts.push(`blur(${blur.toFixed(1)}px)`)
+  const filterStr = filterParts.length > 0 ? filterParts.join(' ') : 'none'
+
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-          <span style={{ fontSize: 12, color: '#64748b' }}>
-            Challenge {challengeIdx + 1} / {CHALLENGES.length}
-          </span>
-          <div style={{ flex: 1, height: 4, background: '#334155', borderRadius: 4 }}>
-            <div style={{
-              height: '100%', borderRadius: 4,
-              background: 'linear-gradient(90deg, #2563eb, #7c3aed)',
-              width: `${((challengeIdx + 1) / CHALLENGES.length) * 100}%`,
-              transition: 'width 0.3s',
-            }} />
+    <div style={{
+      ...styles.outerContainer,
+      filter: isSimulating ? filterStr : 'none',
+      opacity: isSimulating ? screenOpacity : 1,
+      transition: 'filter 0.8s ease, opacity 1.2s ease',
+    }}>
+      {/* Game Over overlay — silent fade to black */}
+      {gameOver && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 999,
+          background: '#000', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeIn 3s ease forwards',
+        }}>
+          <div style={{ color: '#475569', fontSize: 18, fontWeight: 300, marginBottom: 20, textAlign: 'center' }}>
+            You did not wake up.
           </div>
+          <div style={{ color: '#334155', fontSize: 13, maxWidth: 400, textAlign: 'center', lineHeight: 1.6 }}>
+            Carbon monoxide filled the house silently. There was no smell, no alarm,
+            no warning. This is how CO poisoning kills — invisibly.
+          </div>
+          <button
+            style={{ ...styles.btnPrimary, marginTop: 28, opacity: 0.7 }}
+            onClick={() => setPhase('result')}
+          >
+            Continue
+          </button>
         </div>
+      )}
 
-        <div style={{ fontSize: 48 }}>{challenge.emoji}</div>
-        <h2 style={{ ...styles.title, fontSize: 22 }}>{challenge.title}</h2>
-        <p style={{ ...styles.text, textAlign: 'center' }}>{challenge.description}</p>
+      {/* Top bar */}
+      <div style={styles.topBar}>
+        <button
+          style={styles.btnSmall}
+          onClick={() => {
+            if (isSimulating) return
+            dispatch({ type: 'BACK_TO_MODULES' })
+          }}
+        >
+          Back
+        </button>
+        <span style={{ color: '#94a3b8', fontSize: 13, fontWeight: 500 }}>
+          Module 9: CO Danger
+        </span>
+        {/* PPM counter — clinical, unobtrusive */}
+        <div style={{
+          padding: '4px 12px', borderRadius: 6,
+          background: 'rgba(255,255,255,0.05)',
+          fontFamily: 'monospace', fontSize: 13,
+          color: coPPM > 200 ? '#f8fafc' : '#64748b',
+          transition: 'color 1s',
+        }}>
+          {coPPM} PPM
+        </div>
+      </div>
 
-        {/* ── WATER SCENE ── */}
-        {challenge.id === 'water' && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Visual of dirty water */}
-            <div style={{
-              background: 'linear-gradient(180deg, #78350f, #92400e, #a16207)',
-              borderRadius: 12, height: 80, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', border: '2px solid #a16207',
-              position: 'relative', overflow: 'hidden',
-            }}>
-              <span style={{ fontSize: 36, opacity: 0.8 }}>🥤</span>
-              <span style={{ position: 'absolute', fontSize: 14, bottom: 4, color: '#fde68a' }}>
-                ~ murky brown water ~
-              </span>
-              {/* Floating debris */}
-              <span style={{ position: 'absolute', top: 8, left: '20%', fontSize: 16 }}>🍂</span>
-              <span style={{ position: 'absolute', top: 12, right: '25%', fontSize: 14 }}>🪵</span>
-            </div>
-            <p style={{ ...styles.text, fontSize: 13, color: '#fbbf24', textAlign: 'center' }}>
-              How will you make this water safe to drink?
-            </p>
-            {WATER_STEPS.map(step => (
-              <button key={step.id} onClick={() => handleWaterChoice(step)} style={{
-                background: step.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)',
-                border: `1px solid ${step.correct ? '#22c55e33' : '#47556933'}`,
-                borderRadius: 10, padding: '12px 16px', cursor: 'pointer',
-                textAlign: 'left', color: '#f1f5f9', fontSize: 15,
-                transition: 'border-color 0.2s, background 0.2s',
-              }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = '#60a5fa'; e.currentTarget.style.background = 'rgba(96,165,250,0.1)' }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = step.correct ? '#22c55e33' : '#47556933'; e.currentTarget.style.background = step.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)' }}
-              >
-                {step.label}
-              </button>
-            ))}
-          </div>
+      {/* Instructions */}
+      <div style={{ textAlign: 'center', padding: '0 16px', marginBottom: 8 }}>
+        {phase === 'placement' && (
+          <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
+            Click a highlighted zone to place the generator. Toggle windows open/closed for ventilation.
+          </p>
         )}
+        {isSimulating && !simDone && !gameOver && (
+          <p style={{ color: '#64748b', fontSize: 12, margin: 0, transition: 'color 2s' }}>
+            Simulation running... {Math.round(simElapsed)}s / 20s
+          </p>
+        )}
+        {simDone && !gameOver && (
+          <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
+            Simulation complete. Peak CO: {peakCO} PPM
+          </p>
+        )}
+      </div>
 
-        {/* ── POWER SCENE ── */}
-        {challenge.id === 'power' && (
-          <div style={{ width: '100%' }}>
-            {/* House diagram */}
-            <div style={{
-              position: 'relative', width: '100%', height: 280,
-              background: '#0f172a', borderRadius: 12, overflow: 'hidden',
-              border: '1px solid #334155',
-            }}>
-              {/* Sky */}
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '30%', background: '#1e293b' }} />
-              {/* Ground */}
-              <div style={{
-                position: 'absolute', bottom: 0, left: 0, right: 0, height: '25%',
-                background: 'linear-gradient(180deg, #365314, #1a2e05)',
-              }} />
-              {/* House */}
-              <div style={{
-                position: 'absolute', left: '25%', right: '25%', top: '20%', bottom: '25%',
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-              }}>
-                {/* Roof */}
-                <div style={{
-                  width: 0, height: 0,
-                  borderLeft: '100px solid transparent',
-                  borderRight: '100px solid transparent',
-                  borderBottom: '50px solid #dc2626',
-                }} />
-                {/* Walls */}
-                <div style={{
-                  width: 200, flex: 1, background: '#78716c',
-                  border: '2px solid #57534e', position: 'relative',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {/* Window */}
-                  <div style={{ width: 30, height: 30, background: '#fbbf24', border: '2px solid #57534e', borderRadius: 2 }} />
-                  {/* INSIDE click zone */}
-                  <div
-                    onClick={() => handleGeneratorPlace('inside')}
-                    style={{
-                      position: 'absolute', inset: 0, cursor: 'pointer',
-                      display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: 4,
+      {/* ── HOUSE MAP ── */}
+      <div style={styles.mapContainer}>
+        <svg
+          viewBox="0 0 560 440"
+          style={{ width: '100%', maxWidth: 560, height: 'auto' }}
+        >
+          {/* Background — outside area */}
+          <rect x="0" y="0" width="560" height="440" rx="8" fill="#0c1222" />
+
+          {/* Grass / outside area label */}
+          <text x="470" y="30" fill="#334155" fontSize="11" fontFamily="sans-serif">OUTSIDE</text>
+
+          {/* House outline */}
+          <rect x="40" y="40" width="310" height="340" rx="4"
+            fill="#131c2e" stroke="#1e3a5f" strokeWidth="2" />
+
+          {/* Garage */}
+          <rect x="50" y="150" width="140" height="120" rx="2"
+            fill="#111827" stroke="#1e3a5f" strokeWidth="1.5" />
+          <text x="90" y="215" fill="#475569" fontSize="12" fontFamily="sans-serif">Garage</text>
+
+          {/* Kitchen */}
+          <rect x="190" y="50" width="150" height="120" rx="2"
+            fill="#111827" stroke="#1e3a5f" strokeWidth="1.5" />
+          <text x="235" y="115" fill="#475569" fontSize="12" fontFamily="sans-serif">Kitchen</text>
+
+          {/* Living Room */}
+          <rect x="50" y="280" width="290" height="90" rx="2"
+            fill="#111827" stroke="#1e3a5f" strokeWidth="1.5" />
+          <text x="145" y="330" fill="#475569" fontSize="12" fontFamily="sans-serif">Living Room</text>
+
+          {/* Sump pump indicator */}
+          <rect x="70" y="300" width="30" height="30" rx="3" fill="#1e293b" stroke="#334155" strokeWidth="1" />
+          <text x="76" y="320" fill="#64748b" fontSize="9" fontFamily="sans-serif">Pump</text>
+
+          {/* Flood water indication in basement */}
+          <rect x="52" y="352" width="286" height="16" rx="2" fill="rgba(59,130,246,0.12)" />
+          <text x="155" y="363" fill="#3b82f6" fontSize="8" fontFamily="sans-serif" opacity="0.5">
+            ~ flood water ~
+          </text>
+
+          {/* ── WINDOWS ── */}
+          {WINDOWS.map(win => {
+            const isOpen = windowStates[win.id]
+            const winW = 24
+            const winH = 10
+            return (
+              <g key={win.id}
+                style={{ cursor: isSimulating ? 'default' : 'pointer' }}
+                onClick={() => toggleWindow(win.id)}
+              >
+                <rect
+                  x={win.x} y={win.y} width={winW} height={winH} rx="2"
+                  fill={isOpen ? 'rgba(56,189,248,0.3)' : 'rgba(100,116,139,0.2)'}
+                  stroke={isOpen ? '#38bdf8' : '#475569'}
+                  strokeWidth="1.5"
+                />
+                {isOpen && (
+                  <line x1={win.x + 3} y1={win.y + winH / 2}
+                    x2={win.x + winW - 3} y2={win.y + winH / 2}
+                    stroke="#38bdf8" strokeWidth="0.8" opacity="0.6" />
+                )}
+                <text x={win.x + winW / 2} y={win.y - 3}
+                  fill={isOpen ? '#38bdf8' : '#475569'}
+                  fontSize="7" textAnchor="middle" fontFamily="sans-serif"
+                >
+                  {isOpen ? 'OPEN' : 'SHUT'}
+                </text>
+              </g>
+            )
+          })}
+
+          {/* ── PLACEMENT ZONES ── */}
+          {LOCATIONS.map(loc => {
+            const isPlaced = placedLocation === loc.id
+            const isHovered = hoveredLocation === loc.id
+            const showZones = phase === 'placement'
+
+            return (
+              <g key={loc.id}>
+                {/* Zone highlight */}
+                {(showZones || isPlaced) && (
+                  <rect
+                    x={loc.x} y={loc.y} width={loc.w} height={loc.h} rx="4"
+                    fill={isPlaced
+                      ? 'rgba(251,191,36,0.15)'
+                      : isHovered
+                        ? 'rgba(148,163,184,0.12)'
+                        : 'rgba(148,163,184,0.05)'}
+                    stroke={isPlaced ? '#fbbf24' : isHovered ? '#64748b' : '#334155'}
+                    strokeWidth={isPlaced ? 2 : 1}
+                    strokeDasharray={isPlaced ? '0' : '4 3'}
+                    style={{ cursor: showZones ? 'pointer' : 'default' }}
+                    onClick={() => {
+                      if (showZones) handlePlaceGenerator(loc.id)
                     }}
+                    onMouseEnter={() => { if (showZones) setHoveredLocation(loc.id) }}
+                    onMouseLeave={() => setHoveredLocation(null)}
+                  />
+                )}
+                {/* Generator icon when placed here */}
+                {isPlaced && (
+                  <text
+                    x={loc.x + loc.w / 2} y={loc.y + loc.h / 2 + 6}
+                    textAnchor="middle" fontSize="22"
                   >
-                    <span style={{
-                      fontSize: 11, color: '#fbbf24', background: 'rgba(0,0,0,0.5)',
-                      padding: '2px 8px', borderRadius: 4,
-                    }}>
-                      Click: Place INSIDE 🏠
-                    </span>
-                  </div>
-                </div>
-              </div>
-              {/* Outside zone - LEFT */}
-              <div
-                onClick={() => handleGeneratorPlace('outside')}
-                style={{
-                  position: 'absolute', left: 0, top: 0, bottom: 0, width: '22%',
-                  cursor: 'pointer', display: 'flex', alignItems: 'flex-end',
-                  justifyContent: 'center', paddingBottom: '28%',
-                }}
-              >
-                <span style={{
-                  fontSize: 11, color: '#22c55e', background: 'rgba(0,0,0,0.5)',
-                  padding: '2px 8px', borderRadius: 4, textAlign: 'center',
-                }}>
-                  Click: Place OUTSIDE 🌳
-                </span>
-              </div>
-              {/* Outside zone - RIGHT */}
-              <div
-                onClick={() => handleGeneratorPlace('outside')}
-                style={{
-                  position: 'absolute', right: 0, top: 0, bottom: 0, width: '22%',
-                  cursor: 'pointer', display: 'flex', alignItems: 'flex-end',
-                  justifyContent: 'center', paddingBottom: '28%',
-                }}
-              >
-                <span style={{
-                  fontSize: 11, color: '#22c55e', background: 'rgba(0,0,0,0.5)',
-                  padding: '2px 8px', borderRadius: 4, textAlign: 'center',
-                }}>
-                  Click: Place OUTSIDE 🌳
-                </span>
-              </div>
-              {/* Generator icon */}
-              <div style={{
-                position: 'absolute', bottom: '28%', left: '50%', transform: 'translateX(-50%)',
-                fontSize: 32,
-              }}>
-                🔌
-              </div>
-            </div>
-            <p style={{ ...styles.text, fontSize: 13, color: '#fbbf24', textAlign: 'center', marginTop: 8 }}>
-              ⚡ Where do you place the generator?
-            </p>
-          </div>
-        )}
+                    {'\u2699\uFE0F'}
+                  </text>
+                )}
+                {/* Zone label on hover */}
+                {(isHovered && showZones) && (
+                  <text
+                    x={loc.x + loc.w / 2} y={loc.y - 5}
+                    textAnchor="middle" fill="#94a3b8" fontSize="8" fontFamily="sans-serif"
+                  >
+                    {loc.label}
+                  </text>
+                )}
+              </g>
+            )
+          })}
 
-        {/* ── MOLD SCENE ── */}
-        {challenge.id === 'mold' && (
-          <div style={{ width: '100%' }}>
-            {/* PPE Selection */}
-            <p style={{ ...styles.text, fontSize: 14, color: '#94a3b8', textAlign: 'center', marginBottom: 8 }}>
-              Select your safety equipment before cleaning:
-            </p>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 16 }}>
-              {PPE_ITEMS.map(ppe => {
-                const equipped = equippedPPE.includes(ppe.id)
-                return (
-                  <button key={ppe.id} onClick={() => togglePPE(ppe.id)} style={{
-                    background: equipped ? `${ppe.color}22` : 'rgba(51,65,85,0.5)',
-                    border: `2px solid ${equipped ? ppe.color : '#475569'}`,
-                    borderRadius: 14, padding: '12px 16px', cursor: 'pointer',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                    transition: 'all 0.2s', minWidth: 90,
-                    boxShadow: equipped ? `0 0 15px ${ppe.color}33` : 'none',
-                  }}>
-                    <span style={{ fontSize: 32 }}>{ppe.emoji}</span>
-                    <span style={{ color: equipped ? ppe.color : '#94a3b8', fontWeight: 'bold', fontSize: 12 }}>
-                      {equipped ? '✅ Equipped' : ppe.name}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-            {/* Equipped status */}
-            <div style={{
-              textAlign: 'center', padding: '6px 12px', borderRadius: 8, marginBottom: 12,
-              background: equippedPPE.length === 3 ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.1)',
-              border: `1px solid ${equippedPPE.length === 3 ? '#22c55e' : '#fbbf24'}`,
-            }}>
-              <span style={{ color: equippedPPE.length === 3 ? '#22c55e' : '#fbbf24', fontSize: 13, fontWeight: 'bold' }}>
-                PPE: {equippedPPE.length}/3 equipped {equippedPPE.length === 3 ? '— Ready!' : '— Select all 3!'}
-              </span>
-            </div>
-            {/* Mold wall */}
-            <div
-              onClick={handleMoldClean}
+          {/* CO cloud visualization during simulation */}
+          {isSimulating && coPPM > 50 && (
+            <>
+              <circle cx="175" cy="200" r={Math.min(coPPM / 5, 80)}
+                fill="rgba(148,163,184,0.04)" />
+              <circle cx="220" cy="140" r={Math.min(coPPM / 6, 60)}
+                fill="rgba(148,163,184,0.03)" />
+              <circle cx="140" cy="300" r={Math.min(coPPM / 7, 50)}
+                fill="rgba(148,163,184,0.03)" />
+            </>
+          )}
+        </svg>
+      </div>
+
+      {/* Window legend */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
+        {WINDOWS.map(win => (
+          <button
+            key={win.id}
+            onClick={() => toggleWindow(win.id)}
+            disabled={isSimulating}
+            style={{
+              background: windowStates[win.id] ? 'rgba(56,189,248,0.12)' : 'rgba(100,116,139,0.1)',
+              border: `1px solid ${windowStates[win.id] ? '#38bdf8' : '#334155'}`,
+              color: windowStates[win.id] ? '#38bdf8' : '#64748b',
+              borderRadius: 6, padding: '4px 10px', fontSize: 11,
+              cursor: isSimulating ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            {win.label}: {windowStates[win.id] ? 'Open' : 'Closed'}
+          </button>
+        ))}
+      </div>
+
+      {/* Selected location info */}
+      {placedLocation && phase === 'placement' && (
+        <div style={{
+          textAlign: 'center', marginTop: 10, padding: '8px 16px',
+          background: 'rgba(255,255,255,0.03)', borderRadius: 8,
+          maxWidth: 400, marginLeft: 'auto', marginRight: 'auto',
+        }}>
+          <p style={{ color: '#e2e8f0', fontSize: 13, margin: 0, fontWeight: 500 }}>
+            {LOCATIONS.find(l => l.id === placedLocation)?.label}
+          </p>
+          <p style={{ color: '#64748b', fontSize: 11, margin: '4px 0 0 0' }}>
+            {LOCATIONS.find(l => l.id === placedLocation)?.description}
+          </p>
+        </div>
+      )}
+
+      {/* Simulation progress bar */}
+      {isSimulating && (
+        <div style={{
+          width: '80%', maxWidth: 400, height: 3, background: '#1e293b',
+          borderRadius: 2, margin: '10px auto 0',
+        }}>
+          <div style={{
+            height: '100%', borderRadius: 2,
+            width: `${simProgress * 100}%`,
+            background: coPPM > 200 ? '#64748b' : '#334155',
+            transition: 'width 0.2s, background 1s',
+          }} />
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+        {phase === 'placement' && (
+          <>
+            <button
               style={{
-                background: 'linear-gradient(135deg, #1e293b, #334155)',
-                borderRadius: 12, height: 120, cursor: 'pointer',
-                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                border: '2px solid #475569', position: 'relative', overflow: 'hidden',
-                transition: 'border-color 0.2s',
+                ...styles.btnSecondary,
+                opacity: placedLocation ? 1 : 0.4,
+                cursor: placedLocation ? 'pointer' : 'not-allowed',
               }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = '#ef4444'}
-              onMouseLeave={e => e.currentTarget.style.borderColor = '#475569'}
+              disabled={!placedLocation}
+              onClick={startSimulation}
             >
-              {/* Mold spots */}
-              <div style={{ position: 'absolute', top: '15%', left: '20%', fontSize: 24, opacity: 0.8 }}>🟢</div>
-              <div style={{ position: 'absolute', top: '40%', left: '35%', fontSize: 18, opacity: 0.6 }}>🟤</div>
-              <div style={{ position: 'absolute', top: '25%', right: '25%', fontSize: 28, opacity: 0.7 }}>⬛</div>
-              <div style={{ position: 'absolute', bottom: '20%', left: '50%', fontSize: 20, opacity: 0.5 }}>🟢</div>
-              <div style={{ position: 'absolute', top: '55%', right: '35%', fontSize: 16, opacity: 0.6 }}>🟤</div>
-              <span style={{ fontSize: 14, color: '#f1f5f9', fontWeight: 'bold', zIndex: 1, textShadow: '0 0 8px rgba(0,0,0,0.8)' }}>
-                🧹 Click to clean mold
-              </span>
-              <span style={{ fontSize: 11, color: '#94a3b8', zIndex: 1, marginTop: 4 }}>
-                🦠 Toxic black & green mold patches
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* ── FOOD SCENE ── */}
-        {challenge.id === 'food' && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Visual of flooded pantry */}
-            <div style={{
-              background: 'linear-gradient(180deg, #78350f, #451a03)',
-              borderRadius: 12, height: 80, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', border: '2px solid #92400e',
-              position: 'relative', overflow: 'hidden',
-            }}>
-              <span style={{ fontSize: 36 }}>🥫📦🧊🥔</span>
-              <span style={{ position: 'absolute', fontSize: 14, bottom: 4, color: '#fde68a' }}>
-                ~ flood-damaged pantry ~
-              </span>
-            </div>
-            <p style={{ ...styles.text, fontSize: 13, color: '#fbbf24', textAlign: 'center' }}>
-              Which food is safe to keep after the flood?
-            </p>
-            {FOOD_OPTIONS.map(option => (
-              <button key={option.id} onClick={() => handleFoodChoice(option)} style={{
-                background: option.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)',
-                border: `1px solid ${option.correct ? '#22c55e33' : '#47556933'}`,
-                borderRadius: 10, padding: '12px 16px', cursor: 'pointer',
-                textAlign: 'left', color: '#f1f5f9', fontSize: 15,
-                transition: 'border-color 0.2s, background 0.2s',
+              Start Generator
+            </button>
+            <button
+              style={styles.btnSmall}
+              onClick={() => {
+                setPlacedLocation(null)
+                setHoveredLocation(null)
               }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = '#60a5fa'; e.currentTarget.style.background = 'rgba(96,165,250,0.1)' }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = option.correct ? '#22c55e33' : '#47556933'; e.currentTarget.style.background = option.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)' }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+            >
+              Reset Placement
+            </button>
+          </>
         )}
-
-        {/* ── STRUCTURE SCENE ── */}
-        {challenge.id === 'structure' && (
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {/* Visual of damaged house */}
-            <div style={{
-              background: 'linear-gradient(180deg, #1e293b, #0f172a)',
-              borderRadius: 12, height: 80, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', border: '2px solid #475569',
-              position: 'relative', overflow: 'hidden',
-            }}>
-              <span style={{ fontSize: 36 }}>🏚️</span>
-              <span style={{ position: 'absolute', fontSize: 14, bottom: 4, color: '#fbbf24' }}>
-                ~ flood-damaged home ~
-              </span>
-              <span style={{ position: 'absolute', top: 8, left: '15%', fontSize: 18, opacity: 0.6 }}>⚠️</span>
-              <span style={{ position: 'absolute', top: 12, right: '20%', fontSize: 16, opacity: 0.5 }}>💧</span>
-            </div>
-            <p style={{ ...styles.text, fontSize: 13, color: '#fbbf24', textAlign: 'center' }}>
-              What should you do before re-entering your flood-damaged home?
-            </p>
-            {STRUCTURE_OPTIONS.map(option => (
-              <button key={option.id} onClick={() => handleStructureChoice(option)} style={{
-                background: option.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)',
-                border: `1px solid ${option.correct ? '#22c55e33' : '#47556933'}`,
-                borderRadius: 10, padding: '12px 16px', cursor: 'pointer',
-                textAlign: 'left', color: '#f1f5f9', fontSize: 15,
-                transition: 'border-color 0.2s, background 0.2s',
-              }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = '#60a5fa'; e.currentTarget.style.background = 'rgba(96,165,250,0.1)' }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = option.correct ? '#22c55e33' : '#47556933'; e.currentTarget.style.background = option.correct ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.05)' }}
-              >
-                {option.label}
-              </button>
-            ))}
+        {isSimulating && simDone && !gameOver && (
+          <button style={styles.btnPrimary} onClick={goToResult}>
+            See Results
+          </button>
+        )}
+        {isSimulating && !simDone && !gameOver && (
+          <div style={{ color: '#334155', fontSize: 11 }}>
+            Monitoring CO levels...
           </div>
         )}
       </div>
+
+      {/* Placement hint for sluggish controls */}
+      {isSimulating && clickDelay > 0 && !gameOver && (
+        <div style={{
+          textAlign: 'center', marginTop: 8,
+          color: '#334155', fontSize: 10, transition: 'color 2s',
+        }}>
+          {clickDelay >= 500 ? 'Controls feel... heavy...' : 'Something feels off...'}
+        </div>
+      )}
     </div>
   )
 }
 
+// ── STYLES ──
 const styles = {
-  container: {
+  outerContainer: {
     minHeight: '100vh',
+    width: '100%',
     background: '#0f172a',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    fontFamily: "'Segoe UI', system-ui, sans-serif",
+    padding: '16px',
+    boxSizing: 'border-box',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    transition: 'filter 0.8s ease, opacity 1.2s ease',
   },
-  card: {
-    background: '#1e293b',
-    borderRadius: 20,
-    padding: '28px 24px',
+  centeredCard: {
     maxWidth: 520,
     width: '100%',
+    background: '#1e293b',
+    borderRadius: 16,
+    padding: '32px 28px',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: 12,
-    border: '1px solid #334155',
+    marginTop: 40,
+    border: '1px solid rgba(255,255,255,0.06)',
+  },
+  topBar: {
+    width: '100%',
+    maxWidth: 580,
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  mapContainer: {
+    width: '100%',
+    maxWidth: 580,
+    background: '#0c1222',
+    borderRadius: 12,
+    padding: 10,
+    border: '1px solid rgba(255,255,255,0.05)',
+    display: 'flex',
+    justifyContent: 'center',
   },
   title: {
     color: '#f1f5f9',
-    margin: 0,
-    fontSize: 26,
+    fontSize: 22,
+    fontWeight: 700,
+    margin: '8px 0 12px 0',
     textAlign: 'center',
   },
-  text: {
-    color: '#f1f5f9',
-    margin: '4px 0',
-    fontSize: 15,
-    lineHeight: 1.5,
+  bodyText: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    lineHeight: 1.6,
+    margin: '0 0 8px 0',
+    textAlign: 'left',
   },
-  infoBox: {
-    border: '1px solid',
-    borderRadius: 12,
-    padding: '12px 16px',
+  warningBox: {
     width: '100%',
-  },
-  scoreBox: {
-    border: '2px solid',
-    borderRadius: 16,
-    padding: '16px 32px',
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: 8,
+    padding: '14px 16px',
+    borderRadius: 10,
+    border: '1px solid #fbbf24',
+    background: 'rgba(251,191,36,0.06)',
+    marginTop: 12,
   },
   btnPrimary: {
     background: 'linear-gradient(135deg, #2563eb, #7c3aed)',
     color: '#fff',
     border: 'none',
-    borderRadius: 12,
-    padding: '14px 32px',
-    fontSize: 17,
-    fontWeight: 'bold',
+    borderRadius: 10,
+    padding: '12px 28px',
+    fontSize: 15,
+    fontWeight: 600,
     cursor: 'pointer',
-    marginTop: 8,
-    transition: 'transform 0.15s',
+    marginTop: 16,
+    transition: 'opacity 0.2s',
+  },
+  btnSecondary: {
+    background: 'rgba(37,99,235,0.15)',
+    color: '#60a5fa',
+    border: '1px solid rgba(37,99,235,0.3)',
+    borderRadius: 8,
+    padding: '10px 22px',
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
   },
   btnBack: {
-    background: 'transparent',
-    color: '#94a3b8',
-    border: '1px solid #475569',
-    borderRadius: 10,
-    padding: '10px 24px',
-    fontSize: 14,
+    background: 'none',
+    border: '1px solid #334155',
+    color: '#64748b',
+    borderRadius: 8,
+    padding: '10px 20px',
+    fontSize: 13,
     cursor: 'pointer',
+    marginTop: 10,
+    transition: 'color 0.2s',
+  },
+  btnSmall: {
+    background: 'rgba(255,255,255,0.05)',
+    color: '#94a3b8',
+    border: '1px solid #334155',
+    borderRadius: 6,
+    padding: '6px 14px',
+    fontSize: 12,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
   },
 }

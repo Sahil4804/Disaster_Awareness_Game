@@ -1,301 +1,323 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const ITEMS = [
-  {
-    id: 1, name: 'Old Tire', emoji: '🛞', hasWater: true,
-    fact: 'Old tires collect rainwater in their rims and are the #1 mosquito breeding site worldwide. A single tire can produce thousands of mosquitoes.',
-    top: '12%', left: '8%',
-  },
-  {
-    id: 2, name: 'Bucket', emoji: '🪣', hasWater: true,
-    fact: 'Buckets, cans, and containers left outdoors fill with rainwater. Mosquitoes only need 1 tablespoon of standing water to lay 100-200 eggs.',
-    top: '15%', left: '55%',
-  },
-  {
-    id: 3, name: 'Flower Pot Saucer', emoji: '🪴', hasWater: true,
-    fact: 'Flower pot saucers are sneaky breeding grounds. Empty them every 2-3 days or add sand to absorb water while still draining to the plant.',
-    top: '40%', left: '15%',
-  },
-  {
-    id: 4, name: 'Puddle', emoji: '💧', hasWater: true,
-    fact: 'Stagnant puddles that last more than 7 days become mosquito nurseries. After floods, fill low spots with dirt or ensure drainage.',
-    top: '65%', left: '45%',
-  },
-  {
-    id: 5, name: 'Blocked Gutter', emoji: '🏚️', hasWater: true,
-    fact: 'Clogged gutters hold water for weeks. After a flood, clearing gutters is one of the most important mosquito prevention steps.',
-    top: '8%', left: '75%',
-  },
-  {
-    id: 6, name: 'Abandoned Pool', emoji: '🏊', hasWater: true,
-    fact: 'Abandoned or untreated pools become massive mosquito breeding lakes. Even a few inches of green water can produce millions of mosquitoes.',
-    top: '55%', left: '70%',
-  },
-  {
-    id: 7, name: 'Tarp Collecting Water', emoji: '⛺', hasWater: true,
-    fact: 'Tarps, plastic sheeting, and covers sag and collect pools of water. Pull them taut or poke drain holes to prevent water accumulation.',
-    top: '38%', left: '60%',
-  },
-  {
-    id: 8, name: 'Birdbath', emoji: '🐦', hasWater: true,
-    fact: 'Birdbaths should be emptied and refilled every 2-3 days after floods. Adding a small fountain/agitator prevents mosquitoes — they cannot breed in moving water.',
-    top: '72%', left: '10%',
-  },
-  {
-    id: 12, name: 'Discarded Bottle Cap', emoji: '\u{1F9E2}', hasWater: true,
-    fact: 'Even a bottle cap holds enough water for mosquitoes! They only need 1 teaspoon of standing water. After floods, check for ANY small container that holds water.',
-    top: '82%', left: '65%',
-  },
-  {
-    id: 13, name: 'Tree Hollow', emoji: '\u{1F333}', hasWater: true,
-    fact: 'Tree hollows collect and hold water for weeks. In tropical flood zones, tree holes are a major source of Aedes mosquitoes that carry dengue and Zika.',
-    top: '25%', left: '70%',
-  },
-  {
-    id: 14, name: 'Broken Pipe Puddle', emoji: '\u{1F527}', hasWater: true,
-    fact: 'Floods break water/sewer pipes, creating persistent puddles that last long after floodwater recedes. Report broken pipes \u2014 they\'re both a contamination hazard and a mosquito factory.',
-    top: '60%', left: '5%',
-  },
-  {
-    id: 15, name: 'Pet Water Bowl', emoji: '\u{1F415}', hasWater: true,
-    fact: 'Forgotten outdoor pet bowls are perfect mosquito nurseries. Change pet water daily and bring bowls inside at night.',
-    top: '48%', left: '48%',
-  },
-  // Decoys
-  {
-    id: 9, name: 'Dry Rock', emoji: '\u{1FAA8}', hasWater: false,
-    fact: 'Rocks and solid surfaces don\'t hold water. Good eye, but focus on containers and depressions that trap water!',
-    top: '30%', left: '38%',
-  },
-  {
-    id: 10, name: 'Wooden Fence', emoji: '\u{1FAB5}', hasWater: false,
-    fact: 'Fences don\'t collect standing water. Look for items with concave surfaces or rims that trap water.',
-    top: '50%', left: '30%',
-  },
-  {
-    id: 11, name: 'Metal Sign', emoji: '\u{1FAA7}', hasWater: false,
-    fact: 'Flat vertical surfaces don\'t collect water. Mosquitoes need horizontal surfaces with pooled water.',
-    top: '20%', left: '35%',
-  },
-  {
-    id: 16, name: 'Concrete Slab', emoji: '\u{1F9F1}', hasWater: false,
-    fact: 'Flat, sloped surfaces like concrete slabs drain water. Mosquitoes need pooled water \u2014 check depressions and cracks in concrete instead.',
-    top: '35%', left: '82%',
-  },
-  {
-    id: 17, name: 'Hanging Clothesline', emoji: '\u{1F455}', hasWater: false,
-    fact: 'Clotheslines don\'t hold water. However, check the area beneath for containers that might collect dripping water.',
-    top: '15%', left: '42%',
-  },
+// ── Water source definitions with volume_mL ──
+const WATER_SOURCES = [
+  { id: 1,  name: 'Old Tire',       emoji: '\uD83D\uDEDE', hasWater: true, volume_mL: 800,  row: 0, col: 0 },
+  { id: 2,  name: 'Bucket',         emoji: '\uD83E\uDEE3', hasWater: true, volume_mL: 2000, row: 0, col: 2 },
+  { id: 3,  name: 'Flower Pot',     emoji: '\uD83E\uDEB4', hasWater: true, volume_mL: 350,  row: 0, col: 4 },
+  { id: 4,  name: 'Puddle',         emoji: '\uD83D\uDCA7', hasWater: true, volume_mL: 3000, row: 1, col: 1 },
+  { id: 5,  name: 'Blocked Gutter', emoji: '\uD83C\uDFDA\uFE0F', hasWater: true, volume_mL: 1500, row: 1, col: 3 },
+  { id: 6,  name: 'Abandoned Pool', emoji: '\uD83C\uDFCA', hasWater: true, volume_mL: 5000, row: 2, col: 0 },
+  { id: 7,  name: 'Tarp',           emoji: '\u26FA',       hasWater: true, volume_mL: 1200, row: 2, col: 2 },
+  { id: 8,  name: 'Birdbath',       emoji: '\uD83D\uDC26', hasWater: true, volume_mL: 600,  row: 2, col: 4 },
+  { id: 9,  name: 'Bottle Cap',     emoji: '\uD83E\uDDE2', hasWater: true, volume_mL: 50,   row: 3, col: 1 },
+  { id: 10, name: 'Tree Hollow',    emoji: '\uD83C\uDF33', hasWater: true, volume_mL: 400,  row: 3, col: 3 },
+  { id: 11, name: 'Broken Pipe',    emoji: '\uD83D\uDD27', hasWater: true, volume_mL: 2500, row: 4, col: 0 },
+  { id: 12, name: 'Pet Bowl',       emoji: '\uD83D\uDC15', hasWater: true, volume_mL: 300,  row: 4, col: 2 },
+  // Decoys -- no standing water
+  { id: 13, name: 'Dry Rock',       emoji: '\uD83E\uDEA8', hasWater: false, volume_mL: 0, row: 1, col: 0 },
+  { id: 14, name: 'Fence',          emoji: '\uD83E\uDEB5', hasWater: false, volume_mL: 0, row: 3, col: 0 },
+  { id: 15, name: 'Metal Sign',     emoji: '\uD83E\uDEA7', hasWater: false, volume_mL: 0, row: 4, col: 4 },
+  { id: 16, name: 'Concrete Slab',  emoji: '\uD83E\uDDF1', hasWater: false, volume_mL: 0, row: 0, col: 3 },
 ]
 
-const TIMER_SECONDS = 60
-const WATER_SOURCES_TOTAL = ITEMS.filter(i => i.hasWater).length
+const TOTAL_HOURS = 72
+const BREED_INTERVAL = 12 // hours between breeding cycles
+const R0 = 2 // basic reproduction number
 
-const MOSQUITO_FACTS = [
-  "\u{1F99F} Mosquitoes can breed in as little as 1 teaspoon of water",
-  "\u{1F99F} After floods, mosquito populations can increase 100x in one week",
-  "\u{1F99F} Dengue, Zika, West Nile, and Malaria are all mosquito-borne",
-  "\u{1F99F} Female mosquitoes need blood to produce eggs \u2014 males don't bite",
-  "\u{1F99F} Mosquitoes kill more humans than any other animal on Earth",
-  "\u{1F99F} A single mosquito can lay 100-200 eggs at a time",
-  "\u{1F99F} Mosquito eggs can survive dry conditions for months, hatching when reflooded",
-]
+const WATER_ONLY = WATER_SOURCES.filter(s => s.hasWater)
+const TOTAL_WATER_SOURCES = WATER_ONLY.length
 
-// Fisher-Yates shuffle for item positions
-function shufflePositions(items) {
-  const positions = items.map(i => ({ top: i.top, left: i.left }))
-  for (let i = positions.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [positions[i], positions[j]] = [positions[j], positions[i]]
-  }
-  return items.map((item, idx) => ({ ...item, top: positions[idx].top, left: positions[idx].left }))
-}
-
+// ── Component ──
 export default function Module14_TheSwarm() {
   const { dispatch } = useGame()
-  const [phase, setPhase] = useState('intro')
-  const [timeLeft, setTimeLeft] = useState(TIMER_SECONDS)
-  const [cleared, setCleared] = useState({})
-  const [falseClicks, setFalseClicks] = useState(0)
-  const [popup, setPopup] = useState(null)
-  const [mosquitoCount, setMosquitoCount] = useState(5)
-  const [mosquitoes, setMosquitoes] = useState([])
+  const [phase, setPhase] = useState('intro') // intro | simulation | result
+  const [hour, setHour] = useState(0)
+  const [treated, setTreated] = useState({}) // id -> true
+  const [mosquitoCount, setMosquitoCount] = useState(0)
+  const [graphData, setGraphData] = useState([{ hour: 0, population: 0 }])
+  const [generation, setGeneration] = useState(0)
+  const [decoyClicks, setDecoyClicks] = useState(0)
   const [result, setResult] = useState(null)
-  const [currentFact, setCurrentFact] = useState(0)
-  const [shuffledItems, setShuffledItems] = useState(ITEMS)
-  const popupTimerRef = useRef(null)
+  const [flashId, setFlashId] = useState(null)
 
-  // Mosquito fact ticker — cycle every 5 seconds
-  useEffect(() => {
-    if (phase !== 'play') return
-    const id = setInterval(() => {
-      setCurrentFact(f => (f + 1) % MOSQUITO_FACTS.length)
-    }, 5000)
-    return () => clearInterval(id)
-  }, [phase])
+  const timerRef = useRef(null)
+  const hourRef = useRef(0)
+  const treatedRef = useRef({})
+  const mosquitoRef = useRef(0)
+  const generationRef = useRef(0)
+  const graphRef = useRef([{ hour: 0, population: 0 }])
 
-  // Shuffle item positions when game starts
-  useEffect(() => {
-    if (phase === 'play') {
-      setShuffledItems(shufflePositions(ITEMS))
-    }
-  }, [phase === 'play'])
+  // Keep refs in sync
+  useEffect(() => { treatedRef.current = treated }, [treated])
+  useEffect(() => { hourRef.current = hour }, [hour])
+  useEffect(() => { mosquitoRef.current = mosquitoCount }, [mosquitoCount])
+  useEffect(() => { generationRef.current = generation }, [generation])
 
-  // Timer
+  // ── Start simulation timer ──
   useEffect(() => {
-    if (phase !== 'play') return
-    if (timeLeft <= 0) { endGame(); return }
-    const id = setTimeout(() => setTimeLeft(t => t - 1), 1000)
-    return () => clearTimeout(id)
-  }, [timeLeft, phase])
+    if (phase !== 'simulation') return
 
-  // Mosquito spawning
-  useEffect(() => {
-    if (phase !== 'play') return
-    const id = setInterval(() => {
-      const remainingSources = ITEMS.filter(i => i.hasWater && !cleared[i.id]).length
-      if (remainingSources > 0) {
-        setMosquitoCount(prev => prev + remainingSources)
-        // Add visual mosquitoes
-        setMosquitoes(prev => {
-          const newBugs = Array.from({ length: Math.min(remainingSources, 3) }, (_, i) => ({
-            id: Date.now() + i,
-            x: Math.random() * 90 + 5,
-            y: Math.random() * 80 + 10,
-            dx: (Math.random() - 0.5) * 4,
-            dy: (Math.random() - 0.5) * 4,
-          }))
-          return [...prev.slice(-30), ...newBugs]
-        })
+    timerRef.current = setInterval(() => {
+      const nextHour = hourRef.current + 1
+
+      if (nextHour > TOTAL_HOURS) {
+        clearInterval(timerRef.current)
+        finishSimulation()
+        return
       }
-    }, 2000)
-    return () => clearInterval(id)
-  }, [phase, cleared])
 
-  // Animate mosquitoes
-  useEffect(() => {
-    if (phase !== 'play') return
-    const id = setInterval(() => {
-      setMosquitoes(prev => prev.map(m => ({
-        ...m,
-        x: Math.max(2, Math.min(95, m.x + m.dx + (Math.random() - 0.5) * 2)),
-        y: Math.max(5, Math.min(90, m.y + m.dy + (Math.random() - 0.5) * 2)),
-      })))
-    }, 300)
-    return () => clearInterval(id)
+      // Check if this hour triggers a breeding cycle (every 12 hours)
+      if (nextHour > 0 && nextHour % BREED_INTERVAL === 0) {
+        const newGen = generationRef.current + 1
+        const multiplier = Math.pow(R0, newGen - 1) // gen1=1x, gen2=2x, gen3=4x, gen4=8x...
+
+        // Calculate new mosquitoes from untreated sources
+        let breedingOutput = 0
+        WATER_ONLY.forEach(source => {
+          if (!treatedRef.current[source.id]) {
+            breedingOutput += (source.volume_mL / 100) * multiplier
+          }
+        })
+
+        const newTotal = mosquitoRef.current + Math.round(breedingOutput)
+
+        setGeneration(newGen)
+        setMosquitoCount(newTotal)
+        mosquitoRef.current = newTotal
+        generationRef.current = newGen
+
+        // Record data point at each breeding cycle
+        const newPoint = { hour: nextHour, population: newTotal }
+        graphRef.current = [...graphRef.current, newPoint]
+        setGraphData([...graphRef.current])
+      }
+
+      setHour(nextHour)
+      hourRef.current = nextHour
+    }, 1000) // 1 second = 1 hour
+
+    return () => clearInterval(timerRef.current)
   }, [phase])
 
-  const clickItem = useCallback((item) => {
-    if (phase !== 'play' || cleared[item.id]) return
+  // ── Finish simulation ──
+  const finishSimulation = useCallback(() => {
+    clearInterval(timerRef.current)
 
-    if (item.hasWater) {
-      setCleared(prev => ({ ...prev, [item.id]: true }))
+    const treatedWater = WATER_ONLY.filter(s => treatedRef.current[s.id]).length
+
+    // Determine when the last treatment happened (approximate)
+    let score = 0
+    const ratio = treatedWater / TOTAL_WATER_SOURCES
+
+    if (ratio >= 0.9 && hourRef.current <= 24) {
+      score = 100
+    } else if (ratio >= 0.9) {
+      score = 85
+    } else if (ratio >= 0.7 && hourRef.current <= 48) {
+      score = Math.round(60 + (ratio - 0.7) * 100)
+    } else if (ratio >= 0.5) {
+      score = Math.round(40 + (ratio - 0.5) * 40)
     } else {
-      setFalseClicks(prev => prev + 1)
+      score = Math.round(ratio * 60)
     }
 
-    setPopup(item)
-    if (popupTimerRef.current) clearTimeout(popupTimerRef.current)
-    popupTimerRef.current = setTimeout(() => setPopup(null), 2500)
-  }, [phase, cleared])
+    // Penalty for decoy clicks
+    score = Math.max(0, Math.min(100, score - decoyClicks * 3))
 
-  const endGame = useCallback(() => {
-    const correctClears = ITEMS.filter(i => i.hasWater && cleared[i.id]).length
-    const pct = correctClears / WATER_SOURCES_TOTAL
-    const penalty = falseClicks * 5
-    const rawScore = Math.max(0, Math.round(pct * 100 - penalty))
-    const passed = pct > 0.75
-    const r = { score: rawScore, passed, cleared: correctClears, total: WATER_SOURCES_TOTAL, falseClicks, mosquitoCount }
-    setResult(r)
+    const passed = score >= 60
+    const finalResult = {
+      score,
+      passed,
+      treatedWater,
+      totalSources: TOTAL_WATER_SOURCES,
+      finalMosquitoes: mosquitoRef.current,
+      finalGeneration: generationRef.current,
+      decoyClicks,
+    }
+
+    setResult(finalResult)
     setPhase('result')
-    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-14', result: r } })
-  }, [cleared, falseClicks, mosquitoCount, dispatch])
+    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-14', result: { score, passed } } })
+  }, [decoyClicks, dispatch])
 
-  const resetGame = () => {
-    setPhase('intro')
-    setTimeLeft(TIMER_SECONDS)
-    setCleared({})
-    setFalseClicks(0)
-    setPopup(null)
-    setMosquitoCount(5)
-    setMosquitoes([])
+  // ── Handle clicking a water source ──
+  const handleSourceClick = useCallback((source) => {
+    if (phase !== 'simulation') return
+    if (treated[source.id]) return
+
+    if (!source.hasWater) {
+      setDecoyClicks(prev => prev + 1)
+      setFlashId(source.id)
+      setTimeout(() => setFlashId(null), 600)
+      return
+    }
+
+    setTreated(prev => ({ ...prev, [source.id]: true }))
+    setFlashId(source.id)
+    setTimeout(() => setFlashId(null), 600)
+  }, [phase, treated])
+
+  // ── Start simulation ──
+  const startSimulation = () => {
+    setPhase('simulation')
+    setHour(0)
+    setTreated({})
+    setMosquitoCount(0)
+    setGraphData([{ hour: 0, population: 0 }])
+    setGeneration(0)
+    setDecoyClicks(0)
     setResult(null)
-    setCurrentFact(0)
+    hourRef.current = 0
+    treatedRef.current = {}
+    mosquitoRef.current = 0
+    generationRef.current = 0
+    graphRef.current = [{ hour: 0, population: 0 }]
   }
 
-  // ── INTRO ──
+  // ── Derived values ──
+  const treatedCount = WATER_ONLY.filter(s => treated[s.id]).length
+  const remainingSources = TOTAL_WATER_SOURCES - treatedCount
+  const timerProgress = (hour / TOTAL_HOURS) * 100
+  const urgencyColor = hour < 24 ? '#4ade80' : hour < 48 ? '#fbbf24' : '#ef4444'
+
+  const maxPopulation = useMemo(() => Math.max(1, ...graphData.map(d => d.population)), [graphData])
+
+  // ═══════════════════════════════════════════════
+  // ── INTRO PHASE ──
+  // ═══════════════════════════════════════════════
   if (phase === 'intro') {
     return (
-      <div style={styles.container}>
-        <div style={styles.introBox}>
-          <div style={{ fontSize: 64 }}>🦟🌊</div>
-          <h1 style={styles.title}>Module 14: The Swarm</h1>
-          <p style={styles.text}>
-            After a flood recedes, the REAL danger begins. Standing water becomes a breeding ground for
-            mosquitoes carrying <strong style={{ color: '#f87171' }}>dengue, malaria, Zika, and West Nile virus</strong>.
+      <div style={S.container}>
+        <div style={S.introCard}>
+          <div style={{ fontSize: 56, marginBottom: 8 }}>🦟🗺️</div>
+          <h1 style={{ color: '#f1f5f9', fontSize: 26, margin: '8px 0' }}>
+            Module 14: The Swarm
+          </h1>
+          <h2 style={{ color: '#fbbf24', fontSize: 16, fontWeight: 'normal', margin: '4px 0 16px' }}>
+            Epidemiological R_0 Simulator
+          </h2>
+
+          <p style={S.introText}>
+            The floodwater has receded, but the <strong style={{ color: '#ef4444' }}>third wave</strong> is
+            coming. Stagnant water left in tires, buckets, and gutters becomes a breeding ground for
+            mosquitoes carrying <strong style={{ color: '#ef4444' }}>Dengue</strong> and <strong style={{ color: '#ef4444' }}>Malaria</strong>.
           </p>
-          <p style={{ ...styles.text, color: '#fbbf24', fontWeight: 'bold' }}>
-            YOUR MISSION: Find and eliminate all sources of standing water before the mosquito population explodes.
-          </p>
-          <div style={{ background: '#1e293b', padding: 16, borderRadius: 8, margin: '12px 0' }}>
-            <p style={{ ...styles.text, margin: 0, fontSize: 13 }}>
-              ⏱️ Time: 60 seconds | 🎯 Goal: Clear 75%+ of water sources | ⚠️ Avoid clicking dry items (wastes time)
+
+          <div style={S.missionBox}>
+            <strong style={{ color: '#fbbf24' }}>YOUR MISSION:</strong>
+            <p style={{ color: '#cbd5e1', margin: '8px 0 0', fontSize: 14, lineHeight: 1.6 }}>
+              As a <strong style={{ color: '#38bdf8' }}>Public Health Official</strong>, you must locate and treat/empty
+              all standing water sources within 72 hours before the mosquito larva incubation timer hits zero.
+              Every 12 hours, remaining sources breed mosquitoes <strong style={{ color: '#ef4444' }}>exponentially</strong> (R_0 = 2).
+              Miss too many, and the infection rate graph goes vertical.
             </p>
           </div>
-          <p style={{ ...styles.text, color: '#f87171', fontSize: 13 }}>
-            Every 2 seconds, remaining water sources spawn more mosquitoes. Act fast!
-          </p>
-          <button style={styles.startBtn} onClick={() => setPhase('play')}>
-            🦟 Start Cleanup
+
+          <div style={S.mechanicsBox}>
+            <div style={S.mechItem}>
+              <span style={{ color: '#4ade80', fontWeight: 'bold' }}>Timer:</span>{' '}
+              72 hours (72 seconds real-time). 1 second = 1 hour.
+            </div>
+            <div style={S.mechItem}>
+              <span style={{ color: '#fbbf24', fontWeight: 'bold' }}>Breeding:</span>{' '}
+              Every 12 hours, untreated sources produce mosquitoes. Output doubles each cycle.
+            </div>
+            <div style={S.mechItem}>
+              <span style={{ color: '#ef4444', fontWeight: 'bold' }}>R_0 = 2:</span>{' '}
+              Generation 1 = 1x, Gen 2 = 2x, Gen 3 = 4x, Gen 4 = 8x ... exponential growth.
+            </div>
+            <div style={S.mechItem}>
+              <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>Goal:</span>{' '}
+              Click water sources on the map to empty/treat them before it is too late.
+            </div>
+          </div>
+
+          <button style={S.primaryBtn} onClick={startSimulation}>
+            Begin Outbreak Response
+          </button>
+          <button
+            style={{ ...S.secondaryBtn, marginTop: 10 }}
+            onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}
+          >
+            Back to Modules
           </button>
         </div>
       </div>
     )
   }
 
-  // ── RESULT ──
+  // ═══════════════════════════════════════════════
+  // ── RESULT PHASE ──
+  // ═══════════════════════════════════════════════
   if (phase === 'result' && result) {
+    const verdictColor = result.passed ? '#4ade80' : '#ef4444'
+    const verdictLabel = result.score >= 90
+      ? 'EPIDEMIC PREVENTED'
+      : result.score >= 60
+        ? 'OUTBREAK CONTAINED'
+        : 'EPIDEMIC -- VECTOR-BORNE DISEASE SURGE'
+
     return (
-      <div style={styles.container}>
-        <div style={styles.introBox}>
-          <div style={{ fontSize: 64 }}>{result.passed ? '✅🦟' : '❌🦟'}</div>
-          <h1 style={{ ...styles.title, color: result.passed ? '#4ade80' : '#f87171' }}>
-            {result.passed ? 'AREA SECURED — BREEDING SITES ELIMINATED' : 'MOSQUITO OUTBREAK'}
+      <div style={S.container}>
+        <div style={{ ...S.introCard, maxWidth: 750 }}>
+          <div style={{ fontSize: 48 }}>{result.passed ? '✅🦟' : '🚨🦟'}</div>
+          <h1 style={{ color: verdictColor, fontSize: 24, margin: '8px 0' }}>
+            {verdictLabel}
           </h1>
-          <div style={styles.statGrid}>
-            <div style={styles.statItem}>
-              <div style={{ fontSize: 32, color: '#4ade80' }}>{result.cleared}/{result.total}</div>
-              <div style={styles.statLabel}>Sources Cleared</div>
+
+          {/* Final Graph */}
+          <div style={{ margin: '16px 0', background: '#0f172a', borderRadius: 10, padding: 16, border: '1px solid #334155' }}>
+            <h3 style={{ color: '#f1f5f9', fontSize: 14, margin: '0 0 8px', textAlign: 'center' }}>
+              Infection Rate Over Time (Mosquito Population)
+            </h3>
+            {renderGraph(graphData, maxPopulation)}
+          </div>
+
+          {/* Stats grid */}
+          <div style={S.resultGrid}>
+            <div style={S.resultCell}>
+              <div style={{ fontSize: 28, color: '#38bdf8', fontWeight: 'bold' }}>{result.score}</div>
+              <div style={S.resultLabel}>Score</div>
             </div>
-            <div style={styles.statItem}>
-              <div style={{ fontSize: 32, color: '#f87171' }}>{result.falseClicks}</div>
-              <div style={styles.statLabel}>False Clicks</div>
+            <div style={S.resultCell}>
+              <div style={{ fontSize: 28, color: '#4ade80', fontWeight: 'bold' }}>{result.treatedWater}/{result.totalSources}</div>
+              <div style={S.resultLabel}>Sources Treated</div>
             </div>
-            <div style={styles.statItem}>
-              <div style={{ fontSize: 32, color: '#fbbf24' }}>{result.mosquitoCount}</div>
-              <div style={styles.statLabel}>Mosquitoes Spawned</div>
+            <div style={S.resultCell}>
+              <div style={{ fontSize: 28, color: '#ef4444', fontWeight: 'bold' }}>{result.finalMosquitoes.toLocaleString()}</div>
+              <div style={S.resultLabel}>Mosquitoes Bred</div>
             </div>
-            <div style={styles.statItem}>
-              <div style={{ fontSize: 32, color: '#38bdf8' }}>{result.score}%</div>
-              <div style={styles.statLabel}>Score</div>
+            <div style={S.resultCell}>
+              <div style={{ fontSize: 28, color: '#fbbf24', fontWeight: 'bold' }}>{result.finalGeneration}</div>
+              <div style={S.resultLabel}>Generations</div>
             </div>
           </div>
-          <div style={{ ...styles.text, background: '#1e293b', padding: 16, borderRadius: 8, marginTop: 12 }}>
-            <strong style={{ color: '#fbbf24' }}>POST-FLOOD DISEASE PREVENTION:</strong>
-            <ul style={{ textAlign: 'left', color: '#cbd5e1', lineHeight: 1.8 }}>
-              <li><strong style={{ color: '#f87171' }}>Dengue Fever</strong> — Causes severe joint pain ("breakbone fever"), potentially fatal hemorrhagic dengue</li>
-              <li><strong style={{ color: '#f87171' }}>Malaria</strong> — Kills 600,000+ people annually. Symptoms appear 10-15 days after bite</li>
-              <li><strong style={{ color: '#f87171' }}>Zika Virus</strong> — Causes birth defects. Mosquitoes breed in tiny amounts of water</li>
-              <li><strong style={{ color: '#4ade80' }}>Prevention</strong> — Eliminate standing water within 48 hours after flooding. Mosquito eggs hatch in 7-10 days</li>
-              <li><strong style={{ color: '#4ade80' }}>Key fact</strong> — Mosquitoes cannot breed in moving water. Agitate or drain ALL still water</li>
-            </ul>
+
+          {/* R_0 explanation */}
+          <div style={{ background: '#1e293b', borderRadius: 10, padding: 16, margin: '16px 0', textAlign: 'left', border: '1px solid #334155' }}>
+            <h3 style={{ color: '#fbbf24', fontSize: 15, margin: '0 0 8px' }}>
+              Understanding R_0 (Basic Reproduction Number)
+            </h3>
+            <p style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.7, margin: 0 }}>
+              <strong style={{ color: '#f1f5f9' }}>R_0</strong> measures how many new infections one
+              infected individual produces. When R_0 {'>'} 1, the disease spreads exponentially.
+              In this simulation, R_0 = 2 means each generation of mosquitoes produces <strong style={{ color: '#ef4444' }}>twice</strong> as
+              many offspring. After just 6 generations: 1 {'->'} 2 {'->'} 4 {'->'} 8 {'->'} 16 {'->'} 32x multiplier.
+            </p>
+            <p style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.7, margin: '10px 0 0' }}>
+              The <strong style={{ color: '#4ade80' }}>"third wave"</strong> of any flood is vector-borne disease.
+              Floodwater recedes, but puddles remain in tires, buckets, gutters, and tarps.
+              Mosquito larvae incubate in 72 hours. This wave is <strong style={{ color: '#4ade80' }}>entirely preventable</strong> through
+              environmental disruption -- emptying standing water before larvae mature.
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'center' }}>
-            <button style={styles.startBtn} onClick={resetGame}>🔄 Retry</button>
-            <button style={{ ...styles.startBtn, background: '#6366f1' }} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-              📋 Back to Modules
+
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginTop: 12 }}>
+            <button style={S.primaryBtn} onClick={startSimulation}>Retry Simulation</button>
+            <button style={S.secondaryBtn} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
+              Back to Modules
             </button>
           </div>
         </div>
@@ -303,160 +325,376 @@ export default function Module14_TheSwarm() {
     )
   }
 
-  // ── PLAY ──
-  const clearedCount = ITEMS.filter(i => i.hasWater && cleared[i.id]).length
-
+  // ═══════════════════════════════════════════════
+  // ── SIMULATION PHASE ──
+  // ═══════════════════════════════════════════════
   return (
-    <div style={styles.container}>
-      {/* HUD */}
-      <div style={styles.hud}>
-        <span style={{ color: timeLeft <= 10 ? '#f87171' : '#f1f5f9', fontSize: 16, fontWeight: 'bold' }}>
-          ⏱️ {timeLeft}s
-        </span>
-        <span style={{ color: '#4ade80', fontSize: 14 }}>
-          🪣 {clearedCount}/{WATER_SOURCES_TOTAL} cleared
-        </span>
-        <span style={{ color: '#f87171', fontSize: 14 }}>
-          🦟 {mosquitoCount} mosquitoes
-        </span>
-        <span style={{ color: '#fbbf24', fontSize: 14 }}>
-          ❌ {falseClicks} false
-        </span>
-        <button style={styles.submitBtn} onClick={endGame}>✅ Finish</button>
-      </div>
-
-      <h2 style={{ color: '#f1f5f9', textAlign: 'center', margin: '6px 0', fontSize: 16 }}>
-        Click items with standing water to remove them 🪣
-      </h2>
-
-      {/* Scene */}
-      <div style={styles.scene}>
-        {/* Ground */}
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0, height: '25%',
-          background: 'linear-gradient(0deg, #3d2b1f, #5a4030, #4a3828)',
-          borderRadius: '0 0 14px 14px',
-        }} />
-
-        {/* Sky/background */}
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: '30%',
-          background: 'linear-gradient(180deg, #4a6fa5, #8baacc, #c5d5e5)',
-          opacity: 0.3,
-          borderRadius: '14px 14px 0 0',
-        }} />
-
-        {/* Items */}
-        {shuffledItems.map(item => (
-          <div
-            key={item.id}
-            onClick={() => clickItem(item)}
-            style={{
-              position: 'absolute',
-              top: item.top,
-              left: item.left,
-              width: 90,
-              height: 80,
-              background: cleared[item.id]
-                ? 'rgba(74,222,128,0.15)'
-                : item.hasWater
-                  ? 'rgba(56,189,248,0.12)'
-                  : 'rgba(100,116,139,0.12)',
-              borderRadius: 12,
-              border: cleared[item.id]
-                ? '2px solid #4ade80'
-                : '2px solid rgba(255,255,255,0.15)',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: cleared[item.id] ? 'default' : 'pointer',
-              transition: 'all 0.2s',
-              opacity: cleared[item.id] ? 0.5 : 1,
-              boxShadow: !cleared[item.id] ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-            }}
-          >
-            <div style={{ fontSize: 32 }}>
-              {cleared[item.id] ? '✅' : item.emoji}
-            </div>
-            <div style={{
-              fontSize: 10, color: '#f1f5f9', textAlign: 'center',
-              fontWeight: 'bold', marginTop: 2,
-              textShadow: '0 1px 3px rgba(0,0,0,0.8)',
-            }}>
-              {item.name}
-            </div>
-            {/* Water indicator for uncleaned water items */}
-            {item.hasWater && !cleared[item.id] && (
-              <div style={{
-                position: 'absolute', bottom: 2, right: 4,
-                fontSize: 12, opacity: 0.7,
-              }}>💧</div>
-            )}
+    <div style={S.container}>
+      {/* Header bar */}
+      <div style={S.headerBar}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ color: '#f1f5f9', fontWeight: 'bold', fontSize: 16 }}>
+            HOUR {hour} / {TOTAL_HOURS}
           </div>
-        ))}
-
-        {/* Animated mosquitoes */}
-        {mosquitoes.map(m => (
-          <div key={m.id} style={{
-            position: 'absolute',
-            left: `${m.x}%`,
-            top: `${m.y}%`,
-            fontSize: 16,
-            pointerEvents: 'none',
-            transition: 'left 0.3s linear, top 0.3s linear',
-            opacity: 0.8,
-            zIndex: 20,
-          }}>
-            🦟
-          </div>
-        ))}
-
-        {/* Mosquito density warning */}
-        {mosquitoCount > 30 && (
           <div style={{
-            position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
-            background: 'rgba(239,68,68,0.9)', padding: '4px 12px', borderRadius: 8,
-            color: '#fff', fontWeight: 'bold', fontSize: 13, zIndex: 30,
+            color: urgencyColor, fontWeight: 'bold', fontSize: 14,
+            padding: '2px 10px', borderRadius: 6,
+            background: hour < 24 ? 'rgba(74,222,128,0.15)' : hour < 48 ? 'rgba(251,191,36,0.15)' : 'rgba(239,68,68,0.2)',
           }}>
-            ⚠️ MOSQUITO POPULATION EXPLODING!
+            {hour < 24 ? 'SAFE WINDOW' : hour < 48 ? 'WARNING' : 'CRITICAL'}
           </div>
-        )}
-      </div>
-
-      {/* Popup */}
-      {popup && (
-        <div style={{
-          ...styles.popup,
-          borderColor: popup.hasWater ? '#4ade80' : '#f87171',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 24 }}>{popup.emoji}</span>
-            <strong style={{ color: popup.hasWater ? '#4ade80' : '#f87171', fontSize: 14 }}>
-              {popup.hasWater ? '✅ WATER SOURCE ELIMINATED' : '❌ NO WATER HERE — Time wasted!'}
-            </strong>
-          </div>
-          <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 6, lineHeight: 1.4 }}>
-            {popup.fact}
+          <div style={{ color: '#94a3b8', fontSize: 13 }}>
+            Gen {generation} | R_0 = {Math.pow(R0, Math.max(0, generation - 1))}x multiplier
           </div>
         </div>
-      )}
+        <button style={S.finishBtn} onClick={finishSimulation}>
+          End Early
+        </button>
+      </div>
 
-      {/* Mosquito fact ticker */}
-      <div style={{
-        width: '100%', maxWidth: 800, marginTop: 8,
-        background: 'rgba(30,41,59,0.9)', border: '1px solid #475569',
-        borderRadius: 8, padding: '8px 16px', textAlign: 'center',
-        color: '#fbbf24', fontSize: 13, fontWeight: 'bold',
-        transition: 'opacity 0.3s ease',
-      }}>
-        {MOSQUITO_FACTS[currentFact]}
+      {/* Timer progress bar */}
+      <div style={S.progressOuter}>
+        <div style={{
+          ...S.progressInner,
+          width: `${timerProgress}%`,
+          background: urgencyColor,
+        }} />
+        {/* 12-hour tick marks */}
+        {[12, 24, 36, 48, 60].map(tick => (
+          <div key={tick} style={{
+            position: 'absolute',
+            left: `${(tick / TOTAL_HOURS) * 100}%`,
+            top: 0, bottom: 0, width: 1,
+            background: 'rgba(241,245,249,0.3)',
+          }} />
+        ))}
+      </div>
+
+      {/* Stats row */}
+      <div style={S.statsRow}>
+        <div style={S.statChip}>
+          <span style={{ color: '#4ade80' }}>{treatedCount}</span>
+          <span style={{ color: '#94a3b8', fontSize: 11 }}>/{TOTAL_WATER_SOURCES} Treated</span>
+        </div>
+        <div style={S.statChip}>
+          <span style={{ color: '#ef4444', fontWeight: 'bold', fontSize: 18 }}>{mosquitoCount.toLocaleString()}</span>
+          <span style={{ color: '#94a3b8', fontSize: 11 }}>Mosquitoes</span>
+        </div>
+        <div style={S.statChip}>
+          <span style={{ color: '#fbbf24' }}>{remainingSources}</span>
+          <span style={{ color: '#94a3b8', fontSize: 11 }}>Untreated</span>
+        </div>
+        <div style={S.statChip}>
+          <span style={{ color: '#ef4444' }}>{decoyClicks}</span>
+          <span style={{ color: '#94a3b8', fontSize: 11 }}>False Clicks</span>
+        </div>
+      </div>
+
+      {/* Main split layout */}
+      <div style={S.splitLayout}>
+        {/* LEFT: Neighborhood Map */}
+        <div style={S.mapPanel}>
+          <h3 style={{ color: '#f1f5f9', fontSize: 14, margin: '0 0 8px', textAlign: 'center' }}>
+            Neighborhood Map -- Click to Treat Water Sources
+          </h3>
+          <div style={S.mapGrid}>
+            {WATER_SOURCES.map(source => {
+              const isTreated = treated[source.id]
+              const isFlashing = flashId === source.id
+              const isDecoy = !source.hasWater
+
+              let cellBg = 'rgba(30,41,59,0.8)'
+              let borderColor = '#475569'
+              if (isTreated) {
+                cellBg = 'rgba(74,222,128,0.15)'
+                borderColor = '#4ade80'
+              } else if (isFlashing && isDecoy) {
+                cellBg = 'rgba(239,68,68,0.3)'
+                borderColor = '#ef4444'
+              } else if (isFlashing && !isDecoy) {
+                cellBg = 'rgba(74,222,128,0.3)'
+                borderColor = '#4ade80'
+              }
+
+              return (
+                <div
+                  key={source.id}
+                  onClick={() => handleSourceClick(source)}
+                  style={{
+                    gridRow: source.row + 1,
+                    gridColumn: source.col + 1,
+                    background: cellBg,
+                    border: `2px solid ${borderColor}`,
+                    borderRadius: 10,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: isTreated ? 'default' : 'pointer',
+                    padding: '6px 4px',
+                    transition: 'all 0.2s ease',
+                    opacity: isTreated ? 0.55 : 1,
+                    position: 'relative',
+                    minHeight: 72,
+                  }}
+                >
+                  <div style={{ fontSize: 28, lineHeight: 1 }}>
+                    {isTreated ? '\u2705' : source.emoji}
+                  </div>
+                  <div style={{
+                    fontSize: 10, color: '#e2e8f0', fontWeight: 'bold',
+                    marginTop: 3, textAlign: 'center', lineHeight: 1.2,
+                  }}>
+                    {source.name}
+                  </div>
+                  {source.hasWater && !isTreated && (
+                    <div style={{
+                      fontSize: 9, color: '#38bdf8', marginTop: 2, fontWeight: 'bold',
+                    }}>
+                      {source.volume_mL} mL
+                    </div>
+                  )}
+                  {isTreated && (
+                    <div style={{
+                      position: 'absolute', top: 2, right: 4,
+                      fontSize: 10, color: '#4ade80', fontWeight: 'bold',
+                    }}>
+                      SAFE
+                    </div>
+                  )}
+                  {!source.hasWater && !isTreated && (
+                    <div style={{
+                      fontSize: 9, color: '#64748b', marginTop: 2, fontStyle: 'italic',
+                    }}>
+                      dry
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Mosquito swarm overlay indicator */}
+          {mosquitoCount > 200 && (
+            <div style={{
+              textAlign: 'center', marginTop: 8,
+              color: '#ef4444', fontWeight: 'bold', fontSize: 13,
+              background: 'rgba(239,68,68,0.15)', borderRadius: 6, padding: '4px 10px',
+            }}>
+              MOSQUITO SWARM DENSITY: {mosquitoCount > 1000 ? 'EXTREME' : mosquitoCount > 500 ? 'HIGH' : 'RISING'}
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT: Epidemiological Graph */}
+        <div style={S.graphPanel}>
+          <h3 style={{ color: '#f1f5f9', fontSize: 14, margin: '0 0 8px', textAlign: 'center' }}>
+            Epidemiological Curve -- Mosquito Population
+          </h3>
+          {renderGraph(graphData, maxPopulation)}
+
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 12, height: 3, background: '#ef4444', borderRadius: 2 }} />
+              <span style={{ color: '#94a3b8', fontSize: 11 }}>Population Curve</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 12, height: 12, background: 'rgba(251,191,36,0.2)', border: '1px dashed #fbbf24', borderRadius: 2 }} />
+              <span style={{ color: '#94a3b8', fontSize: 11 }}>Breeding Cycles (every 12h)</span>
+            </div>
+          </div>
+
+          {/* R_0 info box */}
+          <div style={{
+            marginTop: 12, background: '#0f172a', borderRadius: 8,
+            padding: 10, border: '1px solid #334155',
+          }}>
+            <div style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>
+              R_0 Model (Exponential Growth)
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: 11, lineHeight: 1.6 }}>
+              Each cycle multiplier: {generation > 0
+                ? Array.from({ length: generation }, (_, i) => `Gen${i + 1}=${Math.pow(R0, i)}x`).join(', ')
+                : 'No breeding cycles yet'
+              }
+            </div>
+            <div style={{ color: '#cbd5e1', fontSize: 11, marginTop: 4 }}>
+              Untreated sources produce (volume_mL / 100) x multiplier mosquitoes per cycle.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Larva Incubation Timer callout */}
+      <div style={S.incubationBar}>
+        <span style={{ color: '#fbbf24', fontWeight: 'bold', fontSize: 13 }}>
+          LARVA INCUBATION:
+        </span>
+        <div style={S.incubationTrack}>
+          <div style={{
+            height: '100%',
+            width: `${Math.min(100, (hour / TOTAL_HOURS) * 100)}%`,
+            background: hour < 24
+              ? 'linear-gradient(90deg, #4ade80, #22c55e)'
+              : hour < 48
+                ? 'linear-gradient(90deg, #fbbf24, #f59e0b)'
+                : 'linear-gradient(90deg, #ef4444, #dc2626)',
+            borderRadius: 4,
+            transition: 'width 0.3s ease',
+          }} />
+        </div>
+        <span style={{ color: urgencyColor, fontWeight: 'bold', fontSize: 13, minWidth: 65, textAlign: 'right' }}>
+          {TOTAL_HOURS - hour}h left
+        </span>
       </div>
     </div>
   )
 }
 
-const styles = {
+// ═══════════════════════════════════════════════
+// ── SVG Graph Renderer ──
+// ═══════════════════════════════════════════════
+function renderGraph(graphData, maxPopulation) {
+  const svgW = 380
+  const svgH = 220
+  const padL = 45
+  const padR = 10
+  const padT = 15
+  const padB = 25
+  const plotW = svgW - padL - padR
+  const plotH = svgH - padT - padB
+
+  const safeMax = Math.max(1, maxPopulation)
+
+  // Build polyline points
+  const points = graphData.map(d => {
+    const x = padL + (d.hour / TOTAL_HOURS) * plotW
+    const y = padT + plotH - (d.population / safeMax) * plotH
+    return `${x},${y}`
+  }).join(' ')
+
+  // Y-axis labels
+  const yTicks = [0, 0.25, 0.5, 0.75, 1.0]
+
+  return (
+    <svg
+      viewBox={`0 0 ${svgW} ${svgH}`}
+      style={{ width: '100%', maxWidth: svgW, display: 'block', margin: '0 auto' }}
+    >
+      {/* Background */}
+      <rect x={padL} y={padT} width={plotW} height={plotH} fill="#0f172a" rx="4" />
+
+      {/* Grid lines and Y-axis labels */}
+      {yTicks.map((frac, i) => {
+        const y = padT + plotH - frac * plotH
+        const val = Math.round(frac * safeMax)
+        return (
+          <g key={i}>
+            <line
+              x1={padL} y1={y} x2={padL + plotW} y2={y}
+              stroke="#1e293b" strokeWidth="1"
+            />
+            <text x={padL - 4} y={y + 3} fill="#64748b" fontSize="9" textAnchor="end">
+              {val >= 1000 ? `${(val / 1000).toFixed(1)}k` : val}
+            </text>
+          </g>
+        )
+      })}
+
+      {/* X-axis labels */}
+      {[0, 12, 24, 36, 48, 60, 72].map(h => {
+        const x = padL + (h / TOTAL_HOURS) * plotW
+        return (
+          <g key={h}>
+            <line x1={x} y1={padT} x2={x} y2={padT + plotH} stroke="#1e293b" strokeWidth="1" />
+            <text x={x} y={svgH - 4} fill="#64748b" fontSize="9" textAnchor="middle">
+              {h}h
+            </text>
+          </g>
+        )
+      })}
+
+      {/* Breeding cycle markers (vertical dashed) */}
+      {[12, 24, 36, 48, 60, 72].map(h => {
+        const x = padL + (h / TOTAL_HOURS) * plotW
+        return (
+          <line
+            key={`breed-${h}`}
+            x1={x} y1={padT} x2={x} y2={padT + plotH}
+            stroke="#fbbf2440" strokeWidth="1" strokeDasharray="4,3"
+          />
+        )
+      })}
+
+      {/* Danger zone shading above certain thresholds */}
+      {safeMax > 100 && (
+        <rect
+          x={padL}
+          y={padT}
+          width={plotW}
+          height={plotH * 0.3}
+          fill="rgba(239,68,68,0.06)"
+        />
+      )}
+
+      {/* The population curve */}
+      {graphData.length > 1 && (
+        <>
+          {/* Area fill under curve */}
+          <polygon
+            points={`${padL + (graphData[0].hour / TOTAL_HOURS) * plotW},${padT + plotH} ${points} ${padL + (graphData[graphData.length - 1].hour / TOTAL_HOURS) * plotW},${padT + plotH}`}
+            fill="rgba(239,68,68,0.12)"
+          />
+          {/* Line */}
+          <polyline
+            points={points}
+            fill="none"
+            stroke="#ef4444"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </>
+      )}
+
+      {/* Data point dots */}
+      {graphData.map((d, i) => {
+        const x = padL + (d.hour / TOTAL_HOURS) * plotW
+        const y = padT + plotH - (d.population / safeMax) * plotH
+        return (
+          <circle
+            key={i}
+            cx={x} cy={y} r={3}
+            fill={d.population > safeMax * 0.7 ? '#ef4444' : '#fbbf24'}
+            stroke="#0f172a" strokeWidth="1"
+          />
+        )
+      })}
+
+      {/* Axis labels */}
+      <text x={svgW / 2} y={svgH} fill="#94a3b8" fontSize="10" textAnchor="middle">
+        Time (hours)
+      </text>
+      <text
+        x={8} y={svgH / 2}
+        fill="#94a3b8" fontSize="10" textAnchor="middle"
+        transform={`rotate(-90, 8, ${svgH / 2})`}
+      >
+        Population
+      </text>
+
+      {/* Axis lines */}
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke="#475569" strokeWidth="1.5" />
+      <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} stroke="#475569" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
+// ═══════════════════════════════════════════════
+// ── Styles ──
+// ═══════════════════════════════════════════════
+const S = {
   container: {
     minHeight: '100vh',
     background: '#0f172a',
@@ -464,31 +702,51 @@ const styles = {
     flexDirection: 'column',
     alignItems: 'center',
     padding: 16,
-    fontFamily: 'system-ui, sans-serif',
+    fontFamily: 'system-ui, -apple-system, sans-serif',
+    color: '#f1f5f9',
   },
-  introBox: {
-    maxWidth: 600,
+  introCard: {
+    maxWidth: 620,
+    width: '100%',
     background: '#1e293b',
     borderRadius: 16,
-    padding: 32,
+    padding: '28px 32px',
     textAlign: 'center',
-    marginTop: 40,
+    marginTop: 32,
     border: '1px solid #334155',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
   },
-  title: {
-    color: '#f1f5f9',
-    fontSize: 28,
+  introText: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    lineHeight: 1.7,
     margin: '12px 0',
   },
-  text: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    lineHeight: 1.6,
-    margin: '10px 0',
+  missionBox: {
+    background: '#0f172a',
+    borderRadius: 10,
+    padding: 16,
+    margin: '16px 0',
+    border: '1px solid #334155',
+    textAlign: 'left',
   },
-  startBtn: {
-    padding: '14px 36px',
-    fontSize: 18,
+  mechanicsBox: {
+    background: '#0f172a',
+    borderRadius: 10,
+    padding: 14,
+    margin: '12px 0',
+    border: '1px solid #334155',
+    textAlign: 'left',
+  },
+  mechItem: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    lineHeight: 1.6,
+    marginBottom: 4,
+  },
+  primaryBtn: {
+    padding: '12px 32px',
+    fontSize: 16,
     fontWeight: 'bold',
     background: '#22c55e',
     color: '#fff',
@@ -496,67 +754,149 @@ const styles = {
     borderRadius: 10,
     cursor: 'pointer',
     marginTop: 16,
+    display: 'inline-block',
   },
-  hud: {
+  secondaryBtn: {
+    padding: '10px 24px',
+    fontSize: 14,
+    fontWeight: 'bold',
+    background: '#475569',
+    color: '#f1f5f9',
+    border: 'none',
+    borderRadius: 10,
+    cursor: 'pointer',
+    display: 'inline-block',
+  },
+  headerBar: {
+    width: '100%',
+    maxWidth: 880,
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    width: '100%',
-    maxWidth: 800,
-    padding: '8px 16px',
     background: '#1e293b',
     borderRadius: 10,
-    marginBottom: 8,
+    padding: '8px 16px',
+    marginBottom: 6,
     flexWrap: 'wrap',
     gap: 8,
+    border: '1px solid #334155',
   },
-  submitBtn: {
+  finishBtn: {
     padding: '6px 16px',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 'bold',
-    background: '#3b82f6',
+    background: '#6366f1',
     color: '#fff',
     border: 'none',
     borderRadius: 8,
     cursor: 'pointer',
   },
-  scene: {
-    position: 'relative',
+  progressOuter: {
     width: '100%',
-    maxWidth: 800,
-    height: 500,
-    background: 'linear-gradient(180deg, #1a2a3a 0%, #2a3a4a 50%, #1a2a1a 100%)',
-    borderRadius: 16,
-    overflow: 'hidden',
-    border: '2px solid #334155',
-  },
-  popup: {
-    position: 'fixed',
-    bottom: 24,
-    left: '50%',
-    transform: 'translateX(-50%)',
+    maxWidth: 880,
+    height: 8,
     background: '#1e293b',
-    border: '2px solid',
-    borderRadius: 12,
-    padding: 16,
-    maxWidth: 420,
-    boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-    zIndex: 100,
-    color: '#f1f5f9',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 6,
+    position: 'relative',
   },
-  statGrid: {
+  progressInner: {
+    height: '100%',
+    borderRadius: 4,
+    transition: 'width 0.5s ease, background 0.5s ease',
+  },
+  statsRow: {
+    width: '100%',
+    maxWidth: 880,
+    display: 'flex',
+    gap: 8,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  statChip: {
+    flex: 1,
+    minWidth: 100,
+    background: '#1e293b',
+    borderRadius: 8,
+    padding: '6px 12px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    border: '1px solid #334155',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  splitLayout: {
+    width: '100%',
+    maxWidth: 880,
+    display: 'flex',
+    gap: 12,
+    flex: 1,
+    minHeight: 0,
+  },
+  mapPanel: {
+    flex: 1,
+    background: '#1e293b',
+    borderRadius: 12,
+    padding: 12,
+    border: '1px solid #334155',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'auto',
+  },
+  mapGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(5, 1fr)',
+    gridTemplateRows: 'repeat(5, 1fr)',
+    gap: 6,
+    flex: 1,
+    minHeight: 0,
+  },
+  graphPanel: {
+    flex: 1,
+    background: '#1e293b',
+    borderRadius: 12,
+    padding: 12,
+    border: '1px solid #334155',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'auto',
+  },
+  incubationBar: {
+    width: '100%',
+    maxWidth: 880,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    background: '#1e293b',
+    borderRadius: 8,
+    padding: '8px 14px',
+    marginTop: 8,
+    border: '1px solid #334155',
+  },
+  incubationTrack: {
+    flex: 1,
+    height: 10,
+    background: '#0f172a',
+    borderRadius: 5,
+    overflow: 'hidden',
+    border: '1px solid #334155',
+  },
+  resultGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(4, 1fr)',
     gap: 10,
-    marginTop: 16,
+    margin: '16px 0',
   },
-  statItem: {
+  resultCell: {
     background: '#0f172a',
     borderRadius: 10,
     padding: 12,
     textAlign: 'center',
+    border: '1px solid #334155',
   },
-  statLabel: {
+  resultLabel: {
     color: '#94a3b8',
     fontSize: 11,
     marginTop: 4,

@@ -1,198 +1,168 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const TOTAL_LEVELS = 15
-const WATER_RISE_INTERVAL = 3200  // ms per level — slower so players can read & react
-const CLIMB_SPEED_LOADED = 1      // levels per click with bag
-const CLIMB_SPEED_LIGHT = 2       // levels per click without bag
-const DROP_BAG_APPEAR_DELAY = 3000 // ms before drop bag button appears
+// ── Physics Constants ──
+const BASE_SPEED = 5.0
+const PENALTY_PER_LB = 0.2
+const BAG_WEIGHT = 18         // lbs — typical overloaded Go-Bag from Module 1
+const V_FLOOD = 3.0           // units per tick — constant water rise rate
+const CANYON_HEIGHT = 100
+const FLOOD_TICK_MS = 800
 
-const PLATFORMS = Array.from({ length: TOTAL_LEVELS }, (_, i) => ({
-  level: i + 1,
-  leftOffset: 10 + ((i % 3) * 25) + (i % 2 === 0 ? 5 : 15),
-  width: 80 + (i % 3) * 20,
-  emoji: i === TOTAL_LEVELS - 1 ? '🏔️' : ['🪨', '🌿', '🪵', '🧱', '⛰️', '🏗️', '🌲', '🪜', '🧗', '🏔️'][i % 10],
-}))
+const V_LOADED = BASE_SPEED - (BAG_WEIGHT * PENALTY_PER_LB)  // 1.4
+const V_LIGHT = BASE_SPEED                                     // 5.0
 
-const DECISION_POINTS = {
-  5: {
-    prompt: "Two paths ahead! \u{1FAA8} Rocky ledge (fast but might crumble) or \u{1F33F} Muddy slope (slower but stable)",
-    options: [
-      { label: '\u{1FAA8} Rocky Ledge (fast, risky)', risky: true, slipBackLevels: 2, slipChance: 0.5 },
-      { label: '\u{1F33F} Muddy Slope (slow, safe)', risky: false },
-    ],
-  },
-  10: {
-    prompt: "Fallen tree! \u{1F332} Climb over (fast) or \u{1F504} Go around (slow)",
-    options: [
-      { label: '\u{1F332} Climb Over (fast)', risky: false },
-      { label: '\u{1F504} Go Around (slow)', risky: false },
-    ],
-  },
-}
+const EDU_MSGS = [
+  { at: 10, text: 'Flash floods move at 9+ mph — faster than most people can sprint.' },
+  { at: 25, text: '6 inches of moving water can knock an adult off their feet.' },
+  { at: 40, text: 'Most flash flood deaths occur because people refuse to abandon possessions.' },
+  { at: 55, text: 'A cubic yard of water weighs 1,700 lbs. You cannot fight physics.' },
+  { at: 70, text: 'In slot canyons, water can rise 30+ feet in minutes with no warning.' },
+  { at: 85, text: 'The #1 survival rule: move UP. Everything else is replaceable.' },
+]
 
-const EDUCATIONAL_MESSAGES = {
-  3: "\u{1F4A1} Flash floods move at 9+ mph. You cannot outrun one.",
-  7: "\u{1F4A1} Most flash flood deaths happen in vehicles or to pedestrians. ALWAYS head for high ground.",
-  12: "\u{1F4A1} A flash flood can roll boulders, tear out trees, and destroy bridges in seconds.",
-}
-
-export default function Module12_WallOfWater() {
+export default function Module12_FlashFlood() {
   const { dispatch } = useGame()
   const [phase, setPhase] = useState('intro')
-  const [playerLevel, setPlayerLevel] = useState(0) // 0 = bottom
-  const [waterLevel, setWaterLevel] = useState(0)
+  const [playerPos, setPlayerPos] = useState(0)
+  const [waterPos, setWaterPos] = useState(0)
+  const [bagWeight, setBagWeight] = useState(BAG_WEIGHT)
   const [hasBag, setHasBag] = useState(true)
-  const [showDropBtn, setShowDropBtn] = useState(false)
+  const [jettisoned, setJettisoned] = useState(false)
+  const [jetMsg, setJetMsg] = useState('')
   const [result, setResult] = useState(null)
-  const [shakeFrame, setShakeFrame] = useState(0)
-  const [message, setMessage] = useState('')
-  const [educationalMsg, setEducationalMsg] = useState('')
-  const [decisionPrompt, setDecisionPrompt] = useState(null)
-  const [graceOver, setGraceOver] = useState(false)
-  const gameActiveRef = useRef(false)
-  const decisionPromptRef = useRef(null)
+  const [climbCount, setClimbCount] = useState(0)
+  const [eduMsg, setEduMsg] = useState('')
+  const [pulse, setPulse] = useState(false)
+  const doneRef = useRef(false)
+  const floodRef = useRef(null)
 
-  // Start game
-  const startGame = useCallback(() => {
-    setPhase('play')
-    setPlayerLevel(0)
-    setWaterLevel(0)
-    setHasBag(true)
-    setShowDropBtn(false)
-    setResult(null)
-    setMessage('')
-    setEducationalMsg('')
-    setDecisionPrompt(null)
-    setGraceOver(false)
-    decisionPromptRef.current = null
-    gameActiveRef.current = true
-  }, [])
+  const vPlayer = BASE_SPEED - (bagWeight * PENALTY_PER_LB)
+  const isGaining = vPlayer > V_FLOOD
+  const gap = playerPos - waterPos
+  const playerPct = (playerPos / CANYON_HEIGHT) * 100
+  const waterPct = (waterPos / CANYON_HEIGHT) * 100
 
-  // Keep decisionPromptRef in sync with state
+  // Pulse animation for jettison button when danger is close
   useEffect(() => {
-    decisionPromptRef.current = decisionPrompt
-  }, [decisionPrompt])
-
-  // Grace period: 4 seconds before water starts rising (give player time to orient)
-  useEffect(() => {
-    if (phase !== 'play') return
-    const id = setTimeout(() => setGraceOver(true), 4000)
-    return () => clearTimeout(id)
-  }, [phase])
-
-  // Water rising (paused during grace period and decision points)
-  useEffect(() => {
-    if (phase !== 'play' || !graceOver) return
-    const id = setInterval(() => {
-      if (decisionPromptRef.current) return // pause water during decisions
-      setWaterLevel(prev => {
-        const next = prev + 1
-        return next
-      })
-    }, WATER_RISE_INTERVAL)
+    if (phase !== 'play' || !hasBag) return
+    const id = setInterval(() => setPulse(p => !p), 600)
     return () => clearInterval(id)
-  }, [phase, graceOver])
+  }, [phase, hasBag])
 
-  // Show drop bag button after delay
+  // Flood rising
   useEffect(() => {
     if (phase !== 'play') return
-    const id = setTimeout(() => setShowDropBtn(true), DROP_BAG_APPEAR_DELAY)
-    return () => clearTimeout(id)
+    doneRef.current = false
+    floodRef.current = setInterval(() => {
+      if (doneRef.current) return
+      setWaterPos(p => parseFloat(Math.min(p + V_FLOOD, CANYON_HEIGHT).toFixed(1)))
+    }, FLOOD_TICK_MS)
+    return () => clearInterval(floodRef.current)
   }, [phase])
 
-  // Shake animation for urgency
+  // Educational messages
   useEffect(() => {
     if (phase !== 'play') return
-    const id = setInterval(() => setShakeFrame(f => f + 1), 150)
-    return () => clearInterval(id)
-  }, [phase])
+    const m = EDU_MSGS.find(e => playerPos >= e.at && playerPos < e.at + 8)
+    if (m) setEduMsg(m.text)
+  }, [playerPos, phase])
 
-  // Check win/lose conditions
+  // Win / lose
   useEffect(() => {
-    if (phase !== 'play') return
-    if (playerLevel >= TOTAL_LEVELS) {
-      // WIN
-      gameActiveRef.current = false
-      const score = hasBag ? 60 : 100
+    if (phase !== 'play' || doneRef.current) return
+    if (playerPos >= CANYON_HEIGHT) {
+      doneRef.current = true
+      clearInterval(floodRef.current)
+      const score = jettisoned && climbCount <= 15 ? 100 : 60
       const r = { score, passed: true }
       setResult(r)
       setPhase('result')
       dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-12', result: r } })
-    } else if (waterLevel >= playerLevel + 4 && waterLevel > 4) {
-      // CAUGHT BY WATER
-      gameActiveRef.current = false
-      const r = { score: 10, passed: false }
+    } else if (waterPos >= playerPos && waterPos > 0) {
+      doneRef.current = true
+      clearInterval(floodRef.current)
+      const r = { score: 0, passed: false }
       setResult(r)
       setPhase('result')
       dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-12', result: r } })
     }
-  }, [playerLevel, waterLevel, phase, hasBag, dispatch])
+  }, [playerPos, waterPos, phase, jettisoned, climbCount, dispatch])
 
-  // Speed message
-  useEffect(() => {
-    if (phase !== 'play') return
-    if (hasBag) {
-      setMessage('⚠️ OVERLOADED — TOO SLOW! Your Go-Bag is dragging you down!')
-    } else {
-      setMessage('💨 LIGHTWEIGHT — Moving fast! Good call dropping the bag!')
-    }
-  }, [hasBag, phase])
-
-  const climbTo = useCallback((level) => {
-    if (phase !== 'play' || !gameActiveRef.current || decisionPrompt) return
-    const maxReach = playerLevel + (hasBag ? CLIMB_SPEED_LOADED : CLIMB_SPEED_LIGHT)
-    if (level > maxReach || level <= playerLevel) return
-    setPlayerLevel(level)
-
-    // Show educational message if applicable
-    if (EDUCATIONAL_MESSAGES[level]) {
-      setEducationalMsg(EDUCATIONAL_MESSAGES[level])
-      setTimeout(() => setEducationalMsg(''), 3500)
-    }
-
-    // Trigger decision point if applicable
-    if (DECISION_POINTS[level]) {
-      setDecisionPrompt(DECISION_POINTS[level])
-    }
-  }, [phase, playerLevel, hasBag, decisionPrompt])
-
-  const handleDecision = useCallback((option) => {
-    if (option.risky && option.slipChance && Math.random() < option.slipChance) {
-      const newLevel = Math.max(0, playerLevel - (option.slipBackLevels || 2))
-      setPlayerLevel(newLevel)
-      setMessage('\u{1FAA8} The rocky ledge crumbled! You slipped back!')
-      setTimeout(() => setMessage(hasBag ? '\u26A0\uFE0F OVERLOADED \u2014 TOO SLOW! Your Go-Bag is dragging you down!' : '\u{1F4A8} LIGHTWEIGHT \u2014 Moving fast! Good call dropping the bag!'), 2000)
-    }
-    setDecisionPrompt(null)
-  }, [playerLevel, hasBag])
-
-  const dropBag = useCallback(() => {
-    setHasBag(false)
+  const startGame = useCallback(() => {
+    setPhase('play'); setPlayerPos(0); setWaterPos(0)
+    setBagWeight(BAG_WEIGHT); setHasBag(true); setJettisoned(false)
+    setJetMsg(''); setResult(null); setClimbCount(0); setEduMsg('')
+    doneRef.current = false
   }, [])
+
+  const handleClimb = useCallback(() => {
+    if (phase !== 'play' || doneRef.current) return
+    const v = BASE_SPEED - (bagWeight * PENALTY_PER_LB)
+    setPlayerPos(p => parseFloat(Math.min(p + v, CANYON_HEIGHT).toFixed(1)))
+    setClimbCount(c => c + 1)
+  }, [phase, bagWeight])
+
+  const handleJettison = useCallback(() => {
+    if (!hasBag || phase !== 'play') return
+    setBagWeight(0); setHasBag(false); setJettisoned(true)
+    setJetMsg('You dropped everything you packed in Module 1.')
+    setTimeout(() => setJetMsg(''), 3500)
+  }, [hasBag, phase])
 
   // ── INTRO ──
   if (phase === 'intro') {
     return (
-      <div style={styles.container}>
-        <div style={styles.introBox}>
-          <div style={{ fontSize: 64 }}>🌊⛰️</div>
-          <h1 style={styles.title}>Module 12: Wall of Water</h1>
-          <p style={styles.text}>
-            A flash flood sends a WALL OF WATER roaring toward you. Your only chance: climb to high ground.
+      <div style={S.container}>
+        <div style={S.card}>
+          <div style={{ fontSize: 56, marginBottom: 8 }}>🌊🏔️</div>
+          <h1 style={S.title}>Module 12: Wall of Water</h1>
+          <h2 style={{ color: '#f87171', fontSize: 18, margin: '8px 0 16px' }}>
+            Velocity vs. Encumbrance
+          </h2>
+          <p style={S.txt}>
+            A flash flood is filling this slot canyon. Your only escape: climb straight up.
+            But your heavy Go-Bag is slowing you down.
           </p>
-          <p style={{ ...styles.text, color: '#fbbf24', fontWeight: 'bold' }}>
-            PROBLEM: Your heavy Go-Bag is slowing you down. You can only reach 1 platform at a time.
+          <div style={S.formulaBox}>
+            <div style={{ color: '#fbbf24', fontWeight: 'bold', fontSize: 16, marginBottom: 10 }}>
+              THE MATH PROBLEM
+            </div>
+            {[
+              ['BASE_SPEED', `= ${BASE_SPEED.toFixed(1)} units/tick`, '#f1f5f9'],
+              ['PENALTY_PER_LB', `= ${PENALTY_PER_LB}`, '#f1f5f9'],
+              ['Bag Weight', `= ${BAG_WEIGHT} lbs`, '#f87171'],
+            ].map(([l, r, c]) => (
+              <div key={l} style={S.fRow}>
+                <span style={{ color: '#94a3b8' }}>{l}</span>
+                <span style={{ color: c }}>{r}</span>
+              </div>
+            ))}
+            <div style={S.divider} />
+            <div style={S.fRow}>
+              <span style={{ color: '#f87171', fontWeight: 'bold' }}>V_player (with bag)</span>
+              <span style={{ color: '#f87171', fontWeight: 'bold' }}>
+                = {BASE_SPEED.toFixed(1)} - ({BAG_WEIGHT} x {PENALTY_PER_LB}) = {V_LOADED.toFixed(1)}
+              </span>
+            </div>
+            <div style={S.fRow}>
+              <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>V_flood</span>
+              <span style={{ color: '#38bdf8', fontWeight: 'bold' }}>= {V_FLOOD.toFixed(1)} units/tick</span>
+            </div>
+            <div style={S.divider} />
+            <div style={{ color: '#f87171', fontWeight: 'bold', fontSize: 15, marginTop: 6,
+              padding: '8px 12px', background: 'rgba(248,113,113,0.15)', borderRadius: 6 }}>
+              {V_LOADED.toFixed(1)} &lt; {V_FLOOD.toFixed(1)} — IMPOSSIBLE to outclimb with your bag.
+            </div>
+            <div style={{ color: '#4ade80', fontWeight: 'bold', fontSize: 15, marginTop: 8,
+              padding: '8px 12px', background: 'rgba(74,222,128,0.15)', borderRadius: 6 }}>
+              Without bag: {V_LIGHT.toFixed(1)} &gt; {V_FLOOD.toFixed(1)} — SURVIVABLE.
+            </div>
+          </div>
+          <p style={{ ...S.txt, color: '#f87171', fontWeight: 'bold', marginTop: 16 }}>
+            There is no trick. The math is absolute. Can you make the hard choice?
           </p>
-          <p style={{ ...styles.text, color: '#38bdf8' }}>
-            Click platforms above you to climb. The water is rising fast. You may need to make a hard choice...
-          </p>
-          <p style={{ ...styles.text, color: '#f87171', fontWeight: 'bold' }}>
-            KEY LESSON: When a wall of water approaches, abandon ALL material goods. Your life is the priority.
-          </p>
-          <button style={styles.startBtn} onClick={startGame}>
-            ⛰️ Start Climbing
-          </button>
+          <button style={S.greenBtn} onClick={startGame}>BEGIN ASCENT</button>
         </div>
       </div>
     )
@@ -200,41 +170,55 @@ export default function Module12_WallOfWater() {
 
   // ── RESULT ──
   if (phase === 'result' && result) {
+    const won = result.passed
     return (
-      <div style={styles.container}>
-        <div style={styles.introBox}>
-          <div style={{ fontSize: 64 }}>{result.passed ? '🏔️✅' : '🌊💀'}</div>
-          <h1 style={{ ...styles.title, color: result.passed ? '#4ade80' : '#f87171' }}>
-            {result.passed ? 'YOU REACHED HIGH GROUND!' : 'SWEPT AWAY'}
+      <div style={S.container}>
+        <div style={S.card}>
+          <div style={{ fontSize: 56, marginBottom: 8 }}>{won ? '🏔️' : '🌊'}</div>
+          <h1 style={{ ...S.title, color: won ? '#4ade80' : '#f87171' }}>
+            {won ? 'YOU REACHED THE TOP' : 'DROWNED'}
           </h1>
-          <div style={{ fontSize: 48, color: '#38bdf8', margin: '12px 0' }}>{result.score}%</div>
-          {result.passed ? (
-            <p style={styles.text}>
-              {!hasBag
-                ? '✅ You made the right call dropping your bag. Material possessions can be replaced — your life cannot.'
-                : '⚠️ You survived but kept your bag. In real life, that extra weight could be fatal. Always prioritize speed over stuff.'}
-            </p>
+          <div style={{ fontSize: 48, fontWeight: 'bold', margin: '12px 0',
+            color: won ? '#4ade80' : '#f87171' }}>{result.score}%</div>
+          {won ? (
+            jettisoned ? (
+              <p style={S.txt}>
+                You made the right call. You jettisoned your bag and the math shifted in your
+                favor: V_player ({V_LIGHT.toFixed(1)}) &gt; V_flood ({V_FLOOD.toFixed(1)}).
+                Material goods are replaceable. You are not.
+              </p>
+            ) : (
+              <p style={{ ...S.txt, color: '#fbbf24' }}>
+                You survived, but got lucky. In a real flash flood, keeping that bag would
+                have killed you. The math was not on your side.
+              </p>
+            )
           ) : (
-            <p style={{ ...styles.text, color: '#f87171' }}>
-              The water caught you. You were too slow because of your heavy bag.
-              In a real flash flood, you have SECONDS to act. Drop everything and RUN for high ground.
-            </p>
+            <div>
+              <p style={{ ...S.txt, color: '#f87171' }}>
+                The water caught you. With the bag, your climb speed was {V_LOADED.toFixed(1)} units/tick
+                against a flood rising at {V_FLOOD.toFixed(1)} units/tick. The math was never going to work.
+              </p>
+              <p style={{ ...S.txt, color: '#fbbf24', fontWeight: 'bold' }}>
+                You needed to jettison the bag. Every item you packed in Module 1 is
+                mathematically incompatible with vertical survival.
+              </p>
+            </div>
           )}
-          <div style={{ ...styles.text, background: '#1e293b', padding: 16, borderRadius: 8, marginTop: 12 }}>
-            <strong style={{ color: '#fbbf24' }}>FLASH FLOOD FACTS:</strong>
-            <ul style={{ textAlign: 'left', color: '#cbd5e1', lineHeight: 1.8 }}>
-              <li>Flash floods can produce walls of water 10-20 feet high</li>
-              <li>They move at speeds up to 9 mph — faster than most people can run</li>
-              <li>6 inches of moving water can knock you down</li>
-              <li>NEVER go back for possessions during a flash flood</li>
-              <li>Move to high ground IMMEDIATELY — seconds matter</li>
-            </ul>
+          <div style={S.noteBox}>
+            <div style={{ color: '#fbbf24', fontWeight: 'bold', marginBottom: 8 }}>PROFESSOR'S NOTE</div>
+            <p style={{ color: '#cbd5e1', lineHeight: 1.7, margin: 0, fontSize: 14 }}>
+              In a flash flood, material goods are mathematically incompatible with vertical
+              survival. There is no trick, no shortcut, no cheat code. The penalty from
+              encumbrance makes outclimbing the water physically impossible. The only correct
+              action is to jettison everything and move. This is the hardest lesson in disaster
+              preparedness: knowing when to let go.
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'center' }}>
-            <button style={styles.startBtn} onClick={startGame}>🔄 Retry</button>
-            <button style={{ ...styles.startBtn, background: '#6366f1' }} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-              📋 Back to Modules
-            </button>
+          <div style={{ display: 'flex', gap: 12, marginTop: 20, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button style={S.greenBtn} onClick={startGame}>RETRY</button>
+            <button style={{ ...S.greenBtn, background: '#6366f1' }}
+              onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>Back to Modules</button>
           </div>
         </div>
       </div>
@@ -242,238 +226,229 @@ export default function Module12_WallOfWater() {
   }
 
   // ── PLAY ──
-  const waterHeight = (waterLevel / TOTAL_LEVELS) * 100
-  const shakeX = phase === 'play' && waterLevel > 3 ? Math.sin(shakeFrame) * 2 : 0
+  const danger = gap < 15 && hasBag
+  const pulsing = danger && pulse
 
   return (
-    <div style={{ ...styles.container, transform: `translateX(${shakeX}px)` }}>
+    <div style={S.container}>
       {/* HUD */}
-      <div style={styles.hud}>
-        <div style={{ color: hasBag ? '#f87171' : '#4ade80', fontWeight: 'bold', fontSize: 16 }}>
-          {hasBag ? '🎒 CARRYING BAG — SPEED: SLOW' : '💨 BAG DROPPED — SPEED: FAST'}
-        </div>
-        <div style={{ color: '#38bdf8', fontSize: 16 }}>
-          Level: {playerLevel}/{TOTAL_LEVELS}
-        </div>
+      <div style={S.hud}>
+        <span style={{ color: '#f1f5f9', fontWeight: 'bold', fontSize: 16 }}>Module 12: Wall of Water</span>
+        <span style={{ color: '#94a3b8', fontSize: 13 }}>
+          Climbs: {climbCount} | Height: {playerPos.toFixed(1)}/{CANYON_HEIGHT}
+        </span>
       </div>
 
-      {/* Speed indicator */}
-      <div style={{
-        background: hasBag ? 'rgba(248,113,113,0.2)' : 'rgba(74,222,128,0.2)',
-        border: `2px solid ${hasBag ? '#f87171' : '#4ade80'}`,
-        borderRadius: 8, padding: '6px 16px', margin: '4px 0',
-        color: hasBag ? '#f87171' : '#4ade80', fontWeight: 'bold', fontSize: 14,
-        textAlign: 'center',
-      }}>
-        {message}
-      </div>
-
-      {/* Educational message */}
-      {educationalMsg && (
-        <div style={{
-          background: 'rgba(56,189,248,0.15)',
-          border: '2px solid #38bdf8',
-          borderRadius: 8, padding: '8px 16px', margin: '4px 0',
-          color: '#38bdf8', fontWeight: 'bold', fontSize: 13,
-          textAlign: 'center', maxWidth: 700, width: '100%',
-        }}>
-          {educationalMsg}
-        </div>
-      )}
-
-      {/* Decision prompt overlay */}
-      {decisionPrompt && (
-        <div style={{
-          background: 'rgba(15,23,42,0.95)',
-          border: '3px solid #fbbf24',
-          borderRadius: 12, padding: 20, margin: '8px 0',
-          maxWidth: 500, width: '100%', textAlign: 'center',
-          boxShadow: '0 0 24px rgba(251,191,36,0.4)',
-        }}>
-          <div style={{ color: '#fbbf24', fontWeight: 'bold', fontSize: 16, marginBottom: 12 }}>
-            {'\u26A0\uFE0F'} {decisionPrompt.prompt}
+      {/* Main layout: stats + canyon */}
+      <div style={S.playArea}>
+        {/* Stats panel */}
+        <div style={S.stats}>
+          <div style={{ color: '#fbbf24', fontWeight: 'bold', fontSize: 15, marginBottom: 10 }}>LIVE PHYSICS</div>
+          {[
+            ['Bag Weight:', `${bagWeight} lbs ${hasBag ? '(LOADED)' : '(JETTISONED)'}`, hasBag ? '#f87171' : '#4ade80'],
+            ['V_player:', `${vPlayer.toFixed(1)} u/tick`, isGaining ? '#4ade80' : '#f87171'],
+            ['V_flood:', `${V_FLOOD.toFixed(1)} u/tick`, '#38bdf8'],
+          ].map(([label, val, color]) => (
+            <div key={label} style={S.sRow}>
+              <span style={{ color: '#94a3b8' }}>{label}</span>
+              <span style={{ color, fontWeight: 'bold', fontSize: label === 'Bag Weight:' ? 14 : 18 }}>{val}</span>
+            </div>
+          ))}
+          <div style={{ ...S.divider, margin: '10px 0' }} />
+          <div style={{
+            padding: '8px 10px', borderRadius: 6, fontWeight: 'bold', fontSize: 14, textAlign: 'center',
+            background: isGaining ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)',
+            color: isGaining ? '#4ade80' : '#f87171',
+            border: `1px solid ${isGaining ? '#4ade80' : '#f87171'}`,
+          }}>
+            {isGaining ? `GAINING: +${(vPlayer - V_FLOOD).toFixed(1)} u/tick` : `LOSING: ${(vPlayer - V_FLOOD).toFixed(1)} u/tick`}
           </div>
-          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-            {decisionPrompt.options.map((opt, i) => (
-              <button key={i} onClick={() => handleDecision(opt)} style={{
-                padding: '10px 20px', fontSize: 14, fontWeight: 'bold',
-                background: opt.risky ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #22c55e, #16a34a)',
-                color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer',
-              }}>
-                {opt.label}
-              </button>
+          <div style={{ marginTop: 10 }}>
+            {[
+              ['Player:', `${playerPos.toFixed(1)} / ${CANYON_HEIGHT}`, '#f1f5f9'],
+              ['Water:', `${waterPos.toFixed(1)} / ${CANYON_HEIGHT}`, '#38bdf8'],
+              ['Gap:', `${gap.toFixed(1)} units`, gap > 20 ? '#4ade80' : gap > 5 ? '#fbbf24' : '#f87171'],
+            ].map(([l, v, c]) => (
+              <div key={l} style={{ ...S.sRow, fontSize: 13 }}>
+                <span style={{ color: '#94a3b8' }}>{l}</span>
+                <span style={{ color: c, fontWeight: l === 'Gap:' ? 'bold' : 'normal' }}>{v}</span>
+              </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* Drop Bag Button */}
-      {hasBag && showDropBtn && (
-        <button onClick={dropBag} style={styles.dropBagBtn}>
-          🎒 DROP BAG — Save yourself!
-        </button>
-      )}
-
-      {/* Cliff Scene */}
-      <div style={styles.cliffScene}>
-        {/* Water rising */}
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0,
-          height: `${Math.min(waterHeight, 100)}%`,
-          background: 'linear-gradient(0deg, #1e40af, #3b82f6, rgba(59,130,246,0.6))',
-          transition: 'height 0.5s ease',
-          zIndex: 2,
-          borderTop: '3px solid #60a5fa',
-        }}>
-          <div style={{
-            position: 'absolute', top: -2, left: 0, right: 0, height: 8,
-            background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
-            animation: 'none',
-          }} />
-          <div style={{ position: 'absolute', top: 8, left: '20%', fontSize: 24, opacity: 0.6 }}>🌊</div>
-          <div style={{ position: 'absolute', top: 8, left: '60%', fontSize: 24, opacity: 0.6 }}>🌊</div>
-        </div>
-
-        {/* Platforms */}
-        {PLATFORMS.map(p => {
-          const bottom = (p.level / TOTAL_LEVELS) * 85 + 5
-          const isReachable = p.level > playerLevel && p.level <= playerLevel + (hasBag ? CLIMB_SPEED_LOADED : CLIMB_SPEED_LIGHT)
-          const isPlayer = p.level === playerLevel
-          const isAboveWater = p.level > waterLevel
-          return (
-            <div
-              key={p.level}
-              onClick={() => climbTo(p.level)}
-              style={{
-                position: 'absolute',
-                bottom: `${bottom}%`,
-                left: `${p.leftOffset}%`,
-                width: p.width,
-                height: 36,
-                background: isReachable
-                  ? 'linear-gradient(135deg, #22c55e, #16a34a)'
-                  : isPlayer
-                    ? 'linear-gradient(135deg, #f59e0b, #d97706)'
-                    : 'linear-gradient(135deg, #64748b, #475569)',
-                borderRadius: 8,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: isReachable ? 'pointer' : 'default',
-                zIndex: 5,
-                border: isReachable ? '2px solid #4ade80' : '1px solid #334155',
-                boxShadow: isReachable ? '0 0 12px rgba(74,222,128,0.5)' : 'none',
-                opacity: isAboveWater ? 1 : 0.3,
-                transition: 'all 0.2s',
-              }}
-            >
-              <span style={{ fontSize: 18 }}>{p.emoji}</span>
-              {isReachable && <span style={{ fontSize: 11, color: '#fff', marginLeft: 4, fontWeight: 'bold' }}>CLIMB</span>}
+          <div style={{ marginTop: 12, padding: 8, background: '#0f172a', borderRadius: 6,
+            fontSize: 11, color: '#64748b', lineHeight: 1.6 }}>
+            V = {BASE_SPEED.toFixed(1)} - (weight x {PENALTY_PER_LB})<br />
+            With bag: {BASE_SPEED.toFixed(1)} - ({BAG_WEIGHT} x {PENALTY_PER_LB}) = {V_LOADED.toFixed(1)}<br />
+            No bag: {BASE_SPEED.toFixed(1)} - (0 x {PENALTY_PER_LB}) = {V_LIGHT.toFixed(1)}
+          </div>
+          {eduMsg && (
+            <div style={{ marginTop: 12, padding: '8px 10px', background: 'rgba(56,189,248,0.1)',
+              border: '1px solid #38bdf8', borderRadius: 6, color: '#38bdf8', fontSize: 12, lineHeight: 1.5 }}>
+              {eduMsg}
             </div>
-          )
-        })}
-
-        {/* Player */}
-        <div style={{
-          position: 'absolute',
-          bottom: `${(playerLevel / TOTAL_LEVELS) * 85 + 8}%`,
-          left: `${playerLevel === 0 ? 45 : PLATFORMS[playerLevel - 1].leftOffset + 2}%`,
-          fontSize: 36,
-          zIndex: 10,
-          transition: 'all 0.3s ease',
-          filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.8))',
-        }}>
-          🧑
-          {hasBag && <span style={{ fontSize: 20, position: 'absolute', top: -4, right: -16 }}>🎒</span>}
+          )}
         </div>
 
-        {/* Top label */}
-        <div style={{
-          position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
-          color: '#4ade80', fontWeight: 'bold', fontSize: 14, zIndex: 10,
-          background: 'rgba(0,0,0,0.6)', padding: '4px 12px', borderRadius: 8,
-        }}>
-          🏔️ HIGH GROUND — SAFETY
+        {/* Canyon visualization */}
+        <div style={S.canyonWrap}>
+          <div style={{ textAlign: 'center', color: '#4ade80', fontWeight: 'bold',
+            fontSize: 13, marginBottom: 4, letterSpacing: 1 }}>
+            HIGH-WATER MARK — {CANYON_HEIGHT} units — SAFETY
+          </div>
+          <div style={S.canyon}>
+            {/* Canyon walls */}
+            <div style={S.wallL} />
+            <div style={S.wallR} />
+            {/* Canyon interior */}
+            <div style={{ position: 'absolute', top: 0, bottom: 0, left: 40, right: 40,
+              background: 'linear-gradient(180deg, #1a1207, #2d1f0e 30%, #3d2914 60%, #4a3520)', zIndex: 0 }} />
+            {/* Rock texture */}
+            {Array.from({ length: 12 }, (_, i) => (
+              <div key={i} style={{ position: 'absolute', top: `${8 + i * 8}%`,
+                [i % 2 === 0 ? 'left' : 'right']: 6, width: 28, height: 2,
+                background: 'rgba(120,80,40,0.4)', borderRadius: 1, zIndex: 2 }} />
+            ))}
+            {/* Water */}
+            <div style={{ position: 'absolute', bottom: 0, left: 40, right: 40,
+              height: `${Math.min(waterPct, 100)}%`,
+              background: 'linear-gradient(0deg, #1e3a5f, #2563eb 40%, #3b82f6 70%, rgba(59,130,246,0.7))',
+              transition: 'height 0.4s linear', zIndex: 3 }}>
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 4,
+                background: 'linear-gradient(90deg, transparent, rgba(147,197,253,0.6), transparent, rgba(147,197,253,0.4), transparent)' }} />
+              {waterPct > 5 && <div style={{ position: 'absolute', top: -6, left: '50%',
+                transform: 'translateX(-50%)', fontSize: 16, opacity: 0.8 }}>🌊</div>}
+            </div>
+            {/* Player */}
+            <div style={{ position: 'absolute', bottom: `${Math.min(playerPct, 98)}%`, left: '50%',
+              transform: 'translateX(-50%)', zIndex: 5, textAlign: 'center',
+              transition: 'bottom 0.25s ease-out' }}>
+              <div style={{ fontSize: 28, lineHeight: 1 }}>🧗</div>
+              {hasBag && <div style={{ fontSize: 14, position: 'absolute', top: -2, right: -14 }}>🎒</div>}
+            </div>
+            {/* Height markers */}
+            {[25, 50, 75, 100].map(h => (
+              <div key={h} style={{ position: 'absolute', bottom: `${h}%`, left: 42, right: 42,
+                borderTop: '1px dashed rgba(241,245,249,0.15)', zIndex: 1 }}>
+                <span style={{ position: 'absolute', right: 2, top: -12,
+                  fontSize: 9, color: 'rgba(241,245,249,0.3)' }}>{h}</span>
+              </div>
+            ))}
+            {/* Safety line at top */}
+            <div style={{ position: 'absolute', top: 0, left: 40, right: 40, height: 3,
+              background: '#4ade80', zIndex: 6 }} />
+          </div>
+          <div style={{ textAlign: 'center', color: '#64748b', fontSize: 11, marginTop: 4 }}>
+            Canyon Floor — 0 units
+          </div>
         </div>
       </div>
+
+      {/* Jettison overlay */}
+      {jetMsg && (
+        <div style={{ position: 'fixed', top: '30%', left: '50%', transform: 'translate(-50%, -50%)',
+          background: 'rgba(15,23,42,0.95)', border: '3px solid #f87171', borderRadius: 12,
+          padding: '24px 32px', zIndex: 100, textAlign: 'center',
+          boxShadow: '0 0 40px rgba(248,113,113,0.5)', maxWidth: 400 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🎒💨</div>
+          <div style={{ color: '#f87171', fontWeight: 'bold', fontSize: 18, marginBottom: 8 }}>BAG JETTISONED</div>
+          <div style={{ color: '#f1f5f9', fontSize: 15, lineHeight: 1.6 }}>{jetMsg}</div>
+          <div style={{ color: '#4ade80', fontWeight: 'bold', fontSize: 14, marginTop: 10 }}>
+            V_player: {V_LOADED.toFixed(1)} → {V_LIGHT.toFixed(1)} u/tick
+          </div>
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: 16, marginTop: 12, alignItems: 'center',
+        flexWrap: 'wrap', justifyContent: 'center' }}>
+        <button onClick={handleClimb} style={S.climbBtn}>
+          CLIMB (+{vPlayer.toFixed(1)} units)
+        </button>
+        {hasBag && (
+          <button onClick={handleJettison} style={{
+            padding: '14px 28px', fontSize: 18, fontWeight: 'bold', color: '#fff',
+            border: '3px solid #fbbf24', borderRadius: 12, cursor: 'pointer', letterSpacing: 1,
+            transition: 'all 0.3s ease',
+            boxShadow: pulsing ? '0 0 30px rgba(239,68,68,0.8), 0 0 60px rgba(239,68,68,0.4)' : '0 0 15px rgba(239,68,68,0.4)',
+            transform: pulsing ? 'scale(1.05)' : 'scale(1)',
+            background: pulsing ? 'linear-gradient(135deg, #ff2020, #dc2626)' : 'linear-gradient(135deg, #ef4444, #b91c1c)',
+          }}>
+            JETTISON BAG (-{BAG_WEIGHT} lbs)
+          </button>
+        )}
+      </div>
+
+      {/* Danger warning */}
+      {danger && (
+        <div style={{ color: '#f87171', fontWeight: 'bold', fontSize: 14, textAlign: 'center',
+          padding: '6px 16px', background: 'rgba(248,113,113,0.15)', borderRadius: 6,
+          border: '1px solid #f87171', marginTop: 6, maxWidth: 500 }}>
+          WATER IS {gap.toFixed(1)} UNITS BELOW YOU — DROP THE BAG OR DROWN
+        </div>
+      )}
     </div>
   )
 }
 
-const styles = {
+// ── Styles ──
+const S = {
   container: {
-    minHeight: '100vh',
-    background: '#0f172a',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    padding: 16,
-    fontFamily: 'system-ui, sans-serif',
-    transition: 'transform 0.1s',
+    minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column',
+    alignItems: 'center', padding: 16, fontFamily: 'system-ui, -apple-system, sans-serif', color: '#f1f5f9',
   },
-  introBox: {
-    maxWidth: 600,
-    background: '#1e293b',
-    borderRadius: 16,
-    padding: 32,
-    textAlign: 'center',
-    marginTop: 40,
-    border: '1px solid #334155',
+  card: {
+    maxWidth: 620, background: '#1e293b', borderRadius: 16, padding: '32px 28px',
+    textAlign: 'center', marginTop: 32, border: '1px solid #334155',
   },
-  title: {
-    color: '#f1f5f9',
-    fontSize: 28,
-    margin: '12px 0',
+  title: { color: '#f1f5f9', fontSize: 28, margin: '12px 0 4px', fontWeight: 'bold' },
+  txt: { color: '#cbd5e1', fontSize: 15, lineHeight: 1.7, margin: '10px 0' },
+  formulaBox: {
+    background: '#0f172a', border: '1px solid #334155', borderRadius: 10,
+    padding: '16px 20px', marginTop: 16, textAlign: 'left',
   },
-  text: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    lineHeight: 1.6,
-    margin: '10px 0',
+  fRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: 14 },
+  divider: { height: 1, background: '#334155', margin: '8px 0' },
+  greenBtn: {
+    padding: '14px 40px', fontSize: 18, fontWeight: 'bold', background: '#22c55e',
+    color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', marginTop: 18, letterSpacing: 1,
   },
-  startBtn: {
-    padding: '14px 36px',
-    fontSize: 18,
-    fontWeight: 'bold',
-    background: '#22c55e',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 10,
-    cursor: 'pointer',
-    marginTop: 16,
+  noteBox: {
+    background: '#0f172a', border: '1px solid #334155', borderRadius: 10,
+    padding: '16px 20px', marginTop: 16, textAlign: 'left',
   },
   hud: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%',
-    maxWidth: 700,
-    padding: '8px 16px',
-    background: '#1e293b',
-    borderRadius: 10,
-    marginBottom: 8,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+    maxWidth: 800, padding: '10px 16px', background: '#1e293b', borderRadius: 10,
+    marginBottom: 10, border: '1px solid #334155',
   },
-  dropBagBtn: {
-    padding: '12px 28px',
-    fontSize: 18,
-    fontWeight: 'bold',
-    background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-    color: '#fff',
-    border: '3px solid #fbbf24',
-    borderRadius: 12,
-    cursor: 'pointer',
-    animation: 'none',
-    boxShadow: '0 0 20px rgba(239,68,68,0.6)',
-    margin: '6px 0',
+  playArea: {
+    display: 'flex', gap: 16, width: '100%', maxWidth: 800,
+    alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'center',
   },
-  cliffScene: {
-    position: 'relative',
-    width: '100%',
-    maxWidth: 700,
-    height: 520,
-    background: 'linear-gradient(180deg, #1e293b 0%, #334155 60%, #475569 100%)',
-    borderRadius: 16,
-    overflow: 'hidden',
-    border: '2px solid #334155',
+  stats: {
+    width: 240, background: '#1e293b', borderRadius: 10, padding: '14px 16px',
+    border: '1px solid #334155', flexShrink: 0,
+  },
+  sRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', fontSize: 14 },
+  canyonWrap: { flex: 1, minWidth: 200, maxWidth: 320 },
+  canyon: {
+    position: 'relative', width: '100%', height: 460, borderRadius: 8,
+    overflow: 'hidden', border: '2px solid #334155', background: '#0a0a0a',
+  },
+  wallL: {
+    position: 'absolute', top: 0, bottom: 0, left: 0, width: 40, zIndex: 4,
+    background: 'linear-gradient(180deg, #3d2914, #5c3d1f 30%, #7a5230 60%, #5c3d1f 80%, #3d2914)',
+    borderRight: '2px solid #2d1f0e',
+  },
+  wallR: {
+    position: 'absolute', top: 0, bottom: 0, right: 0, width: 40, zIndex: 4,
+    background: 'linear-gradient(180deg, #3d2914, #5c3d1f 30%, #7a5230 60%, #5c3d1f 80%, #3d2914)',
+    borderLeft: '2px solid #2d1f0e',
+  },
+  climbBtn: {
+    padding: '14px 32px', fontSize: 18, fontWeight: 'bold', color: '#fff', border: 'none',
+    borderRadius: 10, cursor: 'pointer', letterSpacing: 1,
+    background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+    boxShadow: '0 0 15px rgba(34,197,94,0.4)',
   },
 }
