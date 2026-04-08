@@ -108,10 +108,12 @@ function reducer(s, a) {
       const last = s.plannedRoute.length ? s.plannedRoute[s.plannedRoute.length-1] : s.playerLoc
       if (Math.abs(x-last.x)>1 || Math.abs(y-last.y)>1) return s  // non-adjacent
       if (x===last.x && y===last.y) return s                        // same cell
+      // MUST PROBE FIRST — block waypoints on unexplored tiles
+      if (!s.grid[y][x].isExplored) return { ...s, _blocked: 'MUST PROBE FIRST — you cannot step on unexplored tiles!', _blockedAt: Date.now() }
       // If clicking existing waypoint, truncate route there
       const idx = s.plannedRoute.findIndex(p=>p.x===x&&p.y===y)
       if (idx>=0) return { ...s, plannedRoute: s.plannedRoute.slice(0,idx) }
-      return { ...s, plannedRoute: [...s.plannedRoute, {x,y}] }
+      return { ...s, plannedRoute: [...s.plannedRoute, {x,y}], _blocked: null }
     }
 
     case 'CLEAR_WP':
@@ -146,6 +148,11 @@ function reducer(s, a) {
       const next = plannedRoute[execStep]
       const cell = s.grid[next.y][next.x]
       const force = calcForce(cell)
+
+      // ── PROBE MANDATORY — block stepping on unexplored tiles ──
+      if (!cell.isExplored) {
+        return { ...s, simState:'FAILED', playerLoc:next, failReason:'MUST PROBE FIRST — you cannot step on unexplored tiles! Use sonar before entering unknown areas.' }
+      }
 
       // ── MANHOLE trap (unexplored) ──
       if (cell.hazard==='MANHOLE' && !cell.isExplored) {
@@ -212,7 +219,17 @@ export default function Module5_TreacherousTrek() {
   const [s, dispatch]   = useReducer(reducer, INIT)
   const [hover, setHover] = useState(null)
   const [sonarAnim, setSonarAnim] = useState(null)
+  const [blockedMsg, setBlockedMsg] = useState(null)
   const execRef = useRef(null)
+
+  // Show blocked message when trying to step on unexplored tile
+  useEffect(() => {
+    if (s._blocked) {
+      setBlockedMsg(s._blocked)
+      const t = setTimeout(() => setBlockedMsg(null), 2000)
+      return () => clearTimeout(t)
+    }
+  }, [s._blockedAt]) // re-trigger on each blocked attempt via timestamp
 
   // Execution loop
   useEffect(() => {
@@ -609,6 +626,13 @@ export default function Module5_TreacherousTrek() {
           </div>
         </div>
       </div>
+
+      {/* ── BLOCKED WARNING ── */}
+      {blockedMsg && (
+        <div style={{background:'#7f1d1d',border:'2px solid #ef4444',padding:'8px 16px',textAlign:'center',fontFamily:MONO,fontSize:12,color:'#fca5a5',fontWeight:700,letterSpacing:1,flexShrink:0}}>
+          ⚠️ {blockedMsg}
+        </div>
+      )}
 
       {/* ── ACTION DECK ── */}
       <div style={{background:'#080808',borderTop:'2px solid #1a2535',padding:'10px 14px',flexShrink:0}}>

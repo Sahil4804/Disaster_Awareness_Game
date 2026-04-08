@@ -1,486 +1,870 @@
 /**
- * Module 3 — Yard Triage: Spatial Logistics & Cascading Failure Simulator
- * Aesthetic : Tactical Command Center — #0a0a0a, cyan/amber, JetBrains Mono
- * Mechanics : useReducer · 120-minute time budget · physics cascade simulation
- * Reference : FEMA P-348, NOAA Storm Surge, EPA Hazmat in Flood Guidelines
+ * Module 3 — Yard Lockdown: Buoyancy & Tensile Strength Simulator
+ * Aesthetic : Drone-blueprint overhead view — dark theme, cyan/amber/red
+ * Mechanics : useState phases · water-depth slider · dynamic buoyancy calc
+ * Physics   : Archimedes' principle, displaced volume, net lift vs strap rating
+ * Reference : FEMA P-348, NFPA 58, Archimedes buoyancy principle
  */
-import { useReducer, useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useGame } from '../../context/GameContext'
 
+/* ─── Constants ──────────────────────────────────────────────────────────── */
 const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
+const WATER_DENSITY = 62.4 // lb per ft³
 
-// ─── Item catalogue ───────────────────────────────────────────────────────────
-const ITEMS_INIT = [
+/* ─── Yard Objects ───────────────────────────────────────────────────────── */
+const YARD_OBJECTS = [
   {
-    id:'propane', emoji:'🛢️', name:'500-Gal Propane Tank', zone:'yard', state:'unsecured',
-    hazard:'Explosive / Buoyant', hc:'#ef4444',
-    weight:2365, buoyancy:4212, contaminant:'HIGH', windDrag:'LOW',
-    mapX:110, mapY:330,
-    desc:'Full tank. 4,212 lbs upward buoyancy force at 3ft flood. Floats, snaps the gas line, then ruptures. BLAST RADIUS: 50 m. (Source: NFPA 58)',
+    id: 'propane-full',
+    name: 'Propane Tank (FULL)',
+    emoji: '🛢️',
+    mass: 1800,
+    volume: 67,
+    height: 4.5,
+    color: '#ef4444',
+    desc: '500-gallon tank filled with propane. Heavy at 1800 lbs, but still generates buoyancy when submerged. Gas line connection is the failure point.',
+    hint: 'Full tank is heavy — buoyancy may not exceed weight until deeply submerged.',
   },
   {
-    id:'furniture', emoji:'🪑', name:'Resin Patio Set', zone:'yard', state:'unsecured',
-    hazard:'Wind Projectile', hc:'#f97316',
-    weight:185, buoyancy:900, contaminant:'LOW', windDrag:'HIGH',
-    mapX:230, mapY:300,
-    desc:'185 lbs, very high wind drag surface area. At 80 mph becomes a 185-lb shrapnel mass. Can shatter windows and breach walls. (Source: FEMA P-361)',
+    id: 'propane-empty',
+    name: 'Propane Tank (EMPTY)',
+    emoji: '🛢️',
+    mass: 200,
+    volume: 67,
+    height: 4.5,
+    color: '#dc2626',
+    desc: 'EMPTY 500-gallon tank. Same displacement volume as full tank but only 200 lbs. Enormous net upward lift in flood conditions.',
+    hint: 'THE TRAP: Empty tank + water = 4000+ lbs of lift. This is a floating bomb that will rupture your gas main.',
   },
   {
-    id:'fertilizer', emoji:'🧴', name:'Lawn Chemicals (12 gal)', zone:'yard', state:'unsecured',
-    hazard:'Toxic Contamination', hc:'#eab308',
-    weight:80, buoyancy:60, contaminant:'CRITICAL', windDrag:'LOW',
-    mapX:160, mapY:390,
-    desc:'Nitrogen fertilizer + herbicides. Dissolves into floodwater, creates toxic nitrate soup. Cannot be made safe by boiling. EPA Superfund risk. (Source: EPA 832-R-06-005)',
+    id: 'patio-table',
+    name: 'Patio Table',
+    emoji: '🪑',
+    mass: 80,
+    volume: 8,
+    height: 2.5,
+    color: '#f97316',
+    desc: 'Heavy resin patio table. Relatively low volume means modest buoyancy, but still enough to lift 80 lbs off the ground.',
+    hint: 'Low mass + low volume = moderate risk. A mid-range strap should hold.',
   },
   {
-    id:'mower', emoji:'🚜', name:'Riding Mower', zone:'yard', state:'unsecured',
-    hazard:'Mechanical / Oil', hc:'#f59e0b',
-    weight:450, buoyancy:1625, contaminant:'MEDIUM', windDrag:'LOW',
-    mapX:340, mapY:365,
-    desc:'Engine oil + fuel contaminate floodwater. Electrical systems destroyed at 12 inches of submersion. Replacement cost: $2,000+. (Source: FEMA Individual Assistance)',
+    id: 'bbq-grill',
+    name: 'BBQ Grill',
+    emoji: '🔥',
+    mass: 120,
+    volume: 12,
+    height: 3.0,
+    color: '#f59e0b',
+    desc: 'Stainless steel propane grill with side burner. Moderate mass and volume. Contains residual propane in attached tank.',
+    hint: 'Connected propane line makes this a secondary gas hazard if it floats away.',
   },
   {
-    id:'debris', emoji:'🍂', name:'Loose Mulch & Leaves', zone:'yard', state:'unsecured',
-    hazard:'CASCADE — Drain Clog', hc:'#dc2626',
-    weight:30, buoyancy:10, contaminant:'LOW', windDrag:'HIGH',
-    mapX:290, mapY:425,
-    desc:'⚠ CASCADING HAZARD: Clogs storm drains within minutes. Raises local flood depth 3.0 ft → 4.5 ft, OVERRIDING all 2ft block elevations. (Source: FEMA Stormwater Mgmt)',
+    id: 'trash-cans',
+    name: 'Trash Cans (Empty)',
+    emoji: '🗑️',
+    mass: 15,
+    volume: 32,
+    height: 3.5,
+    color: '#8b5cf6',
+    desc: 'Two large 96-gallon wheeled bins. Extremely light at 15 lbs but massive air volume creates huge buoyancy.',
+    hint: 'Huge volume, almost no weight. These WILL float and become battering rams.',
   },
   {
-    id:'hvac', emoji:'🌀', name:'HVAC Condenser Unit', zone:'yardpad', state:'grid_powered',
-    hazard:'Electrical Short', hc:'#8b5cf6',
-    weight:220, buoyancy:750, contaminant:'LOW', windDrag:'MEDIUM',
-    mapX:425, mapY:305,
-    desc:'220V live unit. When submerged, arcs through conductive floodwater. $5,000 repair. Creates electrocution hazard throughout the yard. (Source: OSHA 3186)',
+    id: 'kayak',
+    name: 'Kayak',
+    emoji: '🛶',
+    mass: 50,
+    volume: 20,
+    height: 1.5,
+    color: '#3b82f6',
+    desc: 'Recreational sit-on-top kayak. Designed to float — low mass and substantial displacement volume.',
+    hint: 'Literally designed to float. Without anchoring, it will be carried by any flood current.',
   },
 ]
 
-// ─── Zone item slots ──────────────────────────────────────────────────────────
-const ZONE_SLOTS = {
-  yard:        [[110,330],[230,300],[160,390],[340,365],[290,425],[425,305]],
-  garage:      [[545,220],[600,220],[545,265],[600,265],[572,295]],
-  high_shelf:  [[540,148],[588,148],[536,170],[584,170]],
-  pool:        [[78,175],[122,160],[78,210],[122,210]],
-}
+/* ─── Strap Options ──────────────────────────────────────────────────────── */
+const STRAP_OPTIONS = [
+  { id: 'bungee',   name: 'Bungee Cord',           rating: 50,    color: '#94a3b8', icon: '🪢' },
+  { id: 'nylon',    name: 'Nylon Strap',            rating: 500,   color: '#f59e0b', icon: '🔗' },
+  { id: 'steel',    name: 'Steel Chain',             rating: 5000,  color: '#60a5fa', icon: '⛓️' },
+  { id: 'anchor',   name: 'Ground Anchor + Chain',   rating: 10000, color: '#22c55e', icon: '⚓' },
+]
 
-// ─── Action definitions ───────────────────────────────────────────────────────
-const ACTIONS = {
-  relocate_garage: {
-    label:'Relocate to Garage', timeCost:10, budgetCost:0, icon:'🏠',
-    desc:'Move into garage. Required step before elevation or shelving.',
-    canDo: i => (i.zone==='yard'||i.zone==='yardpad') && i.id!=='hvac' && i.id!=='debris',
-  },
-  elevate_blocks: {
-    label:'Elevate on Blocks (+2 ft)', timeCost:15, budgetCost:0, icon:'⬆️',
-    desc:'Raises item 2 ft off garage floor. Protects against standard 3 ft flood only.',
-    canDo: i => i.zone==='garage' && i.state!=='elevated' && i.state!=='shelved',
-  },
-  high_shelves: {
-    label:'Move to High Shelves', timeCost:8, budgetCost:0, icon:'📦',
-    desc:'Chemicals only — moves above flood line. Prevents toxic runoff.',
-    canDo: i => i.zone==='garage' && i.id==='fertilizer' && i.state!=='shelved',
-  },
-  throw_pool: {
-    label:'Throw in Pool (5 min)', timeCost:5, budgetCost:0, icon:'🏊',
-    desc:'Furniture only. Submerged in controlled water — no wind exposure. Resin is waterproof.',
-    canDo: i => i.zone==='yard' && i.id==='furniture',
-  },
-  anchor_fill: {
-    label:'Anchor & Fill w/Water ($100)', timeCost:30, budgetCost:100, icon:'⚓',
-    desc:'Tank only. Ground anchor + water ballast counteracts 4,212 lbs buoyancy. FEMA P-348.',
-    canDo: i => i.id==='propane' && i.state!=='anchored',
-  },
-  bag_debris: {
-    label:'Bag & Secure Debris', timeCost:20, budgetCost:0, icon:'🗑️',
-    desc:'Removes loose organic matter. CRITICAL — prevents storm drain clog cascade.',
-    canDo: i => i.id==='debris' && i.state!=='secured',
-  },
-  kill_breaker: {
-    label:'Kill Outdoor Breaker', timeCost:5, budgetCost:0, icon:'⚡',
-    desc:'Isolates 220V HVAC from grid. Prevents electrocution hazard in floodwater.',
-    canDo: i => i.id==='hvac' && i.state==='grid_powered',
-  },
-}
-
-// ─── Cascading failure simulation ─────────────────────────────────────────────
-function simulate(items) {
-  let waterMult = 1.0
-  const findings = []
-  let totalLoss = 0
-
-  // Step 1 — DEBRIS CHECK (must run first, cascades to everything)
-  const debris = items.find(i=>i.id==='debris')
-  const drainClogged = debris.state !== 'secured'
-  if (drainClogged) {
-    waterMult = 2.0
-    findings.push({
-      type:'CASCADE', id:'debris',
-      title:'⚠ STORM DRAINS CLOGGED — CASCADE EVENT',
-      msg:'Loose mulch & leaves blocked storm drains within 8 minutes of rainfall. Local flood depth elevated from 3.0 ft → 4.5 ft. All 2 ft elevation measures are now INSUFFICIENT.',
-      loss:0,
-    })
-  }
-  const maxDepth = drainClogged ? 4.5 : 3.0
-
-  // Step 2 — PROPANE TANK
-  const propane = items.find(i=>i.id==='propane')
-  if (propane.state !== 'anchored') {
-    findings.push({ type:'CRITICAL', id:'propane', title:'💥 PROPANE TANK RUPTURE',
-      msg:`Archimedes principle: 4,212 lbs upward buoyancy force at ${maxDepth}ft flood. Anchor missing. Tank displaced, severed gas line, ignited. Blast radius 50 m. Entire property destroyed.`, loss:25000 })
-    totalLoss += 25000
-  } else {
-    findings.push({ type:'PASS', id:'propane', title:'✓ PROPANE: ANCHORED & BALLASTED',
-      msg:`Water ballast + ground anchor resisted 4,212 lbs buoyancy force. Gas line intact. No rupture.` })
-  }
-
-  // Step 3 — FURNITURE
-  const furn = items.find(i=>i.id==='furniture')
-  if (furn.zone==='yard') {
-    findings.push({ type:'FAIL', id:'furniture', title:'🪟 WINDOWS SMASHED — PROJECTILE',
-      msg:`185-lb resin set reached ~80 mph in wind. Struck east windows. Structural breach allowed flood ingress into living space.`, loss:3500 })
-    totalLoss += 3500
-  } else if (furn.zone==='pool') {
-    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SUBMERGED IN POOL',
-      msg:`Controlled submersion. No wind exposure. Resin construction resists water damage. Zero loss.` })
-  } else {
-    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SECURED IN GARAGE',
-      msg:`Protected from 80 mph wind. No damage.` })
-  }
-
-  // Step 4 — CHEMICALS
-  const chem = items.find(i=>i.id==='fertilizer')
-  const chemSafe = chem.state === 'shelved'
-  if (!chemSafe) {
-    findings.push({ type:'FAIL', id:'fertilizer', title:'☠ TOXIC CONTAMINATION',
-      msg:`Nitrogen fertilizer + herbicides dissolved into floodwater. Created toxic nitrate + herbicide soup. Cannot be boiled safe. Requires EPA-grade decontamination.`, loss:8000 })
-    totalLoss += 8000
-  } else {
-    findings.push({ type:'PASS', id:'fertilizer', title:'✓ CHEMICALS: ON HIGH SHELVES',
-      msg:`Secured at ${(maxDepth+1.8).toFixed(1)} ft elevation — above the ${maxDepth}ft flood line. No contamination.` })
-  }
-
-  // Step 5 — MOWER (with the cascade TRAP)
-  const mower = items.find(i=>i.id==='mower')
-  if (mower.zone==='yard') {
-    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED IN YARD',
-      msg:`Submerged in ${maxDepth}ft of floodwater. Engine oil + fuel contaminated water. All electrical systems shorted. $2,000 replacement.`, loss:2000 })
-    totalLoss += 2000
-  } else if (mower.zone==='garage' && mower.state==='elevated') {
-    if (!drainClogged) {
-      findings.push({ type:'PASS', id:'mower', title:'✓ MOWER: ELEVATED — SAFE',
-        msg:`2 ft blocks cleared 3 ft flood. No damage.` })
-    } else {
-      findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED — CASCADE TRAP!',
-        msg:`⚠ You elevated on 2 ft blocks (correct instinct) but LEFT THE DEBRIS UNSECURED. Clogged drains raised flood to 4.5 ft — exceeding the 2 ft blocks by 2.5 ft. LESSON: Clear debris FIRST, then elevate.`, loss:2000 })
-      totalLoss += 2000
-    }
-  } else if (mower.zone==='garage') {
-    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER FLOOR-LEVEL DAMAGE',
-      msg:`In garage but not elevated. Flood water entered garage floor. Partial damage to electrics.`, loss:1200 })
-    totalLoss += 1200
-  }
-
-  // Step 6 — HVAC
-  const hvac = items.find(i=>i.id==='hvac')
-  if (hvac.state === 'grid_powered' && maxDepth >= 1.5) {
-    findings.push({ type:'CRITICAL', id:'hvac', title:'⚡ HVAC ELECTRICAL SHORT',
-      msg:`220V discharge through conductive floodwater. Arc flash created electrocution hazard throughout the yard. $5,000 repair + electrical remediation.`, loss:5000 })
-    totalLoss += 5000
-  } else if (hvac.state === 'isolated') {
-    findings.push({ type:'PASS', id:'hvac', title:'✓ HVAC: ISOLATED',
-      msg:`Outdoor breaker killed. No voltage in floodwater. No hazard.` })
-  }
-
-  const criticals = findings.filter(f=>f.type==='CRITICAL').length
-  const fails     = findings.filter(f=>f.type==='FAIL').length
-  const passed    = criticals===0 && fails===0
-  const score     = Math.max(0, Math.round(100 - totalLoss / 400))
-
-  return { findings, totalLoss, score, passed, maxDepth, drainClogged, criticals, fails }
-}
-
-// ─── Reducer ──────────────────────────────────────────────────────────────────
-const INIT = {
-  timeRemaining: 120,
-  budget: 200,
-  items: ITEMS_INIT,
-  selectedId: null,
-  phase: 'setup',
-  simResult: null,
-}
-
-function reducer(s, a) {
-  switch (a.type) {
-    case 'SELECT':
-      return { ...s, selectedId: s.selectedId === a.id ? null : a.id }
-
-    case 'ACTION': {
-      const def = ACTIONS[a.action]
-      if (!def || s.timeRemaining < def.timeCost || s.budget < def.budgetCost) return s
-      const items = s.items.map(item => {
-        if (item.id !== a.itemId) return item
-        switch (a.action) {
-          case 'relocate_garage': return { ...item, zone:'garage',     state:'in_garage'  }
-          case 'elevate_blocks':  return { ...item, state:'elevated'                      }
-          case 'high_shelves':    return { ...item, zone:'high_shelf', state:'shelved'    }
-          case 'throw_pool':      return { ...item, zone:'pool',       state:'pooled'     }
-          case 'anchor_fill':     return { ...item, state:'anchored'                      }
-          case 'bag_debris':      return { ...item, state:'secured',   zone:'secured'     }
-          case 'kill_breaker':    return { ...item, state:'isolated'                      }
-          default:                return item
-        }
-      })
-      return { ...s, items, timeRemaining: s.timeRemaining - def.timeCost, budget: s.budget - def.budgetCost }
-    }
-
-    case 'SIMULATE': {
-      const result = simulate(s.items)
-      return { ...s, phase:'result', simResult: result }
-    }
-
-    case 'RESET': return { ...INIT, items: ITEMS_INIT.map(i => ({ ...i })) }
-    default:      return s
+/* ─── Physics Calculations ───────────────────────────────────────────────── */
+function calcBuoyancy(obj, waterDepth) {
+  if (waterDepth <= 0) return { submergedVolume: 0, buoyancyForce: 0, netLiftForce: 0 }
+  const submergedFraction = Math.min(1, waterDepth / obj.height)
+  const submergedVolume = obj.volume * submergedFraction
+  const buoyancyForce = submergedVolume * WATER_DENSITY
+  const netLiftForce = buoyancyForce - obj.mass
+  return {
+    submergedVolume: Math.round(submergedVolume * 100) / 100,
+    buoyancyForce: Math.round(buoyancyForce * 10) / 10,
+    netLiftForce: Math.round(netLiftForce * 10) / 10,
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function stateLabel(item) {
-  switch (item.state) {
-    case 'in_garage':   return { text:'IN GARAGE',  color:'#fbbf24' }
-    case 'elevated':    return { text:'ELEVATED +2ft', color:'#22c55e' }
-    case 'shelved':     return { text:'HIGH SHELF', color:'#22c55e' }
-    case 'pooled':      return { text:'IN POOL',    color:'#3b82f6' }
-    case 'anchored':    return { text:'ANCHORED',   color:'#22c55e' }
-    case 'secured':     return { text:'BAGGED',     color:'#22c55e' }
-    case 'isolated':    return { text:'ISOLATED',   color:'#22c55e' }
-    case 'grid_powered':return { text:'LIVE 220V',  color:'#ef4444' }
-    default:            return { text:'UNSECURED',  color:'#ef4444' }
-  }
-}
-
-function isSecured(item) {
-  return !['unsecured','grid_powered'].includes(item.state)
-}
-
-// ─── Map: assign positions by zone ────────────────────────────────────────────
-function getPositions(items) {
-  const counts = {}
-  return items.map(item => {
-    const zone = item.state === 'secured' ? 'secured_off' : item.zone
-    const slots = ZONE_SLOTS[zone] || ZONE_SLOTS.yard
-    const idx = counts[zone] ?? 0
-    counts[zone] = idx + 1
-    return { item, x: slots[idx]?.[0] ?? 100 + idx * 40, y: slots[idx]?.[1] ?? 350 }
-  })
-}
-
-// ─── SVG Yard Map ─────────────────────────────────────────────────────────────
-function YardMap({ items, selectedId, onSelect, simResult }) {
-  const positions = getPositions(items)
-  const flooding  = !!simResult
-
+/* ─── Blueprint grid background ──────────────────────────────────────────── */
+function BlueprintGrid() {
   return (
-    <svg viewBox="0 0 700 480" style={{ width:'100%', height:'100%' }}>
+    <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.08, pointerEvents: 'none' }}>
       <defs>
-        <linearGradient id="floodGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#1d4ed8" stopOpacity={simResult?.drainClogged ? '0.72' : '0.52'}/>
-          <stop offset="100%" stopColor="#1e40af" stopOpacity={simResult?.drainClogged ? '0.52' : '0.38'}/>
-        </linearGradient>
+        <pattern id="grid-sm" width="20" height="20" patternUnits="userSpaceOnUse">
+          <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#00e5ff" strokeWidth="0.5" />
+        </pattern>
+        <pattern id="grid-lg" width="100" height="100" patternUnits="userSpaceOnUse">
+          <rect width="100" height="100" fill="url(#grid-sm)" />
+          <path d="M 100 0 L 0 0 0 100" fill="none" stroke="#00e5ff" strokeWidth="1" />
+        </pattern>
       </defs>
-
-      {/* Background */}
-      <rect width={700} height={480} fill="#080808"/>
-
-      {/* Ground texture */}
-      <rect width={700} height={480} fill="url(#grassPat)" opacity="0.4"/>
-
-      {/* ── Zone fills ── */}
-      {/* Yard */}
-      <rect x={10} y={235} width={475} height={195} rx={4}
-            fill="rgba(20,40,10,0.75)" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="8,5"/>
-      {/* Pool */}
-      <rect x={10} y={75} width={175} height={160} rx={10}
-            fill="rgba(29,78,216,0.22)" stroke="#3b82f6" strokeWidth={1.5}/>
-      {/* Garage */}
-      <rect x={490} y={75} width={195} height={265} rx={4}
-            fill="rgba(42,32,8,0.85)" stroke="#f59e0b" strokeWidth={1.5}/>
-      {/* High Shelves (inside garage) */}
-      <rect x={500} y={84} width={175} height={78} rx={3}
-            fill="rgba(80,60,0,0.35)" stroke="#fbbf24" strokeWidth={1} strokeDasharray="4,3"/>
-      {/* Storm drain strip */}
-      <rect x={10} y={437} width={475} height={32} rx={2}
-            fill="rgba(14,165,233,0.18)" stroke="#0ea5e9" strokeWidth={1.5}/>
-
-      {/* ── Zone labels ── */}
-      <text x={18} y={255}  fill="#22c55e55" fontSize={9}  fontFamily="monospace" letterSpacing={2}>YARD</text>
-      <text x={18} y={92}   fill="#3b82f655" fontSize={9}  fontFamily="monospace" letterSpacing={2}>POOL</text>
-      <text x={498} y={92}  fill="#f59e0b66" fontSize={9}  fontFamily="monospace" letterSpacing={2}>GARAGE</text>
-      <text x={508} y={102} fill="#fbbf24"   fontSize={8}  fontFamily="monospace">↑ HIGH SHELVES</text>
-      <text x={160} y={456} fill="#0ea5e9"   fontSize={8}  fontFamily="monospace" textAnchor="middle">⚠ STORM DRAIN / FLOOD INGRESS</text>
-
-      {/* Structure perimeter */}
-      <line x1={10} y1={235} x2={485} y2={235} stroke="#334155" strokeWidth={1} strokeDasharray="6,4"/>
-      <text x={170} y={230} fill="#334155" fontSize={8} fontFamily="monospace">STRUCTURE PERIMETER</text>
-
-      {/* Driveway */}
-      <rect x={490} y={340} width={195} height={80} fill="rgba(30,30,30,0.5)" stroke="#334155" strokeWidth={1}/>
-      <text x={568} y={386} fill="#334155" fontSize={8} fontFamily="monospace" textAnchor="middle">DRIVEWAY</text>
-
-      {/* ── Flood animation overlay ── */}
-      {flooding && (
-        <>
-          <rect x={10} y={235} width={475} height={195}
-                fill="url(#floodGrad)"
-                style={{ animation:'flood-rise 2s ease-in-out' }}/>
-          {simResult.drainClogged && (
-            <text x={240} y={330} fill="#fbbf24" fontSize={14} fontFamily="monospace"
-                  textAnchor="middle" fontWeight="bold"
-                  style={{ animation:'glow-pulse 0.6s ease-in-out infinite' }}>
-              ⚠ DRAINS CLOGGED — 4.5ft FLOOD
-            </text>
-          )}
-          {/* Wave line */}
-          <line x1={10} y1={simResult.drainClogged ? 255 : 270}
-                x2={485} y2={simResult.drainClogged ? 255 : 270}
-                stroke="#60a5fa" strokeWidth={2}
-                style={{ animation:'wave-line 1s ease-in-out infinite alternate' }}/>
-        </>
-      )}
-
-      {/* ── Items ── */}
-      {positions.map(({ item, x, y }) => {
-        if (item.state === 'secured') return null  // bagged debris off-map
-        const isSel  = item.id === selectedId
-        const safe   = isSecured(item)
-        const lbl    = stateLabel(item)
-        return (
-          <g key={item.id} onClick={() => onSelect(item.id)} style={{ cursor:'pointer' }}>
-            {/* Selection ring */}
-            <circle cx={x} cy={y} r={24}
-                    fill={isSel ? 'rgba(251,191,36,0.12)' : 'rgba(0,0,0,0.25)'}
-                    stroke={isSel ? '#fbbf24' : safe ? '#22c55e55' : item.hc + '55'}
-                    strokeWidth={isSel ? 2.5 : 1.5}
-                    style={isSel ? {animation:'glow-pulse 1s ease-in-out infinite'} : {}}/>
-            {/* Icon */}
-            <text x={x} y={y+6} fontSize={20} textAnchor="middle">{item.emoji}</text>
-            {/* Status badge */}
-            <text x={x+16} y={y-13} fontSize={11}>
-              {safe ? '✅' : '⚠️'}
-            </text>
-            {/* Label below */}
-            <text x={x} y={y+30} fontSize={8} textAnchor="middle"
-                  fill={lbl.color} fontFamily="monospace">{lbl.text}</text>
-          </g>
-        )
-      })}
-
-      {/* Wind compass */}
-      <g transform="translate(655, 450)">
-        <circle cx={0} cy={0} r={18} fill="rgba(0,0,0,0.6)" stroke="#334155" strokeWidth={1}/>
-        <text x={-5} y={5} fontSize={14} fill="#60a5fa">↙</text>
-        <text x={-16} y={-10} fontSize={7} fill="#334155" fontFamily="monospace">80MPH</text>
-      </g>
-
-      {/* Flood depth scale */}
-      <g transform="translate(657, 100)">
-        <rect x={-8} y={-80} width={16} height={80} fill="rgba(30,64,175,0.12)" stroke="#3b82f6" strokeWidth={1}/>
-        <rect x={-7} y={-80+50} width={14} height={30} fill="rgba(59,130,246,0.45)"/>
-        <line x1={-8} y1={-80+50} x2={8} y2={-80+50} stroke="#60a5fa" strokeWidth={1.5}/>
-        <text x={0} y={8}   fontSize={7} fill="#3b82f6" textAnchor="middle" fontFamily="monospace">FLOOD</text>
-        <text x={0} y={17}  fontSize={9} fill="#60a5fa" textAnchor="middle" fontFamily="monospace" fontWeight="700">3 FT</text>
-      </g>
+      <rect width="100%" height="100%" fill="url(#grid-lg)" />
     </svg>
   )
 }
 
-// ─── Main component ────────────────────────────────────────────────────────────
+/* ─── Overhead Yard Map (drone-view blueprint) ───────────────────────────── */
+function YardMapSVG({ objects, strapSelections, waterDepth, phase, simResults }) {
+  const positions = [
+    { x: 120, y: 100 }, // propane-full
+    { x: 320, y: 100 }, // propane-empty
+    { x: 520, y: 100 }, // patio-table
+    { x: 120, y: 280 }, // bbq-grill
+    { x: 320, y: 280 }, // trash-cans
+    { x: 520, y: 280 }, // kayak
+  ]
+
+  const waterFillHeight = (waterDepth / 6) * 380
+  const showFlood = phase === 'simulate' || phase === 'result'
+
+  return (
+    <svg viewBox="0 0 660 400" style={{ width: '100%', maxHeight: '100%' }}>
+      {/* Background */}
+      <rect width="660" height="400" fill="#0a0f14" rx="6" />
+
+      {/* Blueprint grid */}
+      <defs>
+        <pattern id="bp-grid" width="30" height="30" patternUnits="userSpaceOnUse">
+          <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#0ea5e9" strokeWidth="0.3" opacity="0.3" />
+        </pattern>
+        <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#1d4ed8" stopOpacity="0.15" />
+          <stop offset="100%" stopColor="#1e40af" stopOpacity="0.55" />
+        </linearGradient>
+      </defs>
+      <rect width="660" height="400" fill="url(#bp-grid)" />
+
+      {/* Property boundary */}
+      <rect x="20" y="20" width="620" height="360" rx="4" fill="none"
+        stroke="#0ea5e9" strokeWidth="1.5" strokeDasharray="10,5" opacity="0.4" />
+      <text x="35" y="15" fill="#0ea5e9" fontSize="9" fontFamily="monospace" opacity="0.6"
+        letterSpacing="3">YARD — OVERHEAD DRONE VIEW</text>
+
+      {/* House silhouette */}
+      <rect x="230" y="160" width="200" height="80" rx="3" fill="rgba(15,25,35,0.8)"
+        stroke="#334155" strokeWidth="1" />
+      <text x="330" y="205" fill="#334155" fontSize="10" fontFamily="monospace"
+        textAnchor="middle" letterSpacing="2">HOUSE</text>
+
+      {/* Gas main line */}
+      <line x1="20" y1="130" x2="120" y2="130" stroke="#ef444466" strokeWidth="2" strokeDasharray="6,3" />
+      <text x="22" y="125" fill="#ef4444" fontSize="7" fontFamily="monospace" opacity="0.7">GAS MAIN</text>
+
+      {/* Flood water overlay */}
+      {showFlood && waterDepth > 0 && (
+        <rect x="20" y={380 - waterFillHeight} width="620" height={waterFillHeight}
+          fill="url(#waterGrad)" rx="0"
+          style={{ transition: 'height 1.5s ease-in-out, y 1.5s ease-in-out' }} />
+      )}
+
+      {/* Water depth indicator */}
+      {showFlood && waterDepth > 0 && (
+        <>
+          <line x1="20" y1={380 - waterFillHeight} x2="640" y2={380 - waterFillHeight}
+            stroke="#60a5fa" strokeWidth="1.5" opacity="0.7"
+            strokeDasharray="8,4" />
+          <text x="645" y={380 - waterFillHeight + 4} fill="#60a5fa" fontSize="9"
+            fontFamily="monospace" textAnchor="end">{waterDepth.toFixed(1)}ft</text>
+        </>
+      )}
+
+      {/* Objects */}
+      {objects.map((obj, i) => {
+        const pos = positions[i]
+        const strap = strapSelections[obj.id]
+        const strapDef = STRAP_OPTIONS.find(s => s.id === strap)
+        const result = simResults?.[obj.id]
+        const ringColor = result
+          ? (result.snapped ? '#ef4444' : '#22c55e')
+          : (strapDef ? strapDef.color : '#334155')
+
+        return (
+          <g key={obj.id}>
+            {/* Connection to anchor point */}
+            {strapDef && (
+              <line x1={pos.x} y1={pos.y + 30} x2={pos.x} y2={pos.y + 50}
+                stroke={result?.snapped ? '#ef4444' : strapDef.color}
+                strokeWidth={strapDef.id === 'anchor' ? 3 : strapDef.id === 'steel' ? 2.5 : 1.5}
+                strokeDasharray={result?.snapped ? '4,4' : 'none'}
+                opacity={result?.snapped ? 0.5 : 0.8} />
+            )}
+
+            {/* Object circle */}
+            <circle cx={pos.x} cy={pos.y} r="32" fill="rgba(0,0,0,0.5)"
+              stroke={ringColor} strokeWidth={result ? 3 : 1.5}
+              opacity={result?.snapped ? 0.6 : 1} />
+
+            {/* Emoji */}
+            <text x={pos.x} y={pos.y + 7} fontSize="26" textAnchor="middle">{obj.emoji}</text>
+
+            {/* Name */}
+            <text x={pos.x} y={pos.y + 52} fontSize="8" textAnchor="middle"
+              fill="#94a3b8" fontFamily="monospace">{obj.name}</text>
+
+            {/* Mass label */}
+            <text x={pos.x} y={pos.y + 63} fontSize="7" textAnchor="middle"
+              fill="#647a8e" fontFamily="monospace">{obj.mass} lb</text>
+
+            {/* Strap label */}
+            {strapDef && (
+              <text x={pos.x} y={pos.y - 38} fontSize="7" textAnchor="middle"
+                fill={strapDef.color} fontFamily="monospace" fontWeight="700">
+                {strapDef.icon} {strapDef.rating.toLocaleString()} lb
+              </text>
+            )}
+
+            {/* Result indicator */}
+            {result && (
+              <>
+                <circle cx={pos.x + 28} cy={pos.y - 24} r="10"
+                  fill={result.snapped ? '#ef4444' : '#22c55e'} opacity="0.9" />
+                <text x={pos.x + 28} y={pos.y - 20} fontSize="12" textAnchor="middle"
+                  fill="#fff" fontWeight="700">
+                  {result.snapped ? '!' : '\u2713'}
+                </text>
+              </>
+            )}
+
+            {/* Floating away animation indicator */}
+            {result?.snapped && (
+              <text x={pos.x} y={pos.y - 45} fontSize="9" textAnchor="middle"
+                fill="#ef4444" fontFamily="monospace" fontWeight="700"
+                style={{ animation: 'blink 0.6s ease-in-out infinite' }}>
+                BROKE FREE
+              </text>
+            )}
+          </g>
+        )
+      })}
+
+      {/* Scale bar */}
+      <line x1="540" y1="385" x2="620" y2="385" stroke="#334155" strokeWidth="1" />
+      <text x="580" y="395" fill="#334155" fontSize="7" fontFamily="monospace"
+        textAnchor="middle">~20 ft</text>
+    </svg>
+  )
+}
+
+/* ─── Water Depth Slider ─────────────────────────────────────────────────── */
+function WaterDepthControl({ waterDepth, onChange, disabled }) {
+  const pct = (waterDepth / 6) * 100
+  const barColor = waterDepth <= 2 ? '#3b82f6' : waterDepth <= 4 ? '#f59e0b' : '#ef4444'
+
+  return (
+    <div style={{ padding: '16px 20px', background: '#0c1018', border: '1px solid #1a2535',
+      borderRadius: 6, marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ color: '#0ea5e9', fontSize: 10, fontWeight: 700, letterSpacing: 2, fontFamily: MONO }}>
+          FLOOD WATER DEPTH
+        </div>
+        <div style={{ fontSize: 28, fontWeight: 900, color: barColor, fontFamily: MONO }}>
+          {waterDepth.toFixed(1)} <span style={{ fontSize: 12, color: '#647a8e' }}>ft</span>
+        </div>
+      </div>
+
+      <input
+        type="range" min="0" max="6" step="0.5" value={waterDepth}
+        onChange={e => onChange(parseFloat(e.target.value))}
+        disabled={disabled}
+        style={{ width: '100%', height: 8, cursor: disabled ? 'not-allowed' : 'pointer',
+          accentColor: barColor, opacity: disabled ? 0.5 : 1 }}
+      />
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+        {[0, 1, 2, 3, 4, 5, 6].map(v => (
+          <span key={v} style={{ fontSize: 8, color: waterDepth >= v ? barColor : '#334155',
+            fontFamily: MONO, fontWeight: waterDepth === v ? 700 : 400 }}>
+            {v}ft
+          </span>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 8, height: 6, background: '#0a0a0a', borderRadius: 3,
+        border: '1px solid #141414', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: barColor, borderRadius: 3,
+          transition: 'width 0.3s, background 0.3s' }} />
+      </div>
+    </div>
+  )
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ═══════════════════════════════════════════════════════════════════════════ */
 export default function Module3_YardLockdown() {
   const { dispatch: gd } = useGame()
-  const [s, dispatch]    = useReducer(reducer, { ...INIT, items: ITEMS_INIT.map(i=>({...i})) })
-  const [hovAction, setHovAction] = useState(null)
 
-  const selected = s.items.find(i => i.id === s.selectedId) ?? null
-  const timePct  = s.timeRemaining / 120
-  const timeColor= timePct > 0.5 ? '#22c55e' : timePct > 0.25 ? '#f59e0b' : '#ef4444'
-  const secured  = s.items.filter(isSecured).length
-  const total    = s.items.length
+  const [phase, setPhase] = useState('intro') // intro → configure → simulate → result
+  const [waterDepth, setWaterDepth] = useState(3.0)
+  const [strapSelections, setStrapSelections] = useState({})
+  const [selectedObjectId, setSelectedObjectId] = useState(null)
+  const [simResults, setSimResults] = useState(null)
+  const [simScore, setSimScore] = useState(null)
 
-  const availActions = selected
-    ? Object.entries(ACTIONS).filter(([,def]) => def.canDo(selected))
-    : []
-
-  function doAction(actionKey) {
-    dispatch({ type:'ACTION', itemId: selected.id, action: actionKey })
+  /* ── Strap selection handler ─────────────────────────────────────────── */
+  function selectStrap(objectId, strapId) {
+    setStrapSelections(prev => ({ ...prev, [objectId]: strapId }))
   }
 
-  function handleSimulate() {
-    const result = simulate(s.items)
-    dispatch({ type:'SIMULATE' })
-    gd({ type:'RECORD_SCORE', payload:{ key:'flood-3', result:{ score: Math.min(100,Math.max(0,result.score)), passed: result.passed } } })
+  /* ── Run simulation ──────────────────────────────────────────────────── */
+  function runSimulation() {
+    setPhase('simulate')
+
+    const results = {}
+    let correctCount = 0
+
+    for (const obj of YARD_OBJECTS) {
+      const calc = calcBuoyancy(obj, waterDepth)
+      const strapId = strapSelections[obj.id]
+      const strapDef = STRAP_OPTIONS.find(s => s.id === strapId)
+      const strapStrength = strapDef ? strapDef.rating : 0
+
+      const needsHolding = calc.netLiftForce > 0
+      const snapped = needsHolding && calc.netLiftForce > strapStrength
+      const held = !snapped
+      const noStrap = !strapId
+
+      if (held && !noStrap) correctCount++
+      if (!needsHolding) correctCount++ // object stays on ground anyway, but strap choice doesn't matter
+
+      results[obj.id] = {
+        ...calc,
+        strapId,
+        strapName: strapDef?.name || 'None',
+        strapStrength,
+        snapped,
+        held,
+        noStrap,
+        needsHolding,
+      }
+    }
+
+    setSimResults(results)
+
+    // Delay transition to result phase for dramatic effect
+    setTimeout(() => {
+      setPhase('result')
+      const totalObjects = YARD_OBJECTS.length
+      // Score: how many objects were properly secured
+      const snappedCount = Object.values(results).filter(r => r.snapped).length
+      const noStrapFloaters = Object.values(results).filter(r => r.noStrap && r.needsHolding).length
+      const failures = snappedCount + noStrapFloaters
+      const rawScore = Math.round(((totalObjects - failures) / totalObjects) * 100)
+      const passed = failures === 0
+      const score = Math.max(0, Math.min(100, rawScore))
+
+      setSimScore({ score, passed, failures, snappedCount, noStrapFloaters })
+      gd({ type: 'RECORD_SCORE', payload: { key: 'flood-3', result: { score, passed } } })
+    }, 2000)
   }
 
-  // ── INTRO ──────────────────────────────────────────────────────────────────
-  if (s.phase === 'intro') return null   // skip to setup directly
+  /* ── Reset ───────────────────────────────────────────────────────────── */
+  function resetModule() {
+    setPhase('intro')
+    setWaterDepth(3.0)
+    setStrapSelections({})
+    setSelectedObjectId(null)
+    setSimResults(null)
+    setSimScore(null)
+  }
 
-  // ── RESULT SCREEN ──────────────────────────────────────────────────────────
-  if (s.phase === 'result' && s.simResult) {
-    const r = s.simResult
+  /* ── Live calculations for display ─────────────────────────────────── */
+  const liveCalcs = useMemo(() => {
+    const out = {}
+    for (const obj of YARD_OBJECTS) {
+      out[obj.id] = calcBuoyancy(obj, waterDepth)
+    }
+    return out
+  }, [waterDepth])
+
+  const allStrapped = YARD_OBJECTS.every(obj => strapSelections[obj.id])
+  const selectedObj = YARD_OBJECTS.find(o => o.id === selectedObjectId)
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     INTRO PHASE
+     ═══════════════════════════════════════════════════════════════════════ */
+  if (phase === 'intro') {
     return (
-      <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <div style={{ position: 'fixed', inset: 0, background: '#070a0f', fontFamily: MONO,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
         <style>{`
-          @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
-          @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.25}}
-          @keyframes slide-up{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-          @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
+          @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+          @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+          @keyframes pulse-glow{0%,100%{box-shadow:0 0 20px rgba(239,68,68,0.2)}50%{box-shadow:0 0 40px rgba(239,68,68,0.5)}}
         `}</style>
 
-        {/* Header */}
-        <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 20px', gap:16, flexShrink:0 }}>
-          <div style={{ color: r.passed ? '#22c55e' : '#ef4444', fontSize:13, fontWeight:700, letterSpacing:2 }}>
-            AFTER ACTION REPORT — {r.passed ? 'PROPERTY DEFENDED' : `${r.criticals} CRITICAL · ${r.fails} FAIL`}
+        <BlueprintGrid />
+
+        <div style={{ position: 'relative', zIndex: 1, maxWidth: 640, padding: '0 24px',
+          animation: 'fadeIn 0.8s ease-out' }}>
+
+          <div style={{ color: '#0ea5e9', fontSize: 10, letterSpacing: 4, marginBottom: 12,
+            textAlign: 'center' }}>
+            MODULE 3 — FLOOD PHYSICS
           </div>
-          <div style={{ marginLeft:'auto', display:'flex', gap:12 }}>
-            <button onClick={() => dispatch({ type:'RESET' })} style={{ padding:'7px 20px', borderRadius:3, fontFamily:MONO, fontSize:12, fontWeight:700, letterSpacing:2, cursor:'pointer', border:'1px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444' }}>↺ RETRY</button>
-            <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ padding:'7px 16px', borderRadius:3, fontFamily:MONO, fontSize:11, cursor:'pointer', border:'1px solid #1e2d3a', background:'transparent', color:'#334155' }}>← MODULES</button>
+
+          <h1 style={{ color: '#f0f4f8', fontSize: 32, fontWeight: 900, textAlign: 'center',
+            margin: '0 0 8px', lineHeight: 1.2, letterSpacing: 1 }}>
+            Yard Lockdown
+          </h1>
+          <div style={{ color: '#60a5fa', fontSize: 14, textAlign: 'center', marginBottom: 28,
+            letterSpacing: 1 }}>
+            Buoyancy & Tensile Strength
+          </div>
+
+          {/* Professor's Hook */}
+          <div style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.3)',
+            borderLeft: '4px solid #ef4444', borderRadius: 6, padding: '18px 20px',
+            marginBottom: 24 }}>
+            <div style={{ color: '#ef4444', fontSize: 10, fontWeight: 700, letterSpacing: 2,
+              marginBottom: 10 }}>
+              PROFESSOR'S HOOK
+            </div>
+            <div style={{ color: '#c8d6e5', fontSize: 13, lineHeight: 1.8 }}>
+              A full 500-gallon propane tank weighs <b style={{ color: '#f59e0b' }}>1,800 lbs</b>.
+              Sounds safe, right? But an <b style={{ color: '#ef4444' }}>EMPTY</b> one weighs only
+              200 lbs while displacing the same 67 ft{'\u00B3'} of water —
+              creating <b style={{ color: '#ef4444' }}>4,000+ lbs of upward lift</b>.
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.7, marginTop: 10 }}>
+              If your tie-down strap can only handle 500 lbs, it <b style={{ color: '#ef4444' }}>
+              snaps</b>. The tank becomes a <b style={{ color: '#ef4444' }}>floating bomb</b> that
+              ruptures your gas main.
+            </div>
+          </div>
+
+          {/* Key physics */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 28 }}>
+            {[
+              ['Buoyancy Force', 'submergedVolume x 62.4 lb/ft\u00B3', '#3b82f6'],
+              ['Net Lift', 'buoyancy - objectWeight', '#f59e0b'],
+              ['Strap Test', 'if netLift > strapRating = SNAP', '#ef4444'],
+              ['Your Job', 'Match straps to forces', '#22c55e'],
+            ].map(([title, desc, clr]) => (
+              <div key={title} style={{ background: '#0c1018', border: `1px solid ${clr}33`,
+                borderRadius: 6, padding: '12px 14px' }}>
+                <div style={{ color: clr, fontSize: 10, fontWeight: 700, marginBottom: 4 }}>{title}</div>
+                <div style={{ color: '#647a8e', fontSize: 10, fontFamily: MONO }}>{desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign: 'center' }}>
+            <button onClick={() => setPhase('configure')}
+              style={{ padding: '14px 48px', borderRadius: 6, fontFamily: MONO, fontSize: 14,
+                fontWeight: 700, letterSpacing: 3, cursor: 'pointer',
+                border: '2px solid #0ea5e9', background: 'rgba(14,165,233,0.1)',
+                color: '#0ea5e9', transition: 'all 0.2s',
+                animation: 'pulse-glow 2s ease-in-out infinite' }}>
+              BEGIN LOCKDOWN
+            </button>
           </div>
         </div>
+      </div>
+    )
+  }
 
-        <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
-          {/* Map with flood overlay */}
-          <div style={{ flex:1, padding:12 }}>
-            <YardMap items={s.items} selectedId={null} onSelect={()=>{}} simResult={r}/>
+  /* ═══════════════════════════════════════════════════════════════════════
+     CONFIGURE / SIMULATE / RESULT PHASES
+     ═══════════════════════════════════════════════════════════════════════ */
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: '#070a0f', fontFamily: MONO,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <style>{`
+        @keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+        @keyframes slide-up{from{transform:translateY(15px);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes pulse-glow{0%,100%{box-shadow:0 0 20px rgba(239,68,68,0.2)}50%{box-shadow:0 0 40px rgba(239,68,68,0.5)}}
+        @keyframes snap-flash{0%{background:rgba(239,68,68,0.3)}100%{background:transparent}}
+        input[type=range]{-webkit-appearance:none;appearance:none;background:transparent}
+        input[type=range]::-webkit-slider-runnable-track{height:8px;background:#141a24;border-radius:4px;border:1px solid #1a2535}
+        input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;height:20px;width:20px;border-radius:50%;background:#0ea5e9;border:2px solid #fff;margin-top:-7px;cursor:pointer}
+      `}</style>
+
+      {/* ── TOP BAR ── */}
+      <div style={{ height: 50, background: '#080c12', borderBottom: '1px solid #141a24',
+        display: 'flex', alignItems: 'center', padding: '0 16px', gap: 16, flexShrink: 0 }}>
+        <button onClick={() => gd({ type: 'BACK_TO_MODULES' })}
+          style={{ background: 'none', border: 'none', color: '#334155', fontFamily: MONO,
+            fontSize: 11, cursor: 'pointer', padding: '4px 8px' }}>
+          \u2190 EXIT
+        </button>
+        <div style={{ color: '#0ea5e9', fontSize: 12, fontWeight: 700, letterSpacing: 2 }}>
+          M3 \u00B7 YARD LOCKDOWN
+        </div>
+        <div style={{ fontSize: 9, color: '#334155', letterSpacing: 1 }}>
+          BUOYANCY & TENSILE STRENGTH SIMULATOR
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ color: '#334155', fontSize: 9, letterSpacing: 1 }}>PHASE:</span>
+            <span style={{ color: phase === 'result' ? '#22c55e' : phase === 'simulate' ? '#f59e0b' : '#0ea5e9',
+              fontSize: 11, fontWeight: 700, letterSpacing: 2 }}>
+              {phase.toUpperCase()}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ color: '#334155', fontSize: 9 }}>STRAPPED:</span>
+            <span style={{ color: allStrapped ? '#22c55e' : '#f59e0b', fontSize: 12, fontWeight: 700 }}>
+              {Object.keys(strapSelections).length}/{YARD_OBJECTS.length}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── MAIN AREA ── */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+
+        {/* LEFT: Drone Map + Water Depth */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 12, minWidth: 0 }}>
+          {/* Map */}
+          <div style={{ flex: 1, position: 'relative', minHeight: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center' }}>
+            <YardMapSVG
+              objects={YARD_OBJECTS}
+              strapSelections={strapSelections}
+              waterDepth={waterDepth}
+              phase={phase}
+              simResults={simResults}
+            />
           </div>
 
-          {/* Findings panel */}
-          <div style={{ width:380, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-            {/* Score */}
-            <div style={{ padding:'16px 18px', borderBottom:'1px solid #111', textAlign:'center' }}>
-              <div style={{ fontSize:9, color:'#2a4055', letterSpacing:3, marginBottom:6 }}>SIMULATION SCORE</div>
-              <div style={{ fontSize:48, fontWeight:900, color: r.passed ? '#22c55e' : r.score > 50 ? '#f59e0b' : '#ef4444' }}>
-                {r.score}%
+          {/* Water Depth Control */}
+          <WaterDepthControl
+            waterDepth={waterDepth}
+            onChange={setWaterDepth}
+            disabled={phase === 'simulate' || phase === 'result'}
+          />
+        </div>
+
+        {/* RIGHT: Object Panel */}
+        <div style={{ width: 380, background: '#080c12', borderLeft: '1px solid #141a24',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+          {/* ── RESULT SUMMARY (if in result phase) ── */}
+          {phase === 'result' && simScore && (
+            <div style={{ padding: '16px 18px', borderBottom: '1px solid #141a24',
+              background: simScore.passed ? 'rgba(34,197,94,0.04)' : 'rgba(239,68,68,0.04)',
+              flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontSize: 9, color: '#334155', letterSpacing: 3, marginBottom: 4 }}>
+                    SIMULATION RESULT
+                  </div>
+                  <div style={{ fontSize: 36, fontWeight: 900,
+                    color: simScore.passed ? '#22c55e' : simScore.score >= 50 ? '#f59e0b' : '#ef4444' }}>
+                    {simScore.score}%
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ color: simScore.passed ? '#22c55e' : '#ef4444', fontSize: 12,
+                    fontWeight: 700, letterSpacing: 2 }}>
+                    {simScore.passed ? 'ALL SECURED' : `${simScore.failures} BROKE FREE`}
+                  </div>
+                  <div style={{ color: '#647a8e', fontSize: 10, marginTop: 4 }}>
+                    Water depth: {waterDepth.toFixed(1)} ft
+                  </div>
+                </div>
               </div>
-              <div style={{ fontSize:11, color:'#334155', marginTop:4 }}>
-                Financial loss: <span style={{ color:'#ef4444', fontWeight:700 }}>${r.totalLoss.toLocaleString()}</span>
-              </div>
-              <div style={{ fontSize:10, color:'#1e3050', marginTop:2 }}>
-                Flood depth: <span style={{ color: r.drainClogged ? '#ef4444' : '#3b82f6', fontWeight:700 }}>{r.maxDepth}ft</span>
-                {r.drainClogged && <span style={{ color:'#ef4444' }}> (drains clogged)</span>}
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button onClick={resetModule}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 4, fontFamily: MONO,
+                    fontSize: 11, fontWeight: 700, letterSpacing: 1, cursor: 'pointer',
+                    border: '1px solid #ef4444', background: 'rgba(239,68,68,0.08)',
+                    color: '#ef4444' }}>
+                  \u21BA RETRY
+                </button>
+                <button onClick={() => gd({ type: 'BACK_TO_MODULES' })}
+                  style={{ flex: 1, padding: '8px 0', borderRadius: 4, fontFamily: MONO,
+                    fontSize: 11, fontWeight: 700, letterSpacing: 1, cursor: 'pointer',
+                    border: '1px solid #334155', background: 'transparent', color: '#647a8e' }}>
+                  \u2190 MODULES
+                </button>
               </div>
             </div>
+          )}
 
-            {/* Findings list */}
-            <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>
-              <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>FINDINGS</div>
-              {r.findings.map((f, i) => {
-                const bc = f.type==='CRITICAL' ? '#ef4444' : f.type==='FAIL' ? '#f97316' : f.type==='CASCADE' ? '#fbbf24' : '#22c55e'
+          {/* ── SELECTED OBJECT DETAIL ── */}
+          {selectedObj && phase === 'configure' && (
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid #141a24', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontSize: 28 }}>{selectedObj.emoji}</span>
+                <div>
+                  <div style={{ color: selectedObj.color, fontSize: 13, fontWeight: 700 }}>
+                    {selectedObj.name}
+                  </div>
+                  <div style={{ color: '#647a8e', fontSize: 9 }}>Click to select strap below</div>
+                </div>
+              </div>
+
+              {/* Properties */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6,
+                marginBottom: 10 }}>
+                {[
+                  ['MASS', `${selectedObj.mass} lb`, '#94a3b8'],
+                  ['VOLUME', `${selectedObj.volume} ft\u00B3`, '#60a5fa'],
+                  ['HEIGHT', `${selectedObj.height} ft`, '#f59e0b'],
+                ].map(([k, v, c]) => (
+                  <div key={k} style={{ background: '#0a0f14', border: '1px solid #141a24',
+                    borderRadius: 4, padding: '6px 8px', textAlign: 'center' }}>
+                    <div style={{ color: '#334155', fontSize: 7, letterSpacing: 1 }}>{k}</div>
+                    <div style={{ color: c, fontSize: 12, fontWeight: 700, marginTop: 2 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Live physics */}
+              {(() => {
+                const calc = liveCalcs[selectedObj.id]
+                const strapId = strapSelections[selectedObj.id]
+                const strapDef = STRAP_OPTIONS.find(s => s.id === strapId)
+                const danger = calc.netLiftForce > 0 && strapDef && calc.netLiftForce > strapDef.rating
+
                 return (
-                  <div key={i} style={{ background:'#0d0d0d', border:`1px solid ${bc}33`, borderLeft:`3px solid ${bc}`, borderRadius:4, padding:'10px 12px',
-                                        animation:`slide-up 0.3s ease-out ${i*0.06}s both` }}>
-                    <div style={{ color:bc, fontSize:11, fontWeight:700, marginBottom:5 }}>{f.title}</div>
-                    <div style={{ color:'#647a8e', fontSize:10, lineHeight:1.65 }}>{f.msg}</div>
-                    {f.loss > 0 && (
-                      <div style={{ color:'#ef4444', fontSize:10, marginTop:5, fontWeight:700 }}>
-                        💸 LOSS: ${f.loss.toLocaleString()}
+                  <div style={{ background: '#0a0f14', border: `1px solid ${danger ? '#ef444455' : '#141a24'}`,
+                    borderRadius: 6, padding: '10px 12px', marginBottom: 8 }}>
+                    <div style={{ color: '#0ea5e9', fontSize: 8, letterSpacing: 2, marginBottom: 8 }}>
+                      LIVE PHYSICS @ {waterDepth.toFixed(1)}ft DEPTH
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#647a8e', fontSize: 10 }}>Submerged Vol:</span>
+                        <span style={{ color: '#60a5fa', fontSize: 11, fontWeight: 700 }}>
+                          {calc.submergedVolume} ft{'\u00B3'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#647a8e', fontSize: 10 }}>Buoyancy Force:</span>
+                        <span style={{ color: '#f59e0b', fontSize: 11, fontWeight: 700 }}>
+                          {calc.buoyancyForce.toLocaleString()} lb
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#647a8e', fontSize: 10 }}>Object Weight:</span>
+                        <span style={{ color: '#94a3b8', fontSize: 11, fontWeight: 700 }}>
+                          -{selectedObj.mass} lb
+                        </span>
+                      </div>
+                      <div style={{ height: 1, background: '#1a2535', margin: '4px 0' }} />
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: calc.netLiftForce > 0 ? '#ef4444' : '#22c55e',
+                          fontSize: 10, fontWeight: 700 }}>Net Lift Force:</span>
+                        <span style={{ color: calc.netLiftForce > 0 ? '#ef4444' : '#22c55e',
+                          fontSize: 13, fontWeight: 900 }}>
+                          {calc.netLiftForce > 0 ? '+' : ''}{calc.netLiftForce.toLocaleString()} lb
+                        </span>
+                      </div>
+                      {strapDef && (
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                            <span style={{ color: '#647a8e', fontSize: 10 }}>Strap Rating:</span>
+                            <span style={{ color: strapDef.color, fontSize: 11, fontWeight: 700 }}>
+                              {strapDef.rating.toLocaleString()} lb
+                            </span>
+                          </div>
+                          {calc.netLiftForce > 0 && (
+                            <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4,
+                              background: danger ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.08)',
+                              border: `1px solid ${danger ? '#ef444444' : '#22c55e44'}`,
+                              textAlign: 'center' }}>
+                              <span style={{ color: danger ? '#ef4444' : '#22c55e', fontSize: 11,
+                                fontWeight: 700 }}>
+                                {danger
+                                  ? `SNAP! ${calc.netLiftForce.toLocaleString()} lb > ${strapDef.rating.toLocaleString()} lb`
+                                  : `HOLDS: ${calc.netLiftForce.toLocaleString()} lb < ${strapDef.rating.toLocaleString()} lb`}
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Strap selection for this object */}
+              <div style={{ color: '#334155', fontSize: 8, letterSpacing: 2, marginBottom: 6 }}>
+                SELECT TIE-DOWN METHOD
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {STRAP_OPTIONS.map(strap => {
+                  const isSelected = strapSelections[selectedObj.id] === strap.id
+                  return (
+                    <button key={strap.id} onClick={() => selectStrap(selectedObj.id, strap.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '8px 12px', borderRadius: 4, cursor: 'pointer',
+                        fontFamily: MONO, fontSize: 11, textAlign: 'left',
+                        background: isSelected ? `${strap.color}15` : '#0a0f14',
+                        border: `1px solid ${isSelected ? strap.color : '#1a2535'}`,
+                        color: isSelected ? strap.color : '#647a8e',
+                        transition: 'all 0.15s' }}>
+                      <span style={{ fontSize: 16 }}>{strap.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 700 }}>{strap.name}</div>
+                      </div>
+                      <div style={{ fontWeight: 900, fontSize: 12, color: isSelected ? strap.color : '#334155' }}>
+                        {strap.rating.toLocaleString()} lb
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div style={{ marginTop: 8, color: '#3a5068', fontSize: 9, lineHeight: 1.6,
+                fontStyle: 'italic' }}>
+                {selectedObj.hint}
+              </div>
+            </div>
+          )}
+
+          {/* ── OBJECT LIST ── */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px' }}>
+            <div style={{ fontSize: 8, color: '#334155', letterSpacing: 3, marginBottom: 8 }}>
+              {phase === 'result' ? 'SIMULATION RESULTS' : 'YARD OBJECTS — CLICK TO INSPECT'}
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {YARD_OBJECTS.map((obj, idx) => {
+                const calc = liveCalcs[obj.id]
+                const strapId = strapSelections[obj.id]
+                const strapDef = STRAP_OPTIONS.find(s => s.id === strapId)
+                const isSel = selectedObjectId === obj.id
+                const result = simResults?.[obj.id]
+
+                /* ── Result-phase card ── */
+                if (phase === 'result' && result) {
+                  const borderColor = result.snapped || (result.noStrap && result.needsHolding)
+                    ? '#ef4444' : '#22c55e'
+                  return (
+                    <div key={obj.id}
+                      style={{ background: '#0a0f14',
+                        border: `1px solid ${borderColor}44`,
+                        borderLeft: `3px solid ${borderColor}`,
+                        borderRadius: 5, padding: '10px 12px',
+                        animation: `slide-up 0.3s ease-out ${idx * 0.08}s both` }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <span style={{ fontSize: 20 }}>{obj.emoji}</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ color: obj.color, fontSize: 11, fontWeight: 700 }}>{obj.name}</div>
+                          <div style={{ color: '#647a8e', fontSize: 9 }}>
+                            {result.strapName} ({result.strapStrength.toLocaleString()} lb rating)
+                          </div>
+                        </div>
+                        <div style={{ padding: '3px 10px', borderRadius: 12,
+                          background: `${borderColor}18`, border: `1px solid ${borderColor}55`,
+                          color: borderColor, fontSize: 9, fontWeight: 700 }}>
+                          {result.snapped ? 'SNAPPED' : result.noStrap && result.needsHolding ? 'NO STRAP' : result.needsHolding ? 'HELD' : 'GROUNDED'}
+                        </div>
+                      </div>
+
+                      {/* Math breakdown */}
+                      <div style={{ background: '#070a0f', borderRadius: 4, padding: '8px 10px',
+                        fontSize: 9, fontFamily: MONO, lineHeight: 1.9 }}>
+                        <div style={{ color: '#647a8e' }}>
+                          submergedVol = min({obj.volume}, {obj.volume} x ({waterDepth.toFixed(1)} / {obj.height}))
+                          = <span style={{ color: '#60a5fa', fontWeight: 700 }}>{result.submergedVolume} ft{'\u00B3'}</span>
+                        </div>
+                        <div style={{ color: '#647a8e' }}>
+                          buoyancy = {result.submergedVolume} x 62.4
+                          = <span style={{ color: '#f59e0b', fontWeight: 700 }}>{result.buoyancyForce.toLocaleString()} lb</span>
+                        </div>
+                        <div style={{ color: '#647a8e' }}>
+                          netLift = {result.buoyancyForce.toLocaleString()} - {obj.mass}
+                          = <span style={{ color: result.netLiftForce > 0 ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
+                            {result.netLiftForce > 0 ? '+' : ''}{result.netLiftForce.toLocaleString()} lb
+                          </span>
+                        </div>
+                        {result.needsHolding && (
+                          <div style={{ color: result.snapped ? '#ef4444' : '#22c55e', marginTop: 4 }}>
+                            {result.netLiftForce.toLocaleString()} lb lift
+                            {result.snapped
+                              ? ` > ${result.strapStrength.toLocaleString()} lb strap = SNAP!`
+                              : ` \u2264 ${result.strapStrength.toLocaleString()} lb strap = HELD`}
+                          </div>
+                        )}
+                        {!result.needsHolding && (
+                          <div style={{ color: '#22c55e', marginTop: 4 }}>
+                            Negative net lift — object stays on ground.
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Danger narrative for empty propane */}
+                      {result.snapped && obj.id === 'propane-empty' && (
+                        <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 4,
+                          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)' }}>
+                          <div style={{ color: '#ef4444', fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
+                            FLOATING BOMB
+                          </div>
+                          <div style={{ color: '#c8d6e5', fontSize: 9, lineHeight: 1.7 }}>
+                            The empty propane tank broke free with{' '}
+                            {result.netLiftForce.toLocaleString()} lbs of upward force.
+                            It floated into the gas main line, ruptured the connection, and created
+                            an uncontrolled gas leak. One spark and the entire property explodes.
+                            Steel chain (5,000 lb) or ground anchor (10,000 lb) was required.
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                }
+
+                /* ── Configure-phase card ── */
+                return (
+                  <div key={obj.id}
+                    onClick={() => setSelectedObjectId(isSel ? null : obj.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '9px 12px', borderRadius: 5, cursor: 'pointer',
+                      background: isSel ? `${obj.color}08` : '#0a0f14',
+                      border: `1px solid ${isSel ? obj.color + '55' : '#141a24'}`,
+                      transition: 'all 0.15s' }}>
+                    <span style={{ fontSize: 22, flexShrink: 0 }}>{obj.emoji}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700,
+                        color: isSel ? obj.color : '#94a3b8',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {obj.name}
+                      </div>
+                      <div style={{ fontSize: 8, color: '#334155', marginTop: 2 }}>
+                        {obj.mass} lb | {obj.volume} ft{'\u00B3'}
+                        {calc.netLiftForce > 0
+                          ? ` | Lift: +${calc.netLiftForce.toLocaleString()} lb`
+                          : ` | Sinks`}
+                      </div>
+                    </div>
+                    {strapDef ? (
+                      <div style={{ padding: '2px 8px', borderRadius: 10,
+                        background: `${strapDef.color}18`, border: `1px solid ${strapDef.color}44`,
+                        color: strapDef.color, fontSize: 8, fontWeight: 700, flexShrink: 0 }}>
+                        {strapDef.icon} {strapDef.rating.toLocaleString()} lb
+                      </div>
+                    ) : (
+                      <div style={{ padding: '2px 8px', borderRadius: 10,
+                        background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                        color: '#ef4444', fontSize: 8, fontWeight: 700, flexShrink: 0,
+                        animation: 'blink 1.5s ease-in-out infinite' }}>
+                        NO STRAP
                       </div>
                     )}
                   </div>
@@ -488,218 +872,109 @@ export default function Module3_YardLockdown() {
               })}
             </div>
 
-            {/* Key lesson */}
-            {r.simResult?.drainClogged && !r.passed && (
-              <div style={{ padding:'12px 16px', borderTop:'1px solid #111', background:'rgba(220,38,38,0.06)' }}>
-                <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:5 }}>📋 KEY LESSON</div>
-                <div style={{ color:'#7a9ab8', fontSize:10, lineHeight:1.7 }}>
-                  <b style={{color:'#f87171'}}>FEMA Stormwater Mgmt:</b> "Remove all loose organic material from drainage paths before a flood event. Even small quantities of mulch and leaves can fully block residential storm drains within minutes, converting a manageable 3ft flood into an unmanageable 4.5ft event."
+            {/* Professor's lesson (result phase) */}
+            {phase === 'result' && simResults && (
+              <div style={{ marginTop: 16, background: 'rgba(14,165,233,0.04)',
+                border: '1px solid rgba(14,165,233,0.2)', borderRadius: 6, padding: '14px 16px' }}>
+                <div style={{ color: '#0ea5e9', fontSize: 9, letterSpacing: 2, marginBottom: 8,
+                  fontWeight: 700 }}>
+                  KEY LESSON
+                </div>
+                <div style={{ color: '#94a3b8', fontSize: 10, lineHeight: 1.8 }}>
+                  <b style={{ color: '#f59e0b' }}>Archimedes' Principle:</b> Any object submerged
+                  in fluid experiences an upward buoyant force equal to the weight of the fluid
+                  displaced. An empty propane tank displaces 67 ft{'\u00B3'} of water =
+                  <b style={{ color: '#ef4444' }}> {Math.round(67 * 62.4).toLocaleString()} lbs</b> of
+                  buoyancy. At only 200 lbs empty weight, the net upward force exceeds
+                  <b style={{ color: '#ef4444' }}> 4,000 lbs</b>.
+                </div>
+                <div style={{ color: '#647a8e', fontSize: 10, lineHeight: 1.7, marginTop: 8 }}>
+                  A 500 lb nylon strap is woefully insufficient. You need minimum steel chain
+                  (5,000 lb) or ground anchor + chain (10,000 lb) to secure objects with high
+                  volume-to-mass ratios in flood conditions.
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
-    )
-  }
 
-  // ── SETUP / PLAY ────────────────────────────────────────────────────────────
-  return (
-    <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <style>{`
-        @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
-        @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.22}}
-        @keyframes slide-up{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
-        @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
-        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-      `}</style>
+      {/* ── BOTTOM ACTION BAR ── */}
+      <div style={{ background: '#080c12', borderTop: '2px solid #141a24', padding: '10px 16px',
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 
-      {/* ── TOP BAR ── */}
-      <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 16px', gap:16, flexShrink:0 }}>
-        <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#1e3050', fontFamily:MONO, fontSize:11, cursor:'pointer' }}>← EXIT</button>
-        <div style={{ color:'#00e5ff', fontSize:12, fontWeight:700, letterSpacing:2 }}>M3 · YARD TRIAGE</div>
-        <div style={{ fontSize:9, color:'#1e3050', letterSpacing:1 }}>SPATIAL LOGISTICS SIMULATOR · 120-MIN PRE-FLOOD WINDOW</div>
-
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:20 }}>
-          {/* Time */}
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>⏰ TIME</span>
-            <div style={{ width:100, height:7, background:'#0a0a0a', border:'1px solid #141414', borderRadius:3, overflow:'hidden' }}>
-              <div style={{ height:'100%', borderRadius:3, width:`${timePct*100}%`, background:timeColor, transition:'width 0.3s,background 0.3s' }}/>
-            </div>
-            <span style={{ color:timeColor, fontFamily:MONO, fontSize:13, fontWeight:700, minWidth:42 }}>{s.timeRemaining}m</span>
-          </div>
-          {/* Budget */}
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>💰</span>
-            <span style={{ color:'#22c55e', fontFamily:MONO, fontSize:13, fontWeight:700 }}>${s.budget}</span>
-          </div>
-          {/* Progress */}
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ color:'#334155', fontSize:9 }}>SECURED:</span>
-            <span style={{ color: secured===total ? '#22c55e' : '#f59e0b', fontFamily:MONO, fontSize:12, fontWeight:700 }}>{secured}/{total}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ── MAIN: Map + Ledger ── */}
-      <div style={{ flex:1, display:'flex', minHeight:0 }}>
-
-        {/* MAP */}
-        <div style={{ flex:1, padding:10, display:'flex', alignItems:'stretch', minWidth:0 }}>
-          <YardMap items={s.items} selectedId={s.selectedId}
-                   onSelect={id => dispatch({ type:'SELECT', id })} simResult={null}/>
-        </div>
-
-        {/* LEDGER */}
-        <div style={{ width:310, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-
-          {/* Selected item detail */}
-          {selected ? (
-            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-                <span style={{ fontSize:24 }}>{selected.emoji}</span>
-                <div>
-                  <div style={{ color:selected.hc, fontSize:12, fontWeight:700 }}>{selected.name}</div>
-                  <div style={{ color:stateLabel(selected).color, fontSize:9, letterSpacing:1 }}>{stateLabel(selected).text}</div>
-                </div>
-              </div>
-              {/* Properties grid */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:5, marginBottom:8 }}>
-                {[
-                  ['WEIGHT',      `${selected.weight.toLocaleString()} lbs`],
-                  ['BUOYANCY',    `${selected.buoyancy.toLocaleString()} lbs`],
-                  ['CONTAMINANT', selected.contaminant],
-                  ['WIND DRAG',   selected.windDrag],
-                ].map(([k,v])=>(
-                  <div key={k} style={{ background:'#0d0d0d', border:'1px solid #141414', borderRadius:3, padding:'5px 8px' }}>
-                    <div style={{ color:'#2a4055', fontSize:8, letterSpacing:1 }}>{k}</div>
-                    <div style={{ color: v==='CRITICAL'?'#ef4444':v==='HIGH'?'#f97316':v==='MEDIUM'?'#f59e0b':'#22c55e',
-                                  fontSize:11, fontWeight:700, marginTop:2 }}>{v}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {/* Quick physics readout */}
+          {phase === 'configure' && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {YARD_OBJECTS.map(obj => {
+                const calc = liveCalcs[obj.id]
+                const strapId = strapSelections[obj.id]
+                const strapDef = STRAP_OPTIONS.find(s => s.id === strapId)
+                const danger = calc.netLiftForce > 0 && (!strapDef || calc.netLiftForce > strapDef.rating)
+                return (
+                  <div key={obj.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 8px',
+                      borderRadius: 4, background: danger ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.05)',
+                      border: `1px solid ${danger ? '#ef444433' : '#22c55e22'}` }}>
+                    <span style={{ fontSize: 12 }}>{obj.emoji}</span>
+                    <span style={{ fontSize: 9, color: danger ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
+                      {calc.netLiftForce > 0
+                        ? `+${calc.netLiftForce.toLocaleString()}`
+                        : calc.netLiftForce.toLocaleString()} lb
+                    </span>
+                    {strapDef && (
+                      <span style={{ fontSize: 8, color: danger ? '#ef4444' : strapDef.color }}>
+                        {danger ? '\u2716' : '\u2714'}
+                      </span>
+                    )}
                   </div>
-                ))}
-              </div>
-              <div style={{ fontSize:9.5, color:'#3a5068', lineHeight:1.65, borderTop:'1px solid #111', paddingTop:8 }}>{selected.desc}</div>
-              {/* Hazard badge */}
-              <div style={{ marginTop:8, display:'inline-block', padding:'3px 10px', borderRadius:12,
-                            background:`${selected.hc}1a`, border:`1px solid ${selected.hc}55`,
-                            color:selected.hc, fontSize:9, fontWeight:700, letterSpacing:1 }}>
-                ⚠ {selected.hazard}
-              </div>
-            </div>
-          ) : (
-            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
-              <div style={{ color:'#1e3050', fontSize:10, textAlign:'center', marginTop:8 }}>
-                Click an item on the map to see details and available actions
-              </div>
+                )
+              })}
             </div>
           )}
 
-          {/* Item list */}
-          <div style={{ flex:1, overflowY:'auto', padding:'10px 12px', display:'flex', flexDirection:'column', gap:5 }}>
-            <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>ITEM LEDGER</div>
-            {s.items.map(item => {
-              const lbl  = stateLabel(item)
-              const isSel= item.id === s.selectedId
-              return (
-                <div key={item.id} onClick={() => dispatch({ type:'SELECT', id:item.id })}
-                  style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:4, cursor:'pointer',
-                           background: isSel ? 'rgba(251,191,36,0.06)' : '#0d0d0d',
-                           border:`1px solid ${isSel ? '#fbbf2455' : '#141414'}`,
-                           transition:'all 0.15s' }}>
-                  <span style={{ fontSize:18, flexShrink:0 }}>{item.emoji}</span>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.name}</div>
-                    <div style={{ fontSize:8, color:'#1e3050', marginTop:2 }}>{item.hazard}</div>
-                  </div>
-                  <div style={{ padding:'2px 8px', borderRadius:10, background:`${lbl.color}18`,
-                                border:`1px solid ${lbl.color}44`, color:lbl.color, fontSize:8, fontWeight:700, flexShrink:0 }}>
-                    {lbl.text}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* ── ACTION DECK ── */}
-      <div style={{ background:'#080808', borderTop:'2px solid #1a2535', padding:'10px 14px', flexShrink:0 }}>
-        <div style={{ display:'flex', alignItems:'stretch', gap:10 }}>
-
-          {/* Available actions */}
-          <div style={{ flex:1, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-            {selected ? (
-              availActions.length > 0 ? (
-                availActions.map(([key, def]) => {
-                  const canAfford = s.timeRemaining >= def.timeCost && s.budget >= def.budgetCost
-                  const isHov = hovAction === key
-                  return (
-                    <div key={key} style={{ position:'relative' }}>
-                      {/* Tooltip */}
-                      {isHov && (
-                        <div style={{ position:'absolute', bottom:'100%', left:0, marginBottom:6, width:220, background:'#0d0d0d',
-                                      border:'1px solid #1a2535', borderRadius:4, padding:'8px 10px', zIndex:10,
-                                      fontSize:9, color:'#647a8e', lineHeight:1.6 }}>
-                          {def.desc}
-                        </div>
-                      )}
-                      <button
-                        onClick={() => canAfford && doAction(key)}
-                        onMouseEnter={() => setHovAction(key)}
-                        onMouseLeave={() => setHovAction(null)}
-                        disabled={!canAfford}
-                        style={{
-                          padding:'8px 14px', borderRadius:4, fontFamily:MONO, fontSize:11, fontWeight:700,
-                          letterSpacing:1, cursor: canAfford ? 'pointer' : 'not-allowed',
-                          border:`1px solid ${canAfford ? '#00e5ff44' : '#1a2535'}`,
-                          background: canAfford ? 'rgba(0,229,255,0.05)' : 'rgba(0,0,0,0.3)',
-                          color: canAfford ? '#00e5ff' : '#2a4055',
-                          opacity: canAfford ? 1 : 0.45,
-                          transition:'all 0.15s',
-                          display:'flex', alignItems:'center', gap:6,
-                        }}>
-                        <span>{def.icon}</span>
-                        <span>{def.label}</span>
-                        <span style={{ marginLeft:4, padding:'1px 6px', borderRadius:8, background:'rgba(251,191,36,0.1)',
-                                       border:'1px solid rgba(251,191,36,0.25)', color:canAfford?'#fbbf24':'#2a4055', fontSize:9 }}>
-                          ⏰{def.timeCost}m{def.budgetCost>0?` 💰$${def.budgetCost}`:''}
-                        </span>
-                      </button>
-                    </div>
-                  )
-                })
-              ) : (
-                <div style={{ color:'#22c55e', fontSize:11, fontFamily:MONO, padding:'8px 14px',
-                              border:'1px solid #22c55e33', borderRadius:4, background:'rgba(34,197,94,0.05)' }}>
-                  ✓ {selected.name} — No further actions needed
-                </div>
-              )
-            ) : (
-              <div style={{ color:'#1e3050', fontSize:10, padding:'8px 14px' }}>
-                ← Select an item on the map to see available actions
-              </div>
-            )}
-          </div>
-
-          {/* Simulate button */}
-          <button onClick={handleSimulate}
-            style={{ padding:'10px 24px', borderRadius:4, fontFamily:MONO, fontSize:13, fontWeight:700,
-                     letterSpacing:2, cursor:'pointer', flexShrink:0, alignSelf:'center',
-                     border:'2px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444',
-                     boxShadow:'0 0 16px rgba(239,68,68,0.2)' }}>
-            ▶ SIMULATE LANDFALL
-          </button>
+          {phase === 'simulate' && (
+            <div style={{ color: '#f59e0b', fontSize: 12, fontWeight: 700, letterSpacing: 2,
+              animation: 'blink 0.8s ease-in-out infinite' }}>
+              SIMULATING FLOOD @ {waterDepth.toFixed(1)} ft ...
+            </div>
+          )}
         </div>
 
-        {/* Time used bar */}
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
-          <span style={{ fontSize:8, color:'#1e3050', letterSpacing:1 }}>TIME USED</span>
-          <div style={{ flex:1, height:4, background:'#0a0a0a', border:'1px solid #141414', borderRadius:2, overflow:'hidden' }}>
-            <div style={{ height:'100%', borderRadius:2, width:`${(1-timePct)*100}%`, background:timeColor, transition:'width 0.3s' }}/>
-          </div>
-          <span style={{ color:'#2a4055', fontSize:8 }}>{120-s.timeRemaining}m used</span>
-          <span style={{ color:timeColor, fontSize:8, fontWeight:700 }}>{s.timeRemaining}m remaining</span>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {phase === 'configure' && (
+            <button onClick={runSimulation}
+              disabled={!allStrapped}
+              style={{ padding: '10px 28px', borderRadius: 5, fontFamily: MONO, fontSize: 13,
+                fontWeight: 700, letterSpacing: 2, cursor: allStrapped ? 'pointer' : 'not-allowed',
+                border: `2px solid ${allStrapped ? '#ef4444' : '#334155'}`,
+                background: allStrapped ? 'rgba(239,68,68,0.08)' : 'transparent',
+                color: allStrapped ? '#ef4444' : '#334155',
+                opacity: allStrapped ? 1 : 0.5,
+                animation: allStrapped ? 'pulse-glow 2s ease-in-out infinite' : 'none',
+                transition: 'all 0.3s' }}>
+              \u25B6 TEST FLOOD
+            </button>
+          )}
+
+          {phase === 'result' && (
+            <>
+              <button onClick={resetModule}
+                style={{ padding: '10px 20px', borderRadius: 5, fontFamily: MONO, fontSize: 12,
+                  fontWeight: 700, letterSpacing: 1, cursor: 'pointer',
+                  border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.08)',
+                  color: '#f59e0b' }}>
+                \u21BA TRY AGAIN
+              </button>
+              <button onClick={() => gd({ type: 'BACK_TO_MODULES' })}
+                style={{ padding: '10px 20px', borderRadius: 5, fontFamily: MONO, fontSize: 12,
+                  fontWeight: 700, letterSpacing: 1, cursor: 'pointer',
+                  border: '1px solid #334155', background: 'transparent', color: '#647a8e' }}>
+                \u2190 MODULES
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

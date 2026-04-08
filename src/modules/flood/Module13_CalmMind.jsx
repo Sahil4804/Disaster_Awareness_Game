@@ -161,9 +161,9 @@ const DIALOGUE_ROUNDS = [
   },
 ]
 
-const PANIC_START = 70
-const PANIC_FAIL = 100
-const PANIC_WIN = 30
+const PANIC_START = 145   // Starting BPM (elevated heart rate)
+const PANIC_FAIL = 180    // BPM threshold — cardiac danger
+const PANIC_WIN = 95      // Below 100 BPM = calm
 
 export default function Module13_CalmMind() {
   const { dispatch } = useGame()
@@ -178,7 +178,7 @@ export default function Module13_CalmMind() {
     // Prevent clicks while feedback is showing
     if (feedback) return
 
-    const newPanic = Math.max(0, Math.min(100, panic + option.panicChange))
+    const newPanic = Math.max(60, Math.min(PANIC_FAIL, panic + option.panicChange))
     setPanic(newPanic)
     if (option.type === 'calm') setCalmCount(c => c + 1)
 
@@ -195,15 +195,16 @@ export default function Module13_CalmMind() {
         setPhase('result')
         dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-13', result: r } })
       } else if (newPanic <= PANIC_WIN) {
-        const score = Math.round(((PANIC_START - newPanic) / PANIC_START) * 100)
+        const score = Math.round(((PANIC_START - newPanic) / (PANIC_START - 60)) * 100)
         const r = { score: Math.max(score, 70), passed: true, reason: 'calm' }
         setResult(r)
         setPhase('result')
         dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-13', result: r } })
       } else if (round >= DIALOGUE_ROUNDS.length - 1) {
-        // Out of rounds — score based on final panic
-        const score = newPanic <= 50 ? Math.round(((100 - newPanic) / 100) * 100) : 30
-        const passed = newPanic <= 50
+        // Out of rounds — score based on final panic (below 120 BPM is manageable)
+        const midpoint = Math.round((PANIC_WIN + PANIC_FAIL) / 2)
+        const score = newPanic <= midpoint ? Math.round(((PANIC_FAIL - newPanic) / (PANIC_FAIL - 60)) * 100) : 30
+        const passed = newPanic <= midpoint
         const r = { score, passed, reason: passed ? 'manageable' : 'too_panicked' }
         setResult(r)
         setPhase('result')
@@ -239,8 +240,9 @@ export default function Module13_CalmMind() {
   // Handle the out-of-rounds edge case in useEffect (NOT during render)
   useEffect(() => {
     if (phase !== 'play' || currentDialogue !== null || result !== null) return
-    const score = panic <= 50 ? Math.round(((100 - panic) / 100) * 100) : 30
-    const passed = panic <= 50
+    const midpoint = Math.round((PANIC_WIN + PANIC_FAIL) / 2)
+    const score = panic <= midpoint ? Math.round(((PANIC_FAIL - panic) / (PANIC_FAIL - 60)) * 100) : 30
+    const passed = panic <= midpoint
     const r = { score, passed, reason: passed ? 'manageable' : 'too_panicked' }
     setResult(r)
     setPhase('result')
@@ -261,13 +263,13 @@ export default function Module13_CalmMind() {
           </p>
           <div style={{ background: '#1e293b', padding: 16, borderRadius: 8, margin: '12px 0' }}>
             <p style={{ ...styles.text, color: '#fbbf24', margin: 0 }}>
-              <strong>PANIC METER</strong> starts at 70%.
+              <strong>PANIC BPM</strong> starts at {PANIC_START} BPM (elevated heart rate).
             </p>
             <p style={{ ...styles.text, color: '#4ade80', margin: '4px 0' }}>
-              Get it BELOW 30% to succeed.
+              Get it BELOW {PANIC_WIN} BPM to succeed.
             </p>
             <p style={{ ...styles.text, color: '#f87171', margin: '4px 0' }}>
-              If it hits 100%, they run into danger.
+              If it hits {PANIC_FAIL} BPM, they run into danger.
             </p>
           </div>
           <p style={{ ...styles.text, fontSize: 13, color: '#94a3b8' }}>
@@ -326,7 +328,7 @@ export default function Module13_CalmMind() {
   // Guard: if round is out of bounds, useEffect above handles transition
   if (!currentDialogue) return null
 
-  const panicColor = panic >= 80 ? '#ef4444' : panic >= 50 ? '#f59e0b' : '#22c55e'
+  const panicColor = panic >= 160 ? '#ef4444' : panic >= 120 ? '#f59e0b' : '#22c55e'
 
   return (
     <div style={styles.container}>
@@ -334,30 +336,30 @@ export default function Module13_CalmMind() {
       <div style={styles.meterContainer}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ color: '#f1f5f9', fontWeight: 'bold', fontSize: 14 }}>
-            😰 PANIC LEVEL
+            💓 PANIC BPM
           </span>
           <span style={{ color: panicColor, fontWeight: 'bold', fontSize: 14 }}>
-            {panic}%
+            {panic} BPM
           </span>
         </div>
         <div style={styles.meterTrack}>
           <div style={{
             height: '100%',
-            width: `${panic}%`,
-            background: panic >= 80
+            width: `${Math.min(100, Math.max(0, ((panic - 60) / (PANIC_FAIL - 60)) * 100))}%`,
+            background: panic >= 160
               ? 'linear-gradient(90deg, #ef4444, #dc2626)'
-              : panic >= 50
+              : panic >= 120
                 ? 'linear-gradient(90deg, #f59e0b, #d97706)'
                 : 'linear-gradient(90deg, #22c55e, #16a34a)',
             borderRadius: 8,
             transition: 'width 0.5s ease, background 0.5s ease',
           }} />
           {/* Threshold markers */}
-          <div style={{ position: 'absolute', left: '30%', top: -16, fontSize: 10, color: '#4ade80' }}>
-            ✅ 30%
+          <div style={{ position: 'absolute', left: `${((PANIC_WIN - 60) / (PANIC_FAIL - 60)) * 100}%`, top: -16, fontSize: 10, color: '#4ade80' }}>
+            ✅ {PANIC_WIN}
           </div>
-          <div style={{ position: 'absolute', left: '98%', top: -16, fontSize: 10, color: '#f87171' }}>
-            ☠️
+          <div style={{ position: 'absolute', left: '96%', top: -16, fontSize: 10, color: '#f87171' }}>
+            ☠️ {PANIC_FAIL}
           </div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
