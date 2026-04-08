@@ -1,607 +1,707 @@
-import { useState, useEffect, useCallback } from 'react'
+/**
+ * Module 3 — Yard Triage: Spatial Logistics & Cascading Failure Simulator
+ * Aesthetic : Tactical Command Center — #0a0a0a, cyan/amber, JetBrains Mono
+ * Mechanics : useReducer · 120-minute time budget · physics cascade simulation
+ * Reference : FEMA P-348, NOAA Storm Surge, EPA Hazmat in Flood Guidelines
+ */
+import { useReducer, useState } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const TIMER_SECONDS = 90
+const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
 
-const YARD_ITEMS = [
+// ─── Item catalogue ───────────────────────────────────────────────────────────
+const ITEMS_INIT = [
   {
-    id: 'propane',
-    name: 'Propane Tank',
-    emoji: '🔴',
-    correctAction: 'anchor',
-    position: { top: '15%', left: '10%' },
-    feedback: {
-      anchor: '✅ Correct! Propane tanks must be anchored with chains to prevent them from floating away, leaking, and potentially exploding.',
-      moveInside: '❌ Propane tanks should NEVER be moved inside — a leak indoors is deadly. Anchor them with chains outside.',
-      tieDown: '❌ Rope or tie-downs aren\'t strong enough. Propane tanks need heavy-duty chains bolted to a concrete pad.',
-      flipOver: '❌ Propane tanks should never be flipped — they need to stay upright to prevent valve damage and leaks. Anchor them.',
-    },
+    id:'propane', emoji:'🛢️', name:'500-Gal Propane Tank', zone:'yard', state:'unsecured',
+    hazard:'Explosive / Buoyant', hc:'#ef4444',
+    weight:2365, buoyancy:4212, contaminant:'HIGH', windDrag:'LOW',
+    mapX:110, mapY:330,
+    desc:'Full tank. 4,212 lbs upward buoyancy force at 3ft flood. Floats, snaps the gas line, then ruptures. BLAST RADIUS: 50 m. (Source: NFPA 58)',
   },
   {
-    id: 'table',
-    name: 'Patio Table',
-    emoji: '🪑',
-    correctAction: 'moveInside',
-    position: { top: '25%', left: '55%' },
-    feedback: {
-      anchor: '❌ Tables are light enough to move. Anchoring wastes time when you can just bring it inside where it\'s completely safe.',
-      moveInside: '✅ Correct! Patio furniture becomes a battering ram in floodwaters. Moving it inside eliminates the threat entirely.',
-      tieDown: '❌ Tie-downs aren\'t reliable in flood surge. The table can still break free and smash through windows.',
-      flipOver: '❌ A flipped table still floats and becomes debris. Just bring it inside.',
-    },
+    id:'furniture', emoji:'🪑', name:'Resin Patio Set', zone:'yard', state:'unsecured',
+    hazard:'Wind Projectile', hc:'#f97316',
+    weight:185, buoyancy:900, contaminant:'LOW', windDrag:'HIGH',
+    mapX:230, mapY:300,
+    desc:'185 lbs, very high wind drag surface area. At 80 mph becomes a 185-lb shrapnel mass. Can shatter windows and breach walls. (Source: FEMA P-361)',
   },
   {
-    id: 'trashcans',
-    name: 'Trash Cans',
-    emoji: '🗑️',
-    correctAction: 'moveInside',
-    position: { top: '50%', left: '8%' },
-    feedback: {
-      anchor: '❌ Trash cans are hollow and buoyant — they\'ll float even when anchored if water is high enough. Move them inside.',
-      moveInside: '✅ Correct! Empty trash cans are extremely buoyant and become dangerous projectiles. Bring them into the garage.',
-      tieDown: '❌ Tying down hollow containers doesn\'t work — they fill with water, get heavy, and rip free.',
-      flipOver: '❌ Flipped trash cans still roll and float. Bring them inside where they can\'t become projectiles.',
-    },
+    id:'fertilizer', emoji:'🧴', name:'Lawn Chemicals (12 gal)', zone:'yard', state:'unsecured',
+    hazard:'Toxic Contamination', hc:'#eab308',
+    weight:80, buoyancy:60, contaminant:'CRITICAL', windDrag:'LOW',
+    mapX:160, mapY:390,
+    desc:'Nitrogen fertilizer + herbicides. Dissolves into floodwater, creates toxic nitrate soup. Cannot be made safe by boiling. EPA Superfund risk. (Source: EPA 832-R-06-005)',
   },
   {
-    id: 'tools',
-    name: 'Garden Tools',
-    emoji: '🔧',
-    correctAction: 'moveInside',
-    position: { top: '70%', left: '30%' },
-    feedback: {
-      anchor: '❌ Small loose items should just be brought inside. Anchoring each tool wastes precious time.',
-      moveInside: '✅ Correct! Rakes, shovels, and shears become dangerous debris in moving water. Bring them all into the garage.',
-      tieDown: '❌ You can\'t effectively tie down individual garden tools. Just bring them inside — it\'s faster and safer.',
-      flipOver: '❌ You can\'t flip garden tools. Just bring them inside — it\'s the fastest option.',
-    },
+    id:'mower', emoji:'🚜', name:'Riding Mower', zone:'yard', state:'unsecured',
+    hazard:'Mechanical / Oil', hc:'#f59e0b',
+    weight:450, buoyancy:1625, contaminant:'MEDIUM', windDrag:'LOW',
+    mapX:340, mapY:365,
+    desc:'Engine oil + fuel contaminate floodwater. Electrical systems destroyed at 12 inches of submersion. Replacement cost: $2,000+. (Source: FEMA Individual Assistance)',
   },
   {
-    id: 'bicycle',
-    name: 'Bicycle',
-    emoji: '🚲',
-    correctAction: 'moveInside',
-    position: { top: '40%', left: '75%' },
-    feedback: {
-      anchor: '❌ A bicycle is easy to move. Don\'t waste time anchoring when you can just carry it inside.',
-      moveInside: '✅ Correct! A bicycle tumbling in floodwater can break windows and injure people. It\'s light — bring it in.',
-      tieDown: '❌ Tying a bike to a pole still lets it swing and cause damage. Just bring it inside.',
-      flipOver: '❌ Flipping a bicycle doesn\'t secure it. It\'ll still wash away. Bring it inside.',
-    },
+    id:'debris', emoji:'🍂', name:'Loose Mulch & Leaves', zone:'yard', state:'unsecured',
+    hazard:'CASCADE — Drain Clog', hc:'#dc2626',
+    weight:30, buoyancy:10, contaminant:'LOW', windDrag:'HIGH',
+    mapX:290, mapY:425,
+    desc:'⚠ CASCADING HAZARD: Clogs storm drains within minutes. Raises local flood depth 3.0 ft → 4.5 ft, OVERRIDING all 2ft block elevations. (Source: FEMA Stormwater Mgmt)',
   },
   {
-    id: 'bbq',
-    name: 'BBQ Grill',
-    emoji: '🔥',
-    correctAction: 'anchor',
-    position: { top: '15%', left: '38%' },
-    feedback: {
-      anchor: '✅ Correct! Heavy grills with propane attachments should be anchored to prevent floating and gas line damage.',
-      moveInside: '❌ BBQ grills with propane lines should NOT be brought inside — gas leaks in enclosed spaces are explosive.',
-      tieDown: '❌ Tie-downs aren\'t strong enough for a heavy grill in flood surge. Use chains and anchor bolts.',
-      flipOver: '❌ Flipping a BBQ grill damages it and doesn\'t prevent floating. Anchor it with chains.',
-    },
-  },
-  {
-    id: 'plants',
-    name: 'Potted Plants',
-    emoji: '🪴',
-    correctAction: 'moveInside',
-    position: { top: '60%', left: '60%' },
-    feedback: {
-      anchor: '❌ Heavy pots can crack when anchored improperly. Just move lightweight pots inside.',
-      moveInside: '✅ Correct! Potted plants become heavy projectiles when waterlogged. Move them into the garage or a safe room.',
-      tieDown: '❌ Pots are round and slip out of tie-downs. Save time and just bring them inside.',
-      flipOver: '❌ Flipping potted plants dumps the soil and kills the plant. Just bring them inside.',
-    },
-  },
-  {
-    id: 'trampoline',
-    name: 'Trampoline',
-    emoji: '⭕',
-    correctAction: 'anchor',
-    position: { top: '75%', left: '70%' },
-    feedback: {
-      anchor: '✅ Correct! Trampolines are massive wind/water sails. Use heavy-duty anchor stakes or straps into the ground — they can\'t be moved inside.',
-      moveInside: '❌ Trampolines are too large to move inside. You must anchor them with ground stakes or heavy-duty straps.',
-      tieDown: '❌ Regular tie-downs aren\'t enough for something this big. You need ground anchor stakes rated for wind/water force.',
-      flipOver: '❌ You can\'t effectively flip a trampoline, and it wouldn\'t help. Anchor it with ground stakes.',
-    },
-  },
-  {
-    id: 'kayak',
-    name: 'Kayak',
-    emoji: '🛶',
-    correctAction: 'anchor',
-    position: { top: '30%', left: '25%' },
-    feedback: {
-      anchor: '✅ Correct! Kayaks float and become dangerous battering rams. Anchor them to a fixed structure with heavy straps.',
-      moveInside: '❌ Kayaks are too large for most garages. Anchor them to a permanent structure outside.',
-      tieDown: '❌ Rope alone won\'t hold a buoyant kayak in flood surge. Use chains or heavy straps anchored to concrete.',
-      flipOver: '❌ Flipping a kayak won\'t stop it from floating away. It needs to be firmly anchored.',
-    },
-  },
-  {
-    id: 'umbrella_stand',
-    name: 'Patio Umbrella',
-    emoji: '⛱️',
-    correctAction: 'moveInside',
-    position: { top: '55%', left: '45%' },
-    feedback: {
-      anchor: '❌ Patio umbrellas act as sails in wind and are too lightweight to anchor effectively. Bring it inside.',
-      moveInside: '✅ Correct! Patio umbrellas catch wind like sails and become airborne missiles. Close it, collapse it, and store inside.',
-      tieDown: '❌ Even tied down, the fabric canopy catches wind and water. Just collapse and bring inside.',
-      flipOver: '❌ That won\'t help — the wind will catch it regardless. Bring it inside.',
-    },
-  },
-  {
-    id: 'dog_house',
-    name: 'Dog House',
-    emoji: '🐕',
-    correctAction: 'anchor',
-    position: { top: '80%', left: '50%' },
-    feedback: {
-      anchor: '✅ Correct! Dog houses are light wood/plastic that float easily. Anchor to ground stakes or a permanent structure.',
-      moveInside: '❌ Most dog houses are too bulky to fit through doors. Anchor them securely to the ground instead.',
-      tieDown: '❌ Rope isn\'t reliable when a buoyant structure is fighting against flood surge. Use ground anchors.',
-      flipOver: '❌ An upside-down dog house fills with water and becomes heavier — but still floats. Anchor it.',
-    },
-  },
-  {
-    id: 'kiddie_pool',
-    name: 'Kiddie Pool',
-    emoji: '🏖️',
-    correctAction: 'flipOver',
-    position: { top: '45%', left: '85%' },
-    feedback: {
-      anchor: '❌ Kiddie pools are lightweight plastic — just flip them over and weight them. Anchoring is overkill.',
-      moveInside: '❌ You could, but just flipping it upside down prevents water collection and takes 2 seconds. Faster!',
-      tieDown: '❌ You can\'t effectively tie down a kiddie pool. Flip it upside down so it can\'t fill with water and float.',
-      flipOver: '✅ Correct! Flipping lightweight concave items upside down prevents them from filling with water, becoming heavy, and floating away as projectiles.',
-    },
-  },
-  {
-    id: 'wheelbarrow',
-    name: 'Wheelbarrow',
-    emoji: '🛒',
-    correctAction: 'flipOver',
-    position: { top: '85%', left: '20%' },
-    feedback: {
-      anchor: '❌ Wheelbarrows are easy to flip. Don\'t waste time anchoring when you can just turn it over.',
-      moveInside: '❌ Sure, but flipping upside down is faster and just as effective. Time matters!',
-      tieDown: '❌ Just flip it over! Upside-down wheelbarrows can\'t collect water and won\'t float.',
-      flipOver: '✅ Correct! Flip concave outdoor items upside down — wheelbarrows, wagons, basins. They can\'t collect water if they\'re inverted.',
-    },
-  },
-  {
-    id: 'gas_cans',
-    name: 'Gasoline Cans',
-    emoji: '⛽',
-    correctAction: 'moveInside',
-    position: { top: '65%', left: '75%' },
-    feedback: {
-      anchor: '❌ Gas cans can leak if anchoring hardware punctures them. Move to a high, dry indoor shelf — away from ignition sources.',
-      moveInside: '✅ Correct! Gasoline cans in floodwater contaminate everything downstream. Move them to a high shelf in the garage where water can\'t reach.',
-      tieDown: '❌ Ropes can crush or puncture gas cans. Bring them to a high indoor shelf instead.',
-      flipOver: '❌ Don\'t flip gas cans! They can leak. Move to a high indoor shelf instead.',
-    },
+    id:'hvac', emoji:'🌀', name:'HVAC Condenser Unit', zone:'yardpad', state:'grid_powered',
+    hazard:'Electrical Short', hc:'#8b5cf6',
+    weight:220, buoyancy:750, contaminant:'LOW', windDrag:'MEDIUM',
+    mapX:425, mapY:305,
+    desc:'220V live unit. When submerged, arcs through conductive floodwater. $5,000 repair. Creates electrocution hazard throughout the yard. (Source: OSHA 3186)',
   },
 ]
 
-const ACTIONS = [
-  { id: 'anchor', label: '⛓️ Anchor with Chains', color: '#f59e0b' },
-  { id: 'moveInside', label: '🏠 Move Inside', color: '#22c55e' },
-  { id: 'tieDown', label: '🪢 Tie Down with Rope', color: '#a855f7' },
-  { id: 'flipOver', label: '🔄 Flip Upside Down', color: '#06b6d4' },
-]
+// ─── Zone item slots ──────────────────────────────────────────────────────────
+const ZONE_SLOTS = {
+  yard:        [[110,330],[230,300],[160,390],[340,365],[290,425],[425,305]],
+  garage:      [[545,220],[600,220],[545,265],[600,265],[572,295]],
+  high_shelf:  [[540,148],[588,148],[536,170],[584,170]],
+  pool:        [[78,175],[122,160],[78,210],[122,210]],
+}
 
-export default function YardLockdownModule() {
-  const { state, dispatch } = useGame()
+// ─── Action definitions ───────────────────────────────────────────────────────
+const ACTIONS = {
+  relocate_garage: {
+    label:'Relocate to Garage', timeCost:10, budgetCost:0, icon:'🏠',
+    desc:'Move into garage. Required step before elevation or shelving.',
+    canDo: i => (i.zone==='yard'||i.zone==='yardpad') && i.id!=='hvac' && i.id!=='debris',
+  },
+  elevate_blocks: {
+    label:'Elevate on Blocks (+2 ft)', timeCost:15, budgetCost:0, icon:'⬆️',
+    desc:'Raises item 2 ft off garage floor. Protects against standard 3 ft flood only.',
+    canDo: i => i.zone==='garage' && i.state!=='elevated' && i.state!=='shelved',
+  },
+  high_shelves: {
+    label:'Move to High Shelves', timeCost:8, budgetCost:0, icon:'📦',
+    desc:'Chemicals only — moves above flood line. Prevents toxic runoff.',
+    canDo: i => i.zone==='garage' && i.id==='fertilizer' && i.state!=='shelved',
+  },
+  throw_pool: {
+    label:'Throw in Pool (5 min)', timeCost:5, budgetCost:0, icon:'🏊',
+    desc:'Furniture only. Submerged in controlled water — no wind exposure. Resin is waterproof.',
+    canDo: i => i.zone==='yard' && i.id==='furniture',
+  },
+  anchor_fill: {
+    label:'Anchor & Fill w/Water ($100)', timeCost:30, budgetCost:100, icon:'⚓',
+    desc:'Tank only. Ground anchor + water ballast counteracts 4,212 lbs buoyancy. FEMA P-348.',
+    canDo: i => i.id==='propane' && i.state!=='anchored',
+  },
+  bag_debris: {
+    label:'Bag & Secure Debris', timeCost:20, budgetCost:0, icon:'🗑️',
+    desc:'Removes loose organic matter. CRITICAL — prevents storm drain clog cascade.',
+    canDo: i => i.id==='debris' && i.state!=='secured',
+  },
+  kill_breaker: {
+    label:'Kill Outdoor Breaker', timeCost:5, budgetCost:0, icon:'⚡',
+    desc:'Isolates 220V HVAC from grid. Prevents electrocution hazard in floodwater.',
+    canDo: i => i.id==='hvac' && i.state==='grid_powered',
+  },
+}
 
-  const [phase, setPhase] = useState('intro')
-  const [timeLeft, setTimeLeft] = useState(TIMER_SECONDS)
-  const [selectedItem, setSelectedItem] = useState(null)
-  const [securedItems, setSecuredItems] = useState({}) // { itemId: { action, correct } }
-  const [feedbackMsg, setFeedbackMsg] = useState(null)
-  const [result, setResult] = useState(null)
+// ─── Cascading failure simulation ─────────────────────────────────────────────
+function simulate(items) {
+  let waterMult = 1.0
+  const findings = []
+  let totalLoss = 0
 
-  useEffect(() => {
-    if (phase !== 'game') return
-    if (timeLeft <= 0) {
-      finishGame()
-      return
-    }
-    const id = setTimeout(() => setTimeLeft(t => t - 1), 1000)
-    return () => clearTimeout(id)
-  }, [timeLeft, phase])
-
-  // Auto-finish when all items secured
-  useEffect(() => {
-    if (phase === 'game' && Object.keys(securedItems).length === YARD_ITEMS.length) {
-      setTimeout(() => finishGame(), 1000)
-    }
-  }, [securedItems, phase])
-
-  const handleItemClick = useCallback((item) => {
-    if (securedItems[item.id]) return
-    setSelectedItem(item)
-    setFeedbackMsg(null)
-  }, [securedItems])
-
-  const handleActionClick = useCallback((actionId) => {
-    if (!selectedItem) return
-    const item = selectedItem
-    const correct = item.correctAction === actionId
-    const feedback = item.feedback[actionId]
-
-    setSecuredItems(prev => ({ ...prev, [item.id]: { action: actionId, correct } }))
-    setFeedbackMsg({ text: feedback, correct })
-    setSelectedItem(null)
-
-    setTimeout(() => setFeedbackMsg(null), 3500)
-  }, [selectedItem])
-
-  const finishGame = useCallback(() => {
-    const entries = Object.values(securedItems)
-    const correctCount = entries.filter(e => e.correct).length
-    const totalItems = YARD_ITEMS.length
-    const secured = entries.length
-    const timeBonus = Math.max(0, Math.floor(timeLeft / 5))
-    const score = Math.max(0, Math.min(100, Math.round((correctCount / totalItems) * 80) + timeBonus))
-    const passed = correctCount >= 10 && secured === totalItems
-
-    const res = { passed, score, correctCount, totalItems, secured, timeLeft }
-    setResult(res)
-    setPhase('result')
-
-    dispatch({
-      type: 'RECORD_SCORE',
-      payload: { key: `${state.selectedDisaster}-3`, result: { score, passed } },
+  // Step 1 — DEBRIS CHECK (must run first, cascades to everything)
+  const debris = items.find(i=>i.id==='debris')
+  const drainClogged = debris.state !== 'secured'
+  if (drainClogged) {
+    waterMult = 2.0
+    findings.push({
+      type:'CASCADE', id:'debris',
+      title:'⚠ STORM DRAINS CLOGGED — CASCADE EVENT',
+      msg:'Loose mulch & leaves blocked storm drains within 8 minutes of rainfall. Local flood depth elevated from 3.0 ft → 4.5 ft. All 2 ft elevation measures are now INSUFFICIENT.',
+      loss:0,
     })
-  }, [securedItems, timeLeft, dispatch, state.selectedDisaster])
+  }
+  const maxDepth = drainClogged ? 4.5 : 3.0
 
-  const restart = () => {
-    setPhase('game')
-    setTimeLeft(TIMER_SECONDS)
-    setSelectedItem(null)
-    setSecuredItems({})
-    setFeedbackMsg(null)
-    setResult(null)
+  // Step 2 — PROPANE TANK
+  const propane = items.find(i=>i.id==='propane')
+  if (propane.state !== 'anchored') {
+    findings.push({ type:'CRITICAL', id:'propane', title:'💥 PROPANE TANK RUPTURE',
+      msg:`Archimedes principle: 4,212 lbs upward buoyancy force at ${maxDepth}ft flood. Anchor missing. Tank displaced, severed gas line, ignited. Blast radius 50 m. Entire property destroyed.`, loss:25000 })
+    totalLoss += 25000
+  } else {
+    findings.push({ type:'PASS', id:'propane', title:'✓ PROPANE: ANCHORED & BALLASTED',
+      msg:`Water ballast + ground anchor resisted 4,212 lbs buoyancy force. Gas line intact. No rupture.` })
   }
 
-  // ── INTRO ──
-  if (phase === 'intro') {
-    return (
-      <div style={s.screen}>
-        <div style={s.introCard}>
-          <span style={{ fontSize: 64 }}>🏡</span>
-          <h1 style={s.introTitle}>Module 3: Yard Lockdown</h1>
-          <div style={s.introBody}>
-            <p><strong>Scenario:</strong> Flood surge is approaching. Loose outdoor items become <span style={{ color: '#f87171', fontWeight: 700 }}>deadly projectiles</span> in moving water. You have <span style={{ color: '#f87171', fontWeight: 700 }}>90 seconds</span> to secure everything.</p>
-            <p style={{ marginTop: 12 }}><strong>How to play:</strong></p>
-            <ul style={s.introList}>
-              <li>Click an item in the yard to select it</li>
-              <li>Choose the correct action: ⛓️ Anchor, 🏠 Move Inside, 🪢 Tie Down, or 🔄 Flip Upside Down</li>
-              <li>Each item has ONE correct action — wrong choices give feedback</li>
-              <li>Secure all 14 items before time runs out!</li>
-            </ul>
-            <p style={{ marginTop: 12, color: '#fbbf24' }}>⚠️ Think about each item's weight, material, and danger level.</p>
-          </div>
-          <button style={s.goBtn} onClick={() => setPhase('game')}>
-            🏡 Lock Down the Yard — 90s Timer Begins!
-          </button>
-          <button style={s.backBtnSmall} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-            ← Back to Modules
-          </button>
-        </div>
-      </div>
-    )
+  // Step 3 — FURNITURE
+  const furn = items.find(i=>i.id==='furniture')
+  if (furn.zone==='yard') {
+    findings.push({ type:'FAIL', id:'furniture', title:'🪟 WINDOWS SMASHED — PROJECTILE',
+      msg:`185-lb resin set reached ~80 mph in wind. Struck east windows. Structural breach allowed flood ingress into living space.`, loss:3500 })
+    totalLoss += 3500
+  } else if (furn.zone==='pool') {
+    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SUBMERGED IN POOL',
+      msg:`Controlled submersion. No wind exposure. Resin construction resists water damage. Zero loss.` })
+  } else {
+    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SECURED IN GARAGE',
+      msg:`Protected from 80 mph wind. No damage.` })
   }
 
-  // ── RESULT ──
-  if (phase === 'result' && result) {
-    return (
-      <div style={s.screen}>
-        <div style={s.resultCard}>
-          <span style={{ fontSize: 56 }}>{result.passed ? '🏆' : '💀'}</span>
-          <h2 style={{ ...s.resultTitle, color: result.passed ? '#22c55e' : '#ef4444' }}>
-            {result.passed ? 'YARD SECURED!' : 'YARD NOT SAFE'}
-          </h2>
-          <p style={s.scoreText}>
-            Score: <strong>{result.score}%</strong> — {result.correctCount}/{result.totalItems} correct actions, {result.secured} items addressed
-          </p>
-
-          <div style={s.educationBox}>
-            <h3 style={{ color: '#60a5fa', marginBottom: 12, fontSize: 16 }}>📚 Item-by-Item Review</h3>
-            {YARD_ITEMS.map(item => {
-              const entry = securedItems[item.id]
-              const wasCorrect = entry?.correct
-              const actionUsed = entry?.action
-              return (
-                <div key={item.id} style={{ ...s.reviewItem, borderLeftColor: wasCorrect ? '#22c55e' : entry ? '#ef4444' : '#64748b' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 20 }}>{item.emoji}</span>
-                    <strong style={{ color: '#f1f5f9' }}>{item.name}</strong>
-                    <span style={{ fontSize: 12, color: wasCorrect ? '#4ade80' : entry ? '#f87171' : '#94a3b8', marginLeft: 'auto' }}>
-                      {wasCorrect ? '✅ Correct' : entry ? '❌ Wrong' : '⏭️ Skipped'}
-                    </span>
-                  </div>
-                  <p style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, margin: 0 }}>
-                    {entry ? item.feedback[actionUsed] : `Should have been: ${item.correctAction === 'anchor' ? '⛓️ Anchor' : item.correctAction === 'moveInside' ? '🏠 Move Inside' : item.correctAction === 'flipOver' ? '🔄 Flip Upside Down' : '🪢 Tie Down'}`}
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-            <button style={s.retryBtn} onClick={restart}>Try Again</button>
-            <button style={s.backBtn} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-              Back to Modules
-            </button>
-          </div>
-        </div>
-      </div>
-    )
+  // Step 4 — CHEMICALS
+  const chem = items.find(i=>i.id==='fertilizer')
+  const chemSafe = chem.state === 'shelved'
+  if (!chemSafe) {
+    findings.push({ type:'FAIL', id:'fertilizer', title:'☠ TOXIC CONTAMINATION',
+      msg:`Nitrogen fertilizer + herbicides dissolved into floodwater. Created toxic nitrate + herbicide soup. Cannot be boiled safe. Requires EPA-grade decontamination.`, loss:8000 })
+    totalLoss += 8000
+  } else {
+    findings.push({ type:'PASS', id:'fertilizer', title:'✓ CHEMICALS: ON HIGH SHELVES',
+      msg:`Secured at ${(maxDepth+1.8).toFixed(1)} ft elevation — above the ${maxDepth}ft flood line. No contamination.` })
   }
 
-  // ── GAME ──
-  const timerColor = timeLeft <= 10 ? '#ef4444' : timeLeft <= 20 ? '#f59e0b' : '#22c55e'
-  const securedCount = Object.keys(securedItems).length
+  // Step 5 — MOWER (with the cascade TRAP)
+  const mower = items.find(i=>i.id==='mower')
+  if (mower.zone==='yard') {
+    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED IN YARD',
+      msg:`Submerged in ${maxDepth}ft of floodwater. Engine oil + fuel contaminated water. All electrical systems shorted. $2,000 replacement.`, loss:2000 })
+    totalLoss += 2000
+  } else if (mower.zone==='garage' && mower.state==='elevated') {
+    if (!drainClogged) {
+      findings.push({ type:'PASS', id:'mower', title:'✓ MOWER: ELEVATED — SAFE',
+        msg:`2 ft blocks cleared 3 ft flood. No damage.` })
+    } else {
+      findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED — CASCADE TRAP!',
+        msg:`⚠ You elevated on 2 ft blocks (correct instinct) but LEFT THE DEBRIS UNSECURED. Clogged drains raised flood to 4.5 ft — exceeding the 2 ft blocks by 2.5 ft. LESSON: Clear debris FIRST, then elevate.`, loss:2000 })
+      totalLoss += 2000
+    }
+  } else if (mower.zone==='garage') {
+    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER FLOOR-LEVEL DAMAGE',
+      msg:`In garage but not elevated. Flood water entered garage floor. Partial damage to electrics.`, loss:1200 })
+    totalLoss += 1200
+  }
+
+  // Step 6 — HVAC
+  const hvac = items.find(i=>i.id==='hvac')
+  if (hvac.state === 'grid_powered' && maxDepth >= 1.5) {
+    findings.push({ type:'CRITICAL', id:'hvac', title:'⚡ HVAC ELECTRICAL SHORT',
+      msg:`220V discharge through conductive floodwater. Arc flash created electrocution hazard throughout the yard. $5,000 repair + electrical remediation.`, loss:5000 })
+    totalLoss += 5000
+  } else if (hvac.state === 'isolated') {
+    findings.push({ type:'PASS', id:'hvac', title:'✓ HVAC: ISOLATED',
+      msg:`Outdoor breaker killed. No voltage in floodwater. No hazard.` })
+  }
+
+  const criticals = findings.filter(f=>f.type==='CRITICAL').length
+  const fails     = findings.filter(f=>f.type==='FAIL').length
+  const passed    = criticals===0 && fails===0
+  const score     = Math.max(0, Math.round(100 - totalLoss / 400))
+
+  return { findings, totalLoss, score, passed, maxDepth, drainClogged, criticals, fails }
+}
+
+// ─── Reducer ──────────────────────────────────────────────────────────────────
+const INIT = {
+  timeRemaining: 120,
+  budget: 200,
+  items: ITEMS_INIT,
+  selectedId: null,
+  phase: 'setup',
+  simResult: null,
+}
+
+function reducer(s, a) {
+  switch (a.type) {
+    case 'SELECT':
+      return { ...s, selectedId: s.selectedId === a.id ? null : a.id }
+
+    case 'ACTION': {
+      const def = ACTIONS[a.action]
+      if (!def || s.timeRemaining < def.timeCost || s.budget < def.budgetCost) return s
+      const items = s.items.map(item => {
+        if (item.id !== a.itemId) return item
+        switch (a.action) {
+          case 'relocate_garage': return { ...item, zone:'garage',     state:'in_garage'  }
+          case 'elevate_blocks':  return { ...item, state:'elevated'                      }
+          case 'high_shelves':    return { ...item, zone:'high_shelf', state:'shelved'    }
+          case 'throw_pool':      return { ...item, zone:'pool',       state:'pooled'     }
+          case 'anchor_fill':     return { ...item, state:'anchored'                      }
+          case 'bag_debris':      return { ...item, state:'secured',   zone:'secured'     }
+          case 'kill_breaker':    return { ...item, state:'isolated'                      }
+          default:                return item
+        }
+      })
+      return { ...s, items, timeRemaining: s.timeRemaining - def.timeCost, budget: s.budget - def.budgetCost }
+    }
+
+    case 'SIMULATE': {
+      const result = simulate(s.items)
+      return { ...s, phase:'result', simResult: result }
+    }
+
+    case 'RESET': return { ...INIT, items: ITEMS_INIT.map(i => ({ ...i })) }
+    default:      return s
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function stateLabel(item) {
+  switch (item.state) {
+    case 'in_garage':   return { text:'IN GARAGE',  color:'#fbbf24' }
+    case 'elevated':    return { text:'ELEVATED +2ft', color:'#22c55e' }
+    case 'shelved':     return { text:'HIGH SHELF', color:'#22c55e' }
+    case 'pooled':      return { text:'IN POOL',    color:'#3b82f6' }
+    case 'anchored':    return { text:'ANCHORED',   color:'#22c55e' }
+    case 'secured':     return { text:'BAGGED',     color:'#22c55e' }
+    case 'isolated':    return { text:'ISOLATED',   color:'#22c55e' }
+    case 'grid_powered':return { text:'LIVE 220V',  color:'#ef4444' }
+    default:            return { text:'UNSECURED',  color:'#ef4444' }
+  }
+}
+
+function isSecured(item) {
+  return !['unsecured','grid_powered'].includes(item.state)
+}
+
+// ─── Map: assign positions by zone ────────────────────────────────────────────
+function getPositions(items) {
+  const counts = {}
+  return items.map(item => {
+    const zone = item.state === 'secured' ? 'secured_off' : item.zone
+    const slots = ZONE_SLOTS[zone] || ZONE_SLOTS.yard
+    const idx = counts[zone] ?? 0
+    counts[zone] = idx + 1
+    return { item, x: slots[idx]?.[0] ?? 100 + idx * 40, y: slots[idx]?.[1] ?? 350 }
+  })
+}
+
+// ─── SVG Yard Map ─────────────────────────────────────────────────────────────
+function YardMap({ items, selectedId, onSelect, simResult }) {
+  const positions = getPositions(items)
+  const flooding  = !!simResult
 
   return (
-    <div style={s.gameContainer}>
-      <div style={s.header}>
-        <button style={s.backBtnSmall} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>← Quit</button>
-        <h2 style={s.gameTitle}>🏡 Secure the Yard!</h2>
-        <div style={{ ...s.timer, color: timerColor }}>
-          ⏱ {String(Math.floor(timeLeft / 60)).padStart(2, '0')}:{String(timeLeft % 60).padStart(2, '0')}
-        </div>
-      </div>
+    <svg viewBox="0 0 700 480" style={{ width:'100%', height:'100%' }}>
+      <defs>
+        <linearGradient id="floodGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#1d4ed8" stopOpacity={simResult?.drainClogged ? '0.72' : '0.52'}/>
+          <stop offset="100%" stopColor="#1e40af" stopOpacity={simResult?.drainClogged ? '0.52' : '0.38'}/>
+        </linearGradient>
+      </defs>
 
-      {/* Progress */}
-      <div style={s.progressBar}>
-        <span style={{ color: '#94a3b8', fontSize: 13 }}>Items Secured:</span>
-        <div style={s.progressTrack}>
-          <div style={{ ...s.progressFill, width: `${(securedCount / YARD_ITEMS.length) * 100}%` }} />
-        </div>
-        <span style={{ color: '#f1f5f9', fontWeight: 700, fontSize: 14 }}>{securedCount}/{YARD_ITEMS.length}</span>
-      </div>
+      {/* Background */}
+      <rect width={700} height={480} fill="#080808"/>
 
-      {feedbackMsg && (
-        <div style={{
-          padding: '12px 24px',
-          background: feedbackMsg.correct ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-          borderBottom: `1px solid ${feedbackMsg.correct ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
-          color: feedbackMsg.correct ? '#86efac' : '#fca5a5',
-          fontSize: 14, textAlign: 'center', fontWeight: 500,
-        }}>
-          {feedbackMsg.text}
-        </div>
+      {/* Ground texture */}
+      <rect width={700} height={480} fill="url(#grassPat)" opacity="0.4"/>
+
+      {/* ── Zone fills ── */}
+      {/* Yard */}
+      <rect x={10} y={235} width={475} height={195} rx={4}
+            fill="rgba(20,40,10,0.75)" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="8,5"/>
+      {/* Pool */}
+      <rect x={10} y={75} width={175} height={160} rx={10}
+            fill="rgba(29,78,216,0.22)" stroke="#3b82f6" strokeWidth={1.5}/>
+      {/* Garage */}
+      <rect x={490} y={75} width={195} height={265} rx={4}
+            fill="rgba(42,32,8,0.85)" stroke="#f59e0b" strokeWidth={1.5}/>
+      {/* High Shelves (inside garage) */}
+      <rect x={500} y={84} width={175} height={78} rx={3}
+            fill="rgba(80,60,0,0.35)" stroke="#fbbf24" strokeWidth={1} strokeDasharray="4,3"/>
+      {/* Storm drain strip */}
+      <rect x={10} y={437} width={475} height={32} rx={2}
+            fill="rgba(14,165,233,0.18)" stroke="#0ea5e9" strokeWidth={1.5}/>
+
+      {/* ── Zone labels ── */}
+      <text x={18} y={255}  fill="#22c55e55" fontSize={9}  fontFamily="monospace" letterSpacing={2}>YARD</text>
+      <text x={18} y={92}   fill="#3b82f655" fontSize={9}  fontFamily="monospace" letterSpacing={2}>POOL</text>
+      <text x={498} y={92}  fill="#f59e0b66" fontSize={9}  fontFamily="monospace" letterSpacing={2}>GARAGE</text>
+      <text x={508} y={102} fill="#fbbf24"   fontSize={8}  fontFamily="monospace">↑ HIGH SHELVES</text>
+      <text x={160} y={456} fill="#0ea5e9"   fontSize={8}  fontFamily="monospace" textAnchor="middle">⚠ STORM DRAIN / FLOOD INGRESS</text>
+
+      {/* Structure perimeter */}
+      <line x1={10} y1={235} x2={485} y2={235} stroke="#334155" strokeWidth={1} strokeDasharray="6,4"/>
+      <text x={170} y={230} fill="#334155" fontSize={8} fontFamily="monospace">STRUCTURE PERIMETER</text>
+
+      {/* Driveway */}
+      <rect x={490} y={340} width={195} height={80} fill="rgba(30,30,30,0.5)" stroke="#334155" strokeWidth={1}/>
+      <text x={568} y={386} fill="#334155" fontSize={8} fontFamily="monospace" textAnchor="middle">DRIVEWAY</text>
+
+      {/* ── Flood animation overlay ── */}
+      {flooding && (
+        <>
+          <rect x={10} y={235} width={475} height={195}
+                fill="url(#floodGrad)"
+                style={{ animation:'flood-rise 2s ease-in-out' }}/>
+          {simResult.drainClogged && (
+            <text x={240} y={330} fill="#fbbf24" fontSize={14} fontFamily="monospace"
+                  textAnchor="middle" fontWeight="bold"
+                  style={{ animation:'glow-pulse 0.6s ease-in-out infinite' }}>
+              ⚠ DRAINS CLOGGED — 4.5ft FLOOD
+            </text>
+          )}
+          {/* Wave line */}
+          <line x1={10} y1={simResult.drainClogged ? 255 : 270}
+                x2={485} y2={simResult.drainClogged ? 255 : 270}
+                stroke="#60a5fa" strokeWidth={2}
+                style={{ animation:'wave-line 1s ease-in-out infinite alternate' }}/>
+        </>
       )}
 
-      <div style={s.gameLayout}>
-        {/* Yard view */}
-        <div style={s.yardPanel}>
-          <div style={s.yard}>
-            {/* Yard background elements */}
-            <div style={s.yardGrass}>
-              <span style={{ position: 'absolute', top: '5%', right: '5%', fontSize: 28 }}>🌳</span>
-              <span style={{ position: 'absolute', bottom: '5%', left: '5%', fontSize: 28 }}>🌳</span>
-              <span style={{ position: 'absolute', top: '45%', right: '15%', fontSize: 20 }}>🌿</span>
-              <span style={{ position: 'absolute', bottom: '25%', left: '45%', fontSize: 20 }}>🌱</span>
-              {/* House indicator */}
-              <div style={s.houseIcon}>🏠 House</div>
-              {/* Fence */}
-              <div style={s.fence}>{'🟫'.repeat(12)}</div>
+      {/* ── Items ── */}
+      {positions.map(({ item, x, y }) => {
+        if (item.state === 'secured') return null  // bagged debris off-map
+        const isSel  = item.id === selectedId
+        const safe   = isSecured(item)
+        const lbl    = stateLabel(item)
+        return (
+          <g key={item.id} onClick={() => onSelect(item.id)} style={{ cursor:'pointer' }}>
+            {/* Selection ring */}
+            <circle cx={x} cy={y} r={24}
+                    fill={isSel ? 'rgba(251,191,36,0.12)' : 'rgba(0,0,0,0.25)'}
+                    stroke={isSel ? '#fbbf24' : safe ? '#22c55e55' : item.hc + '55'}
+                    strokeWidth={isSel ? 2.5 : 1.5}
+                    style={isSel ? {animation:'glow-pulse 1s ease-in-out infinite'} : {}}/>
+            {/* Icon */}
+            <text x={x} y={y+6} fontSize={20} textAnchor="middle">{item.emoji}</text>
+            {/* Status badge */}
+            <text x={x+16} y={y-13} fontSize={11}>
+              {safe ? '✅' : '⚠️'}
+            </text>
+            {/* Label below */}
+            <text x={x} y={y+30} fontSize={8} textAnchor="middle"
+                  fill={lbl.color} fontFamily="monospace">{lbl.text}</text>
+          </g>
+        )
+      })}
 
-              {/* Yard items */}
-              {YARD_ITEMS.map(item => {
-                const secured = securedItems[item.id]
-                const isSelected = selectedItem?.id === item.id
+      {/* Wind compass */}
+      <g transform="translate(655, 450)">
+        <circle cx={0} cy={0} r={18} fill="rgba(0,0,0,0.6)" stroke="#334155" strokeWidth={1}/>
+        <text x={-5} y={5} fontSize={14} fill="#60a5fa">↙</text>
+        <text x={-16} y={-10} fontSize={7} fill="#334155" fontFamily="monospace">80MPH</text>
+      </g>
+
+      {/* Flood depth scale */}
+      <g transform="translate(657, 100)">
+        <rect x={-8} y={-80} width={16} height={80} fill="rgba(30,64,175,0.12)" stroke="#3b82f6" strokeWidth={1}/>
+        <rect x={-7} y={-80+50} width={14} height={30} fill="rgba(59,130,246,0.45)"/>
+        <line x1={-8} y1={-80+50} x2={8} y2={-80+50} stroke="#60a5fa" strokeWidth={1.5}/>
+        <text x={0} y={8}   fontSize={7} fill="#3b82f6" textAnchor="middle" fontFamily="monospace">FLOOD</text>
+        <text x={0} y={17}  fontSize={9} fill="#60a5fa" textAnchor="middle" fontFamily="monospace" fontWeight="700">3 FT</text>
+      </g>
+    </svg>
+  )
+}
+
+// ─── Main component ────────────────────────────────────────────────────────────
+export default function Module3_YardLockdown() {
+  const { dispatch: gd } = useGame()
+  const [s, dispatch]    = useReducer(reducer, { ...INIT, items: ITEMS_INIT.map(i=>({...i})) })
+  const [hovAction, setHovAction] = useState(null)
+
+  const selected = s.items.find(i => i.id === s.selectedId) ?? null
+  const timePct  = s.timeRemaining / 120
+  const timeColor= timePct > 0.5 ? '#22c55e' : timePct > 0.25 ? '#f59e0b' : '#ef4444'
+  const secured  = s.items.filter(isSecured).length
+  const total    = s.items.length
+
+  const availActions = selected
+    ? Object.entries(ACTIONS).filter(([,def]) => def.canDo(selected))
+    : []
+
+  function doAction(actionKey) {
+    dispatch({ type:'ACTION', itemId: selected.id, action: actionKey })
+  }
+
+  function handleSimulate() {
+    const result = simulate(s.items)
+    dispatch({ type:'SIMULATE' })
+    gd({ type:'RECORD_SCORE', payload:{ key:'flood-3', result:{ score: Math.min(100,Math.max(0,result.score)), passed: result.passed } } })
+  }
+
+  // ── INTRO ──────────────────────────────────────────────────────────────────
+  if (s.phase === 'intro') return null   // skip to setup directly
+
+  // ── RESULT SCREEN ──────────────────────────────────────────────────────────
+  if (s.phase === 'result' && s.simResult) {
+    const r = s.simResult
+    return (
+      <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        <style>{`
+          @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
+          @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.25}}
+          @keyframes slide-up{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+          @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
+        `}</style>
+
+        {/* Header */}
+        <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 20px', gap:16, flexShrink:0 }}>
+          <div style={{ color: r.passed ? '#22c55e' : '#ef4444', fontSize:13, fontWeight:700, letterSpacing:2 }}>
+            AFTER ACTION REPORT — {r.passed ? 'PROPERTY DEFENDED' : `${r.criticals} CRITICAL · ${r.fails} FAIL`}
+          </div>
+          <div style={{ marginLeft:'auto', display:'flex', gap:12 }}>
+            <button onClick={() => dispatch({ type:'RESET' })} style={{ padding:'7px 20px', borderRadius:3, fontFamily:MONO, fontSize:12, fontWeight:700, letterSpacing:2, cursor:'pointer', border:'1px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444' }}>↺ RETRY</button>
+            <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ padding:'7px 16px', borderRadius:3, fontFamily:MONO, fontSize:11, cursor:'pointer', border:'1px solid #1e2d3a', background:'transparent', color:'#334155' }}>← MODULES</button>
+          </div>
+        </div>
+
+        <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
+          {/* Map with flood overlay */}
+          <div style={{ flex:1, padding:12 }}>
+            <YardMap items={s.items} selectedId={null} onSelect={()=>{}} simResult={r}/>
+          </div>
+
+          {/* Findings panel */}
+          <div style={{ width:380, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            {/* Score */}
+            <div style={{ padding:'16px 18px', borderBottom:'1px solid #111', textAlign:'center' }}>
+              <div style={{ fontSize:9, color:'#2a4055', letterSpacing:3, marginBottom:6 }}>SIMULATION SCORE</div>
+              <div style={{ fontSize:48, fontWeight:900, color: r.passed ? '#22c55e' : r.score > 50 ? '#f59e0b' : '#ef4444' }}>
+                {r.score}%
+              </div>
+              <div style={{ fontSize:11, color:'#334155', marginTop:4 }}>
+                Financial loss: <span style={{ color:'#ef4444', fontWeight:700 }}>${r.totalLoss.toLocaleString()}</span>
+              </div>
+              <div style={{ fontSize:10, color:'#1e3050', marginTop:2 }}>
+                Flood depth: <span style={{ color: r.drainClogged ? '#ef4444' : '#3b82f6', fontWeight:700 }}>{r.maxDepth}ft</span>
+                {r.drainClogged && <span style={{ color:'#ef4444' }}> (drains clogged)</span>}
+              </div>
+            </div>
+
+            {/* Findings list */}
+            <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>
+              <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>FINDINGS</div>
+              {r.findings.map((f, i) => {
+                const bc = f.type==='CRITICAL' ? '#ef4444' : f.type==='FAIL' ? '#f97316' : f.type==='CASCADE' ? '#fbbf24' : '#22c55e'
                 return (
-                  <button
-                    key={item.id}
-                    onClick={() => handleItemClick(item)}
-                    style={{
-                      position: 'absolute',
-                      top: item.position.top,
-                      left: item.position.left,
-                      width: 80,
-                      height: 80,
-                      borderRadius: 12,
-                      border: isSelected ? '3px solid #fbbf24' : secured?.correct ? '2px solid #22c55e' : secured ? '2px solid #ef4444' : '2px solid rgba(255,255,255,0.2)',
-                      background: isSelected ? 'rgba(251,191,36,0.2)' : secured?.correct ? 'rgba(34,197,94,0.15)' : secured ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.08)',
-                      cursor: secured ? 'default' : 'pointer',
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2,
-                      transition: 'all 0.2s',
-                      zIndex: isSelected ? 10 : 1,
-                      boxShadow: isSelected ? '0 0 20px rgba(251,191,36,0.4)' : 'none',
-                    }}
-                  >
-                    <span style={{ fontSize: 28 }}>{item.emoji}</span>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: '#f1f5f9', textAlign: 'center', lineHeight: 1.1 }}>{item.name}</span>
-                    {secured && (
-                      <span style={{ position: 'absolute', top: -6, right: -6, fontSize: 16 }}>
-                        {secured.correct ? '✅' : '❌'}
-                      </span>
+                  <div key={i} style={{ background:'#0d0d0d', border:`1px solid ${bc}33`, borderLeft:`3px solid ${bc}`, borderRadius:4, padding:'10px 12px',
+                                        animation:`slide-up 0.3s ease-out ${i*0.06}s both` }}>
+                    <div style={{ color:bc, fontSize:11, fontWeight:700, marginBottom:5 }}>{f.title}</div>
+                    <div style={{ color:'#647a8e', fontSize:10, lineHeight:1.65 }}>{f.msg}</div>
+                    {f.loss > 0 && (
+                      <div style={{ color:'#ef4444', fontSize:10, marginTop:5, fontWeight:700 }}>
+                        💸 LOSS: ${f.loss.toLocaleString()}
+                      </div>
                     )}
-                  </button>
+                  </div>
                 )
               })}
             </div>
+
+            {/* Key lesson */}
+            {r.simResult?.drainClogged && !r.passed && (
+              <div style={{ padding:'12px 16px', borderTop:'1px solid #111', background:'rgba(220,38,38,0.06)' }}>
+                <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:5 }}>📋 KEY LESSON</div>
+                <div style={{ color:'#7a9ab8', fontSize:10, lineHeight:1.7 }}>
+                  <b style={{color:'#f87171'}}>FEMA Stormwater Mgmt:</b> "Remove all loose organic material from drainage paths before a flood event. Even small quantities of mulch and leaves can fully block residential storm drains within minutes, converting a manageable 3ft flood into an unmanageable 4.5ft event."
+                </div>
+              </div>
+            )}
           </div>
         </div>
+      </div>
+    )
+  }
 
-        {/* Action panel */}
-        <div style={s.actionPanel}>
-          {selectedItem ? (
-            <>
-              <div style={s.selectedHeader}>
-                <span style={{ fontSize: 40 }}>{selectedItem.emoji}</span>
-                <h3 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700 }}>{selectedItem.name}</h3>
-                <p style={{ color: '#94a3b8', fontSize: 13 }}>Choose the correct action:</p>
+  // ── SETUP / PLAY ────────────────────────────────────────────────────────────
+  return (
+    <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <style>{`
+        @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
+        @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.22}}
+        @keyframes slide-up{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
+        @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+      `}</style>
+
+      {/* ── TOP BAR ── */}
+      <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 16px', gap:16, flexShrink:0 }}>
+        <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#1e3050', fontFamily:MONO, fontSize:11, cursor:'pointer' }}>← EXIT</button>
+        <div style={{ color:'#00e5ff', fontSize:12, fontWeight:700, letterSpacing:2 }}>M3 · YARD TRIAGE</div>
+        <div style={{ fontSize:9, color:'#1e3050', letterSpacing:1 }}>SPATIAL LOGISTICS SIMULATOR · 120-MIN PRE-FLOOD WINDOW</div>
+
+        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:20 }}>
+          {/* Time */}
+          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>⏰ TIME</span>
+            <div style={{ width:100, height:7, background:'#0a0a0a', border:'1px solid #141414', borderRadius:3, overflow:'hidden' }}>
+              <div style={{ height:'100%', borderRadius:3, width:`${timePct*100}%`, background:timeColor, transition:'width 0.3s,background 0.3s' }}/>
+            </div>
+            <span style={{ color:timeColor, fontFamily:MONO, fontSize:13, fontWeight:700, minWidth:42 }}>{s.timeRemaining}m</span>
+          </div>
+          {/* Budget */}
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>💰</span>
+            <span style={{ color:'#22c55e', fontFamily:MONO, fontSize:13, fontWeight:700 }}>${s.budget}</span>
+          </div>
+          {/* Progress */}
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <span style={{ color:'#334155', fontSize:9 }}>SECURED:</span>
+            <span style={{ color: secured===total ? '#22c55e' : '#f59e0b', fontFamily:MONO, fontSize:12, fontWeight:700 }}>{secured}/{total}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── MAIN: Map + Ledger ── */}
+      <div style={{ flex:1, display:'flex', minHeight:0 }}>
+
+        {/* MAP */}
+        <div style={{ flex:1, padding:10, display:'flex', alignItems:'stretch', minWidth:0 }}>
+          <YardMap items={s.items} selectedId={s.selectedId}
+                   onSelect={id => dispatch({ type:'SELECT', id })} simResult={null}/>
+        </div>
+
+        {/* LEDGER */}
+        <div style={{ width:310, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+
+          {/* Selected item detail */}
+          {selected ? (
+            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+                <span style={{ fontSize:24 }}>{selected.emoji}</span>
+                <div>
+                  <div style={{ color:selected.hc, fontSize:12, fontWeight:700 }}>{selected.name}</div>
+                  <div style={{ color:stateLabel(selected).color, fontSize:9, letterSpacing:1 }}>{stateLabel(selected).text}</div>
+                </div>
               </div>
-              <div style={s.actionList}>
-                {ACTIONS.map(action => (
-                  <button
-                    key={action.id}
-                    onClick={() => handleActionClick(action.id)}
-                    style={{
-                      ...s.actionBtn,
-                      borderColor: action.color,
-                      background: `${action.color}15`,
-                    }}
-                  >
-                    <span style={{ fontSize: 14, fontWeight: 700, color: action.color }}>{action.label}</span>
-                  </button>
+              {/* Properties grid */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:5, marginBottom:8 }}>
+                {[
+                  ['WEIGHT',      `${selected.weight.toLocaleString()} lbs`],
+                  ['BUOYANCY',    `${selected.buoyancy.toLocaleString()} lbs`],
+                  ['CONTAMINANT', selected.contaminant],
+                  ['WIND DRAG',   selected.windDrag],
+                ].map(([k,v])=>(
+                  <div key={k} style={{ background:'#0d0d0d', border:'1px solid #141414', borderRadius:3, padding:'5px 8px' }}>
+                    <div style={{ color:'#2a4055', fontSize:8, letterSpacing:1 }}>{k}</div>
+                    <div style={{ color: v==='CRITICAL'?'#ef4444':v==='HIGH'?'#f97316':v==='MEDIUM'?'#f59e0b':'#22c55e',
+                                  fontSize:11, fontWeight:700, marginTop:2 }}>{v}</div>
+                  </div>
                 ))}
               </div>
-            </>
+              <div style={{ fontSize:9.5, color:'#3a5068', lineHeight:1.65, borderTop:'1px solid #111', paddingTop:8 }}>{selected.desc}</div>
+              {/* Hazard badge */}
+              <div style={{ marginTop:8, display:'inline-block', padding:'3px 10px', borderRadius:12,
+                            background:`${selected.hc}1a`, border:`1px solid ${selected.hc}55`,
+                            color:selected.hc, fontSize:9, fontWeight:700, letterSpacing:1 }}>
+                ⚠ {selected.hazard}
+              </div>
+            </div>
           ) : (
-            <div style={s.noSelection}>
-              <span style={{ fontSize: 40 }}>👆</span>
-              <p style={{ color: '#94a3b8', fontSize: 15 }}>Click an item in the yard to select it</p>
-              <div style={{ marginTop: 20, padding: 16, background: 'rgba(59,130,246,0.08)', borderRadius: 10, border: '1px solid rgba(59,130,246,0.2)' }}>
-                <p style={{ color: '#93c5fd', fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                  💡 <strong>Think about:</strong><br />
-                  • Can it be easily carried inside?<br />
-                  • Does it contain fuel/gas (dangerous indoors)?<br />
-                  • Is it too large to move?<br />
-                  • Is it concave and could collect water?
-                </p>
+            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
+              <div style={{ color:'#1e3050', fontSize:10, textAlign:'center', marginTop:8 }}>
+                Click an item on the map to see details and available actions
               </div>
             </div>
           )}
 
-          {/* Legend */}
-          <div style={s.legend}>
-            <div style={s.legendItem}><span style={{ color: '#f59e0b' }}>⛓️ Anchor</span> — Heavy/gas items that can't go inside</div>
-            <div style={s.legendItem}><span style={{ color: '#22c55e' }}>🏠 Move Inside</span> — Portable items that fit in garage</div>
-            <div style={s.legendItem}><span style={{ color: '#a855f7' }}>🪢 Tie Down</span> — Trap option! Rarely the best choice</div>
-            <div style={s.legendItem}><span style={{ color: '#06b6d4' }}>🔄 Flip Over</span> — Concave items that collect water</div>
+          {/* Item list */}
+          <div style={{ flex:1, overflowY:'auto', padding:'10px 12px', display:'flex', flexDirection:'column', gap:5 }}>
+            <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>ITEM LEDGER</div>
+            {s.items.map(item => {
+              const lbl  = stateLabel(item)
+              const isSel= item.id === s.selectedId
+              return (
+                <div key={item.id} onClick={() => dispatch({ type:'SELECT', id:item.id })}
+                  style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:4, cursor:'pointer',
+                           background: isSel ? 'rgba(251,191,36,0.06)' : '#0d0d0d',
+                           border:`1px solid ${isSel ? '#fbbf2455' : '#141414'}`,
+                           transition:'all 0.15s' }}>
+                  <span style={{ fontSize:18, flexShrink:0 }}>{item.emoji}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.name}</div>
+                    <div style={{ fontSize:8, color:'#1e3050', marginTop:2 }}>{item.hazard}</div>
+                  </div>
+                  <div style={{ padding:'2px 8px', borderRadius:10, background:`${lbl.color}18`,
+                                border:`1px solid ${lbl.color}44`, color:lbl.color, fontSize:8, fontWeight:700, flexShrink:0 }}>
+                    {lbl.text}
+                  </div>
+                </div>
+              )
+            })}
           </div>
+        </div>
+      </div>
+
+      {/* ── ACTION DECK ── */}
+      <div style={{ background:'#080808', borderTop:'2px solid #1a2535', padding:'10px 14px', flexShrink:0 }}>
+        <div style={{ display:'flex', alignItems:'stretch', gap:10 }}>
+
+          {/* Available actions */}
+          <div style={{ flex:1, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+            {selected ? (
+              availActions.length > 0 ? (
+                availActions.map(([key, def]) => {
+                  const canAfford = s.timeRemaining >= def.timeCost && s.budget >= def.budgetCost
+                  const isHov = hovAction === key
+                  return (
+                    <div key={key} style={{ position:'relative' }}>
+                      {/* Tooltip */}
+                      {isHov && (
+                        <div style={{ position:'absolute', bottom:'100%', left:0, marginBottom:6, width:220, background:'#0d0d0d',
+                                      border:'1px solid #1a2535', borderRadius:4, padding:'8px 10px', zIndex:10,
+                                      fontSize:9, color:'#647a8e', lineHeight:1.6 }}>
+                          {def.desc}
+                        </div>
+                      )}
+                      <button
+                        onClick={() => canAfford && doAction(key)}
+                        onMouseEnter={() => setHovAction(key)}
+                        onMouseLeave={() => setHovAction(null)}
+                        disabled={!canAfford}
+                        style={{
+                          padding:'8px 14px', borderRadius:4, fontFamily:MONO, fontSize:11, fontWeight:700,
+                          letterSpacing:1, cursor: canAfford ? 'pointer' : 'not-allowed',
+                          border:`1px solid ${canAfford ? '#00e5ff44' : '#1a2535'}`,
+                          background: canAfford ? 'rgba(0,229,255,0.05)' : 'rgba(0,0,0,0.3)',
+                          color: canAfford ? '#00e5ff' : '#2a4055',
+                          opacity: canAfford ? 1 : 0.45,
+                          transition:'all 0.15s',
+                          display:'flex', alignItems:'center', gap:6,
+                        }}>
+                        <span>{def.icon}</span>
+                        <span>{def.label}</span>
+                        <span style={{ marginLeft:4, padding:'1px 6px', borderRadius:8, background:'rgba(251,191,36,0.1)',
+                                       border:'1px solid rgba(251,191,36,0.25)', color:canAfford?'#fbbf24':'#2a4055', fontSize:9 }}>
+                          ⏰{def.timeCost}m{def.budgetCost>0?` 💰$${def.budgetCost}`:''}
+                        </span>
+                      </button>
+                    </div>
+                  )
+                })
+              ) : (
+                <div style={{ color:'#22c55e', fontSize:11, fontFamily:MONO, padding:'8px 14px',
+                              border:'1px solid #22c55e33', borderRadius:4, background:'rgba(34,197,94,0.05)' }}>
+                  ✓ {selected.name} — No further actions needed
+                </div>
+              )
+            ) : (
+              <div style={{ color:'#1e3050', fontSize:10, padding:'8px 14px' }}>
+                ← Select an item on the map to see available actions
+              </div>
+            )}
+          </div>
+
+          {/* Simulate button */}
+          <button onClick={handleSimulate}
+            style={{ padding:'10px 24px', borderRadius:4, fontFamily:MONO, fontSize:13, fontWeight:700,
+                     letterSpacing:2, cursor:'pointer', flexShrink:0, alignSelf:'center',
+                     border:'2px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444',
+                     boxShadow:'0 0 16px rgba(239,68,68,0.2)' }}>
+            ▶ SIMULATE LANDFALL
+          </button>
+        </div>
+
+        {/* Time used bar */}
+        <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
+          <span style={{ fontSize:8, color:'#1e3050', letterSpacing:1 }}>TIME USED</span>
+          <div style={{ flex:1, height:4, background:'#0a0a0a', border:'1px solid #141414', borderRadius:2, overflow:'hidden' }}>
+            <div style={{ height:'100%', borderRadius:2, width:`${(1-timePct)*100}%`, background:timeColor, transition:'width 0.3s' }}/>
+          </div>
+          <span style={{ color:'#2a4055', fontSize:8 }}>{120-s.timeRemaining}m used</span>
+          <span style={{ color:timeColor, fontSize:8, fontWeight:700 }}>{s.timeRemaining}m remaining</span>
         </div>
       </div>
     </div>
   )
-}
-
-const s = {
-  screen: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    minHeight: '100vh', padding: 24, color: '#f1f5f9',
-    background: 'linear-gradient(135deg, #0a0e1a 0%, #1a1a2e 100%)',
-  },
-  introCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    maxWidth: 560, padding: 48, background: 'rgba(255,255,255,0.04)',
-    borderRadius: 16, border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center', color: '#f1f5f9',
-  },
-  introTitle: { fontSize: 28, fontWeight: 800, marginTop: 16, marginBottom: 20, color: '#f1f5f9' },
-  introBody: { textAlign: 'left', lineHeight: 1.8, fontSize: 15, color: '#cbd5e1' },
-  introList: { marginTop: 8, paddingLeft: 20, listStyle: 'disc', color: '#e2e8f0' },
-  goBtn: {
-    marginTop: 28, padding: '14px 40px', fontSize: 17, fontWeight: 700,
-    background: 'linear-gradient(135deg, #16a34a, #22c55e)', color: '#fff',
-    border: 'none', borderRadius: 12, cursor: 'pointer',
-    boxShadow: '0 4px 20px rgba(22,163,74,0.4)',
-  },
-  gameContainer: {
-    minHeight: '100vh', display: 'flex', flexDirection: 'column',
-    background: 'linear-gradient(180deg, #0a0e1a 0%, #0f172a 100%)', color: '#f1f5f9',
-  },
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.06)',
-    background: 'rgba(0,0,0,0.3)',
-  },
-  gameTitle: { fontSize: 20, fontWeight: 700, color: '#f1f5f9' },
-  timer: { fontSize: 28, fontWeight: 800, fontFamily: 'monospace' },
-  backBtnSmall: { background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontSize: 13 },
-  progressBar: {
-    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 24px',
-    background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.04)',
-  },
-  progressTrack: {
-    flex: 1, height: 8, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%', background: 'linear-gradient(90deg, #22c55e, #4ade80)', borderRadius: 4,
-    transition: 'width 0.3s',
-  },
-  gameLayout: {
-    display: 'flex', flex: 1, overflow: 'hidden',
-  },
-  yardPanel: {
-    flex: 1, padding: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  yard: {
-    width: '100%', maxWidth: 550, aspectRatio: '4/3', position: 'relative',
-  },
-  yardGrass: {
-    width: '100%', height: '100%', position: 'relative',
-    background: 'linear-gradient(180deg, #14532d 0%, #166534 50%, #15803d 100%)',
-    borderRadius: 12, border: '2px solid rgba(255,255,255,0.1)', overflow: 'hidden',
-  },
-  houseIcon: {
-    position: 'absolute', top: 4, left: '50%', transform: 'translateX(-50%)',
-    background: 'rgba(30,41,59,0.9)', padding: '4px 12px', borderRadius: 6,
-    fontSize: 12, fontWeight: 700, color: '#f1f5f9', zIndex: 5,
-  },
-  fence: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, fontSize: 10,
-    letterSpacing: -2, lineHeight: 1, padding: '2px 4px', opacity: 0.5,
-  },
-  actionPanel: {
-    width: 300, minWidth: 260, padding: 20, display: 'flex', flexDirection: 'column',
-    background: 'rgba(255,255,255,0.02)', borderLeft: '1px solid rgba(255,255,255,0.06)',
-    overflowY: 'auto',
-  },
-  selectedHeader: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginBottom: 16,
-    padding: 16, background: 'rgba(251,191,36,0.08)', borderRadius: 12,
-    border: '1px solid rgba(251,191,36,0.2)',
-  },
-  actionList: { display: 'flex', flexDirection: 'column', gap: 10 },
-  actionBtn: {
-    padding: '14px 16px', borderRadius: 10, border: '2px solid',
-    background: 'transparent', cursor: 'pointer', transition: 'all 0.2s',
-    textAlign: 'left',
-  },
-  noSelection: {
-    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
-    justifyContent: 'center', textAlign: 'center',
-  },
-  legend: {
-    marginTop: 'auto', paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.06)',
-    display: 'flex', flexDirection: 'column', gap: 6,
-  },
-  legendItem: { fontSize: 11, color: '#94a3b8', lineHeight: 1.5 },
-  resultCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    maxWidth: 640, width: '100%', padding: 40, background: 'rgba(255,255,255,0.04)',
-    borderRadius: 16, border: '1px solid rgba(255,255,255,0.08)',
-    maxHeight: '90vh', overflowY: 'auto', color: '#f1f5f9',
-  },
-  resultTitle: { fontSize: 28, fontWeight: 800, marginTop: 8 },
-  scoreText: { fontSize: 16, marginTop: 8, color: '#cbd5e1' },
-  educationBox: {
-    marginTop: 20, padding: 20, background: 'rgba(59,130,246,0.08)', borderRadius: 12,
-    border: '1px solid rgba(59,130,246,0.2)', width: '100%',
-  },
-  reviewItem: {
-    padding: '12px 14px', marginBottom: 8, borderRadius: 6,
-    background: 'rgba(255,255,255,0.03)', borderLeft: '3px solid',
-  },
-  retryBtn: {
-    padding: '10px 28px', fontSize: 15, fontWeight: 600,
-    background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff',
-    border: 'none', borderRadius: 8, cursor: 'pointer',
-  },
-  backBtn: {
-    padding: '10px 28px', fontSize: 15, fontWeight: 600,
-    background: '#334155', color: '#e0e0e0',
-    border: 'none', borderRadius: 8, cursor: 'pointer',
-  },
 }

@@ -1,683 +1,859 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+/**
+ * Module 4 — Sinking Car: Hydrostatic QTE Simulator
+ * Aesthetic  : Tactical Command Center — #0a0a0a, cyan/amber/crimson, JetBrains Mono
+ * Physics    : 100ms game loop · vehicle pitch · hydrostatic equalization · O₂ depletion
+ * References : FMVSS-205 (windshield), FMVSS-226 (side windows), NFPA 1670, Red Cross
+ */
+import { useReducer, useEffect, useRef } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const WATER_RISE_RATE = 0.4 // % per 100ms base rate
-const WRONG_PENALTY = 8 // % water jump on wrong choice
-const MAX_WATER = 100
+const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
 
-function shuffleChoices(choices) {
-  const a = [...choices]
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[a[i], a[j]] = [a[j], a[i]]
-  }
-  return a
+// ─── Physics constants ────────────────────────────────────────────────────────
+const TICK_MS         = 100
+const PITCH_RATE      = 0.038    // deg/tick → 45° at ~1184 ticks (118 s)
+const EXT_RATE        = 0.005    // ft/tick  → 6 ft at 1200 ticks
+const LEAK_COEFF      = 0.008    // fraction/tick (int chases ext)
+const O2_BASE         = 0.025    // %/tick normal breathing
+const O2_FLOOD_EXTRA  = 0.07     // %/tick extra when front ceiling submerged
+const O2_PANIC_COEFF  = 0.0008   // extra O2/tick per BPM above 80
+const PANIC_RISE      = 0.04     // BPM/tick passive
+const PANIC_BUCKLE_FAIL = 15     // BPM spike
+const PANIC_GLASS_FAIL  = 22     // BPM spike on laminated bounce
+const PANIC_BREATHE   = -10      // BPM delta on Breathe & Brace
+const FRONT_CEIL_FT   = 4.0
+const REAR_CEIL_FT    = 4.8
+const TENSIONER_DEG   = 20       // pitch at which seatbelt tensioner locks
+const MAX_TIME_S      = 175      // hard fail if not escaped
+
+// ─── Reducer ──────────────────────────────────────────────────────────────────
+const INIT = {
+  phase:          'briefing',  // briefing|running|escaped|failed
+  tick:           0,
+  timeS:          0,
+  pitchAngle:     0,
+  extDepth:       0,
+  intWater:       0,
+  playerLoc:      'FRONT',     // FRONT|REAR
+  isBuckled:      true,
+  o2:             100,
+  bpm:            80,
+  tool:           null,        // null|'punch'|'cutter'
+  rearSmashed:    false,
+  doorForce:      0,
+  flash:          null,        // null|{target,timer}
+  shake:          false,
+  shakeTimer:     0,
+  log:            [],
+  finalScore:     null,
+  failReason:     null,
 }
 
-const STEPS = [
-  {
-    id: 'calm',
-    title: 'Stay Calm',
-    instruction: '😰 The car is sinking! Water is seeping in. What do you do first?',
-    emoji: '🧘',
-    choices: [
-      { id: 'calm', label: '🧘 Stay Calm — Control Breathing', correct: true, feedback: '✅ Correct! Panic causes hyperventilation and poor decisions. Taking 3 deep breaths gives you clarity. You have more time than you think — a car takes 1-2 minutes to fill.' },
-      { id: 'panic', label: '😱 PANIC! Scream for Help!', correct: false, feedback: '❌ Panicking wastes oxygen and clouds your judgment. In a submerging car, you have about 60-120 seconds. Staying calm is step #1 — it could save your life.' },
-      { id: 'call911', label: '📱 Call 911 Immediately', correct: false, feedback: '❌ Calling 911 takes precious time. By the time help arrives, the car will be fully submerged. You must act NOW — self-rescue is your only option in the first 60 seconds.' },
-      { id: 'open_door', label: '🚪 Try to Force Open the Door', correct: false, feedback: '❌ Water pressure makes the door immovable. Even 1 foot of water creates 500 lbs of force on a car door. Save your energy for escape through the window.' },
-    ],
-  },
-  {
-    id: 'seatbelt',
-    title: 'Remove Seatbelt',
-    instruction: '🚗 You\'re calm. The water is ankle-deep inside the car. Next step?',
-    emoji: '🔓',
-    choices: [
-      { id: 'seatbelt', label: '🔓 Unbuckle Your Seatbelt', correct: true, feedback: '✅ Correct! Your seatbelt traps you in the seat. Unbuckling is step #2. Many drowning victims are found still buckled in — they panicked and forgot this simple step.' },
-      { id: 'door', label: '🚪 Try to Open the Door', correct: false, feedback: '❌ The door won\'t open! Water pressure outside pushes against it with hundreds of pounds of force. Even a strong adult can\'t push it open. You\'d waste energy and time.' },
-      { id: 'window_early', label: '🪟 Roll Down the Window', correct: false, feedback: '❌ Good instinct, but you\'re still buckled! If you open the window while strapped in, water rushes in and you can\'t maneuver. Unbuckle FIRST, then deal with the window.' },
-      { id: 'backseat', label: '🔙 Climb to the Back Seat', correct: false, feedback: '❌ Moving to the back seat only delays drowning — it doesn\'t solve the problem. Unbuckle first, then focus on getting OUT of the vehicle entirely.' },
-    ],
-  },
-  {
-    id: 'glovebox',
-    title: 'Find a Tool',
-    instruction: '🔓 Seatbelt is off. Water is rising to your knees. You need to break the window!',
-    emoji: '🧰',
-    choices: [
-      { id: 'glovebox', label: '🧰 Check Glovebox for Glass Breaker / Use Headrest', correct: true, feedback: '✅ Correct! A glass breaker tool, or even the metal prongs of your headrest, can shatter tempered glass. Always keep a glass breaker in your car — it\'s a $10 life-saver.' },
-      { id: 'fist', label: '👊 Punch the Window', correct: false, feedback: '❌ Car windows are tempered glass — incredibly strong against blunt force. You\'ll break your hand before the glass. You need a pointed tool that concentrates force on a tiny area.' },
-      { id: 'phone', label: '📱 Use Your Phone to Break It', correct: false, feedback: '❌ A phone is too flat and light to break tempered glass. You need something with a sharp, hard point — like a glass breaker tool or the metal prongs of your headrest.' },
-      { id: 'kick', label: '🦵 Kick the Window', correct: false, feedback: '❌ Kicking a car window while seated is nearly impossible due to the angle. Even standing outside, tempered glass resists blunt force. You need a pointed tool to concentrate force.' },
-      { id: 'elbow', label: '💪 Use Your Elbow', correct: false, feedback: '❌ Your elbow can\'t generate enough concentrated force to break tempered glass. You\'ll injure yourself. The metal prongs on a headrest are designed to work as an emergency glass breaker.' },
-    ],
-  },
-  {
-    id: 'breakwindow',
-    title: 'Break the Window',
-    instruction: '🧰 You have a tool! Water is at chest level. Where do you strike?',
-    emoji: '💥',
-    choices: [
-      { id: 'window_corner', label: '💥 Strike the CORNER of the Side Window', correct: true, feedback: '✅ Correct! Tempered glass is weakest at its corners. One sharp strike to the corner shatters the entire pane. Always aim for side windows — windshields are laminated and won\'t break the same way.' },
-      { id: 'window_center', label: '💥 Strike the CENTER of the Window', correct: false, feedback: '❌ The center of tempered glass is its strongest point — it flexes and absorbs impacts. Hit the CORNER where stress concentrations are highest. One strike to the corner shatters it all.' },
-      { id: 'windshield', label: '💥 Break the Windshield', correct: false, feedback: '❌ Windshields are LAMINATED glass (two layers bonded with plastic). They crack but don\'t shatter — you\'d waste all your energy and still be trapped. Always target the SIDE windows!' },
-      { id: 'rear_window', label: '💥 Break the Rear Window', correct: false, feedback: '❌ The rear window is harder to reach from the driver seat. Focus on your nearest side window — every second counts when water is rising to your chest.' },
-    ],
-  },
-  {
-    id: 'waterentry',
-    title: 'Water Rushes In!',
-    instruction: '💥 Window is broken and water is pouring in fast! The car is filling rapidly!',
-    emoji: '🌊',
-    choices: [
-      { id: 'deep_breath', label: '🫁 Take One Deep Breath Before Water Covers Your Face', correct: true, feedback: '✅ Critical! Take the deepest breath you can while your head is still above water. This gives you 30-60 seconds of air to pull yourself out and swim to the surface.' },
-      { id: 'close_eyes', label: '😣 Close Your Eyes and Wait', correct: false, feedback: '❌ Closing your eyes and waiting wastes your air supply. Take a breath while you can and MOVE. The window is your exit — go NOW.' },
-      { id: 'plug_window', label: '🤚 Try to Block the Water with Your Hands', correct: false, feedback: '❌ You can\'t stop water rushing through a broken window. The pressure is enormous. Use this moment to take a breath and escape.' },
-      { id: 'float', label: '🏊 Let the Water Lift You to the Roof for Air', correct: false, feedback: '❌ Air pockets in sinking cars are unreliable and tiny. Don\'t wait — take a breath NOW and swim out through the window while you still can.' },
-    ],
-  },
-  {
-    id: 'escape',
-    title: 'Escape!',
-    instruction: '🫁 You have a lungful of air. The window is open. Go!',
-    emoji: '🏊',
-    choices: [
-      { id: 'swim_out', label: '🏊 Pull Yourself Out Through the Window', correct: true, feedback: '✅ You made it out! Pull yourself through the window frame (watch for glass edges), and push away from the sinking car immediately.' },
-      { id: 'grab_stuff', label: '🎒 Grab Your Belongings First', correct: false, feedback: '❌ Belongings can be replaced — your life cannot. Every second you spend grabbing items is a second closer to drowning. Get OUT immediately through the window.' },
-      { id: 'wait', label: '⏳ Wait for the Car to Fill Completely', correct: false, feedback: '❌ While it\'s true that equalizing pressure lets you open the door, waiting that long is extremely dangerous. You might run out of air. The broken window is your exit — use it NOW.' },
-    ],
-  },
-  {
-    id: 'surface',
-    title: 'Reach the Surface',
-    instruction: '🏊 You\'re out of the car! But which direction is up? It\'s dark and disorienting underwater.',
-    emoji: '⬆️',
-    choices: [
-      { id: 'follow_bubbles', label: '🫧 Follow Your Air Bubbles Upward', correct: true, feedback: '✅ Perfect! Air bubbles always rise toward the surface. If you\'re disoriented underwater, exhale a small amount and follow the bubbles up. Once at the surface, swim perpendicular to any current toward shore.' },
-      { id: 'swim_random', label: '🏊 Swim in Any Direction Fast', correct: false, feedback: '❌ Panic swimming in a random direction can send you deeper. You could swim into the car or along the bottom. Follow your bubbles — they always go UP.' },
-      { id: 'grab_car', label: '🚗 Hold Onto the Car', correct: false, feedback: '❌ The car is sinking! It will pull you down. Let go immediately, follow your bubbles to the surface, then swim away from the vehicle.' },
-    ],
-  },
-]
+function reducer(s, a) {
+  switch (a.type) {
 
-export default function SinkingCarModule() {
-  const { state, dispatch } = useGame()
+    // ── 100ms game tick ────────────────────────────────────────────────────
+    case 'TICK': {
+      if (s.phase !== 'running') return s
+      const tick = s.tick + 1
+      const timeS = +(tick * 0.1).toFixed(1)
+      let { pitchAngle, extDepth, intWater, o2, bpm, flash, shake, shakeTimer } = s
 
-  const [phase, setPhase] = useState('intro')
-  const [currentStep, setCurrentStep] = useState(0)
-  const [waterLevel, setWaterLevel] = useState(0)
-  const [wrongChoices, setWrongChoices] = useState(0)
-  const [feedbackMsg, setFeedbackMsg] = useState(null)
-  const [completedSteps, setCompletedSteps] = useState([])
-  const [result, setResult] = useState(null)
-  const [gameActive, setGameActive] = useState(false)
-  const waterRef = useRef(0)
-  const speedMultiplier = useRef(1)
-  const animFrameRef = useRef(null)
-  const lastTimeRef = useRef(null)
-  const drownedRef = useRef(false)
-  const completedStepsRef = useRef([])
-  const currentStepRef = useRef(0)
-  const wrongChoicesRef = useRef(0)
+      pitchAngle = Math.min(46, pitchAngle + PITCH_RATE)
+      extDepth   = Math.min(8, extDepth + EXT_RATE)
+      intWater   = Math.min(extDepth, intWater + (extDepth - intWater) * LEAK_COEFF)
 
-  const finishGame = useCallback((survived) => {
-    setGameActive(false)
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+      const pitchRad    = pitchAngle * Math.PI / 180
+      const frontWL     = intWater * (1 + 0.48 * Math.sin(pitchRad))
+      const frontFlooded= frontWL >= FRONT_CEIL_FT && s.playerLoc === 'FRONT'
 
-    const stepsCompleted = completedStepsRef.current.length + (survived && currentStepRef.current === STEPS.length - 1 ? 1 : 0)
-    const wrongs = wrongChoicesRef.current
-    const score = survived
-      ? Math.max(0, Math.min(100, 100 - wrongs * 15 - Math.floor(waterRef.current / 3)))
-      : Math.max(0, stepsCompleted * 10 - wrongs * 5)
-    const passed = survived
+      let o2Drain = O2_BASE + Math.max(0, bpm - 80) * O2_PANIC_COEFF
+      if (frontFlooded) o2Drain += O2_FLOOD_EXTRA
+      o2  = Math.max(0, o2 - o2Drain)
+      bpm = Math.min(200, bpm + PANIC_RISE + (frontFlooded ? 0.15 : 0))
 
-    const res = { passed, score, stepsCompleted, wrongChoices: wrongs, waterLevel: Math.round(waterRef.current), survived }
-    setResult(res)
-    setPhase('result')
+      const doorForce = Math.max(0, (extDepth - intWater) * 620)
 
-    dispatch({
-      type: 'RECORD_SCORE',
-      payload: { key: `${state.selectedDisaster}-4`, result: { score, passed } },
-    })
-  }, [dispatch, state.selectedDisaster])
+      if (flash && --flash.timer <= 0) flash = null
+      if (shakeTimer > 0 && --shakeTimer <= 0) shake = false
 
-  // Water rising animation loop
-  useEffect(() => {
-    if (!gameActive || feedbackMsg) return
+      if (o2 <= 0)
+        return { ...s, tick, timeS, pitchAngle, extDepth, intWater, o2: 0, bpm, doorForce,
+                 phase: 'failed', failReason: 'HYPOXIC BLACKOUT — O₂ DEPLETED' }
+      if (timeS >= MAX_TIME_S)
+        return { ...s, tick, timeS, pitchAngle, extDepth, intWater, o2, bpm, doorForce,
+                 phase: 'failed', failReason: 'VEHICLE FULLY SUBMERGED' }
 
-    const tick = (timestamp) => {
-      if (!lastTimeRef.current) lastTimeRef.current = timestamp
-      const delta = timestamp - lastTimeRef.current
-      lastTimeRef.current = timestamp
+      return { ...s, tick, timeS, pitchAngle, extDepth, intWater, o2, bpm, doorForce, flash, shake, shakeTimer }
+    }
 
-      // Rise based on delta time
-      const rise = (delta / 100) * WATER_RISE_RATE * speedMultiplier.current
-      waterRef.current = Math.min(MAX_WATER, waterRef.current + rise)
-      setWaterLevel(waterRef.current)
+    case 'START':  return { ...INIT, phase: 'running' }
+    case 'RESET':  return { ...INIT }
 
-      if (waterRef.current >= MAX_WATER) {
-        // Game over - drowned; set flag and deactivate, handled by separate useEffect
-        drownedRef.current = true
-        setGameActive(false)
-        return
+    case 'SELECT_TOOL':
+      return { ...s, tool: s.tool === a.t ? null : a.t }
+
+    // ── Player actions ─────────────────────────────────────────────────────
+    case 'UNBUCKLE': {
+      if (!s.isBuckled) return s
+      if (s.pitchAngle > TENSIONER_DEG) {
+        const log = [`⚠ [${s.timeS}s] SEATBELT LOCKED — tensioner engaged at ${s.pitchAngle.toFixed(1)}°. Equip Hook Cutter.`, ...s.log.slice(0, 5)]
+        return { ...s, bpm: Math.min(200, s.bpm + PANIC_BUCKLE_FAIL), log }
       }
-
-      animFrameRef.current = requestAnimationFrame(tick)
+      return { ...s, isBuckled: false, log: [`✓ [${s.timeS}s] Seatbelt released manually.`, ...s.log.slice(0, 5)] }
     }
 
-    animFrameRef.current = requestAnimationFrame(tick)
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
-      lastTimeRef.current = null
+    case 'USE_CUTTER': {
+      if (s.tool !== 'cutter' || !s.isBuckled) return s
+      return {
+        ...s, isBuckled: false, tool: null,
+        o2: Math.max(0, s.o2 - 1.5),
+        log: [`✓ [${s.timeS}s] Hook Cutter deployed — belt severed.`, ...s.log.slice(0, 5)],
+      }
     }
-  }, [gameActive, feedbackMsg])
 
-  // Handle drowned game-over when gameActive transitions to false
-  useEffect(() => {
-    if (!gameActive && drownedRef.current && phase === 'game') {
-      drownedRef.current = false
-      finishGame(false)
-    }
-  }, [gameActive, phase, finishGame])
-
-  const handleChoice = useCallback((choice) => {
-    if (!gameActive) return
-
-    if (choice.correct) {
-      setFeedbackMsg({ text: choice.feedback, correct: true })
-      const newCompleted = [...completedStepsRef.current, STEPS[currentStepRef.current].id]
-      completedStepsRef.current = newCompleted
-      setCompletedSteps(newCompleted)
-
-      const stepAtChoice = currentStepRef.current
-      setTimeout(() => {
-        setFeedbackMsg(null)
-        if (stepAtChoice >= STEPS.length - 1) {
-          finishGame(true)
-        } else {
-          const next = stepAtChoice + 1
-          currentStepRef.current = next
-          setCurrentStep(next)
+    case 'MOVE_REAR': {
+      if (s.isBuckled || s.playerLoc === 'REAR') return s
+      const frontWL = s.intWater * (1 + 0.48 * Math.sin(s.pitchAngle * Math.PI / 180))
+      if (frontWL >= FRONT_CEIL_FT) {
+        return {
+          ...s, bpm: Math.min(200, s.bpm + 12),
+          log: [`✗ [${s.timeS}s] BLOCKED — front cabin fully submerged.`, ...s.log.slice(0, 5)],
         }
-      }, 2500)
-    } else {
-      wrongChoicesRef.current += 1
-      setWrongChoices(wrongChoicesRef.current)
-      speedMultiplier.current = Math.min(3, speedMultiplier.current + 0.3)
-      // Add penalty water
-      waterRef.current = Math.min(MAX_WATER, waterRef.current + WRONG_PENALTY)
-      setWaterLevel(waterRef.current)
-      setFeedbackMsg({ text: choice.feedback, correct: false })
-
-      setTimeout(() => {
-        setFeedbackMsg(null)
-        if (waterRef.current >= MAX_WATER) {
-          drownedRef.current = true
-          setGameActive(false)
-        }
-      }, 2500)
+      }
+      return { ...s, playerLoc: 'REAR', log: [`✓ [${s.timeS}s] Relocated to REAR seat.`, ...s.log.slice(0, 5)] }
     }
-  }, [gameActive, finishGame])
 
-  const startGame = () => {
-    setPhase('game')
-    setCurrentStep(0)
-    currentStepRef.current = 0
-    setWaterLevel(0)
-    waterRef.current = 0
-    speedMultiplier.current = 1
-    setWrongChoices(0)
-    wrongChoicesRef.current = 0
-    setFeedbackMsg(null)
-    setCompletedSteps([])
-    completedStepsRef.current = []
-    setResult(null)
-    drownedRef.current = false
-    setGameActive(true)
-    lastTimeRef.current = null
+    case 'STRIKE': {
+      const { target } = a
+      if (s.tool !== 'punch') {
+        return { ...s, log: [`✗ [${s.timeS}s] No tool selected. Equip Center Punch.`, ...s.log.slice(0, 5)] }
+      }
+      if (target === 'REAR') {
+        return {
+          ...s, rearSmashed: true, tool: null, flash: { target: 'REAR', timer: 10 },
+          log: [`✓ [${s.timeS}s] TEMPERED GLASS SHATTERED — escape route open!`, ...s.log.slice(0, 5)],
+        }
+      }
+      const msg = target === 'WINDSHIELD'
+        ? `✗ [${s.timeS}s] WINDSHIELD LAMINATED (FMVSS-205) — punch deflected. Tool bounced back.`
+        : `✗ [${s.timeS}s] SIDE WINDOW LAMINATED (FMVSS-226) — shatterproof. Target rear window.`
+      return {
+        ...s,
+        bpm: Math.min(200, s.bpm + PANIC_GLASS_FAIL),
+        o2:  Math.max(0, s.o2 - 1.0),
+        flash: { target, timer: 10 },
+        shake: true, shakeTimer: 8,
+        log: [msg, ...s.log.slice(0, 5)],
+      }
+    }
+
+    case 'BREATHE': {
+      return {
+        ...s, bpm: Math.max(70, s.bpm + PANIC_BREATHE),
+        log: [`○ [${s.timeS}s] Breathe & Brace — controlled breathing activated.`, ...s.log.slice(0, 5)],
+      }
+    }
+
+    case 'ESCAPE': {
+      if (s.isBuckled || s.playerLoc !== 'REAR') return s
+      if (!s.rearSmashed && s.doorForce >= 80) return s
+      const score = Math.min(100, Math.max(0, Math.round(s.o2 * 0.55 + (1 - s.timeS / MAX_TIME_S) * 45)))
+      return { ...s, phase: 'escaped', finalScore: score }
+    }
+
+    default: return s
   }
+}
 
-  const restart = () => {
-    startGame()
-  }
+// ─── Car SVG component ────────────────────────────────────────────────────────
+function CarSchematic({ s }) {
+  const pitchRad   = s.pitchAngle * Math.PI / 180
+  const frontWL    = s.intWater * (1 + 0.48 * Math.sin(pitchRad))
+  const rearWL     = s.intWater * (1 - 0.30 * Math.sin(pitchRad))
 
-  // ── Hooks that must be called unconditionally (Rules of Hooks) ──
-  // useMemo must NOT be after an early return — keep it here always
-  const safeStep = STEPS[Math.min(currentStep, STEPS.length - 1)]
-  const shuffledChoices = useMemo(
-    () => shuffleChoices(safeStep.choices),
-    [currentStep] // eslint-disable-line react-hooks/exhaustive-deps
-  )
-  const waterPercent = Math.round(waterLevel)
-  const waterColor = waterLevel > 70 ? '#dc2626' : waterLevel > 40 ? '#f59e0b' : '#3b82f6'
+  // SVG interior dimensions
+  const FL  = 205  // floor Y
+  const CL  = 72   // ceiling Y
+  const IH  = FL - CL  // interior height pixels (133)
+  const FX  = 128  // front wall X (A-pillar)
+  const BX  = 355  // B-pillar X
+  const RX  = 562  // rear wall X (C-pillar)
 
-  // ── INTRO ──
-  if (phase === 'intro') {
-    return (
-      <div style={s.screen}>
-        <div style={s.introCard}>
-          <span style={{ fontSize: 64 }}>🚗</span>
-          <h1 style={s.introTitle}>Module 4: The Sinking Car</h1>
-          <div style={s.introBody}>
-            <p><strong>Scenario:</strong> You drove into floodwater and your car is <span style={{ color: '#f87171', fontWeight: 700 }}>rapidly sinking</span>. Water is pouring in. You must escape before it fills completely.</p>
-            <p style={{ marginTop: 12 }}><strong>How to play:</strong></p>
-            <ul style={s.introList}>
-              <li>🌊 Water rises constantly — wrong choices make it rise FASTER</li>
-              <li>Complete 7 escape steps in the correct order</li>
-              <li>Each step has multiple options — only ONE is correct</li>
-              <li>If water reaches the top, you drown — GAME OVER</li>
-            </ul>
-            <div style={{ marginTop: 16, padding: 12, background: 'rgba(239,68,68,0.1)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.3)' }}>
-              <p style={{ color: '#fca5a5', fontSize: 14, margin: 0 }}>
-                ⚠️ <strong>Real stat:</strong> Nearly half of all flood deaths in the US involve vehicles. Just 6 inches of moving water can knock you down. 12 inches can carry away a car.
-              </p>
-            </div>
-          </div>
-          <button style={s.goBtn} onClick={startGame}>
-            🚗 Enter the Sinking Car!
-          </button>
-          <button style={s.backBtnSmall} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-            ← Back to Modules
-          </button>
-        </div>
-      </div>
-    )
-  }
+  // Water pixel heights (from floor upward)
+  const frontWPx = Math.min(IH, (frontWL / FRONT_CEIL_FT) * IH)
+  const rearWPx  = Math.min(IH, (rearWL  / REAR_CEIL_FT)  * IH)
 
-  // ── RESULT ──
-  if (phase === 'result' && result) {
-    return (
-      <div style={s.screen}>
-        <div style={s.resultCard}>
-          <span style={{ fontSize: 56 }}>{result.survived ? '🏊' : '💀'}</span>
-          <h2 style={{ ...s.resultTitle, color: result.survived ? '#22c55e' : '#ef4444' }}>
-            {result.survived ? 'YOU ESCAPED!' : 'YOU DROWNED'}
-          </h2>
-          <p style={s.scoreText}>
-            Score: <strong>{result.score}%</strong> — {result.stepsCompleted}/{STEPS.length} steps completed, {result.wrongChoices} wrong choices
-          </p>
-          {!result.survived && (
-            <div style={s.failBox}>
-              <strong>Water level: {result.waterLevel}%</strong> — The car filled before you could escape.
-              {result.wrongChoices > 0 && ` Your ${result.wrongChoices} wrong choice(s) made water rise faster.`}
-            </div>
-          )}
+  // Internal water polygon (slanted, pools forward)
+  const intWaterPoly = [
+    `${FX},${FL}`, `${RX},${FL}`,
+    `${RX},${FL - rearWPx}`, `${FX},${FL - frontWPx}`,
+  ].join(' ')
 
-          <div style={s.educationBox}>
-            <h3 style={{ color: '#60a5fa', marginBottom: 12, fontSize: 16 }}>📚 The 7-Step Car Escape Protocol</h3>
-            <p style={{ color: '#94a3b8', fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
-              Memorize this sequence: <strong style={{ color: '#fbbf24' }}>SCUBA</strong> — Stay calm, C(seatbelt) off, Undo window, Break glass, Away (swim out)
-            </p>
-            {STEPS.map((step, i) => {
-              const completed = completedSteps.includes(step.id)
-              return (
-                <div key={step.id} style={{ ...s.stepReview, borderLeftColor: completed ? '#22c55e' : '#64748b' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 10, fontWeight: 800, color: '#0f172a', background: completed ? '#22c55e' : '#64748b', borderRadius: '50%', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{i + 1}</span>
-                    <strong style={{ color: '#f1f5f9', fontSize: 15 }}>{step.emoji} {step.title}</strong>
-                    <span style={{ marginLeft: 'auto', fontSize: 12, color: completed ? '#4ade80' : '#94a3b8' }}>
-                      {completed ? '✅ Completed' : '❌ Not reached'}
-                    </span>
-                  </div>
-                  <p style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, margin: 0 }}>
-                    {step.choices.find(c => c.correct).feedback}
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-
-          <div style={{ marginTop: 16, padding: 16, background: 'rgba(251,191,36,0.08)', borderRadius: 10, border: '1px solid rgba(251,191,36,0.2)', width: '100%' }}>
-            <p style={{ color: '#fde68a', fontSize: 14, lineHeight: 1.7, margin: 0 }}>
-              🚗 <strong>Prevention is key:</strong> NEVER drive into floodwater. "Turn Around, Don't Drown" — you cannot judge depth or current from the surface. Keep a glass breaker tool in your car at all times.
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 24 }}>
-            <button style={s.retryBtn} onClick={restart}>Try Again</button>
-            <button style={s.backBtn} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-              Back to Modules
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── GAME ──
-  const step = safeStep
+  const flashColor = s.flash?.target === 'REAR' ? '#00ff88' : '#ffffff'
 
   return (
-    <div style={s.gameContainer}>
-      <div style={s.header}>
-        <button style={s.backBtnSmall} onClick={() => { setGameActive(false); dispatch({ type: 'BACK_TO_MODULES' }) }}>← Quit</button>
-        <h2 style={s.gameTitle}>🚗 Escape the Sinking Car!</h2>
-        <div style={{ fontSize: 14, color: '#f87171', fontWeight: 700 }}>
-          💀 Wrong choices: {wrongChoices}
-        </div>
-      </div>
+    <svg viewBox="0 0 720 280" style={{ width: '100%', height: '100%' }}>
+      {/* Flash overlay on glass hit */}
+      {s.flash && (
+        <circle
+          cx={s.flash.target === 'WINDSHIELD' ? 240 : s.flash.target === 'SIDE' ? 340 : 460}
+          cy={140}
+          r={s.flash.timer * 14}
+          fill={flashColor}
+          opacity={s.flash.timer * 0.09}
+        />
+      )}
 
-      {/* Step progress */}
-      <div style={s.stepProgress}>
-        {STEPS.map((st, i) => {
-          const done = completedSteps.includes(st.id)
-          const active = i === currentStep
-          return (
-            <div key={st.id} style={{
-              ...s.stepDot,
-              background: done ? '#22c55e' : active ? '#fbbf24' : 'rgba(255,255,255,0.1)',
-              borderColor: done ? '#22c55e' : active ? '#fbbf24' : 'rgba(255,255,255,0.2)',
-              transform: active ? 'scale(1.2)' : 'scale(1)',
-            }}>
-              <span style={{ fontSize: 14 }}>{done ? '✅' : st.emoji}</span>
-              <span style={{ fontSize: 9, color: done ? '#4ade80' : active ? '#fde68a' : '#94a3b8', whiteSpace: 'nowrap' }}>{st.title}</span>
-            </div>
-          )
-        })}
-      </div>
+      {/* ── Background earth/water ── */}
+      <rect width={720} height={280} fill="#060606"/>
+      {/* External flood water */}
+      {s.extDepth > 0 && (
+        <rect x={0} y={Math.max(0, 280 - s.extDepth * 38)} width={720}
+              height={s.extDepth * 38}
+              fill="rgba(29,78,216,0.38)"/>
+      )}
+      {/* Water surface wave line */}
+      {s.extDepth > 0.2 && (
+        <line x1={0} y1={280 - s.extDepth * 38} x2={720} y2={280 - s.extDepth * 38}
+              stroke="#60a5fa" strokeWidth={2}
+              style={{ animation: 'wave-h 2s ease-in-out infinite alternate' }}/>
+      )}
 
-      <div style={s.gameLayout}>
-        {/* Car scene with water */}
-        <div style={s.carScene}>
-          {/* Car body */}
-          <div style={s.carBody}>
-            {/* Interior */}
-            <div style={s.carInterior}>
-              {/* Dashboard */}
-              <div style={s.dashboard}>
-                <span style={{ fontSize: 18 }}>🔲</span>
-                <span style={{ fontSize: 14 }}>📻</span>
-                <span style={{ fontSize: 18 }}>🔲</span>
-              </div>
+      {/* ── Rotating car group (nose-down tilt) ── */}
+      <g style={{
+        transform: `rotate(${s.pitchAngle}deg)`,
+        transformOrigin: '128px 205px',
+        transition: 'transform 0.08s linear',
+      }}>
 
-              {/* Seats area */}
-              <div style={s.seatsArea}>
-                <div style={s.seat}>
-                  <span style={{ fontSize: 28 }}>🧑</span>
-                  <span style={{ fontSize: 11, color: '#fde68a' }}>YOU</span>
-                </div>
-                <div style={s.seatDivider} />
-                <div style={s.seat}>
-                  <span style={{ fontSize: 20 }}>💺</span>
-                </div>
-              </div>
+        {/* Car body fill */}
+        <path d="M 50,190 L 50,155 Q 70,120 128,78 L 562,78 Q 610,115 640,155 L 650,190 L 650,210 L 50,210 Z"
+              fill="rgba(8,20,12,0.92)"/>
 
-              {/* Glovebox indicator */}
-              {currentStep === 2 && (
-                <div style={s.gloveboxHighlight}>
-                  <span style={{ fontSize: 12 }}>🧰</span>
-                </div>
-              )}
+        {/* Body outline */}
+        <path d="M 50,190 L 50,155 Q 70,120 128,78 L 562,78 Q 610,115 640,155 L 650,190 L 650,210 L 50,210 Z"
+              fill="none" stroke="#00e5ff" strokeWidth="1.8"/>
 
-              {/* Window indicators */}
-              <div style={s.windowLeft}>
-                {currentStep >= 3 ? (
-                  <span style={{ color: '#ef4444', fontSize: 12, fontWeight: 700 }}>💥</span>
-                ) : (
-                  <span style={{ fontSize: 10, color: '#60a5fa' }}>🪟</span>
-                )}
-              </div>
-              <div style={s.windowRight}>
-                <span style={{ fontSize: 10, color: '#60a5fa' }}>🪟</span>
-              </div>
+        {/* ── Internal structure ── */}
+        {/* Floor */}
+        <line x1={FX} y1={FL} x2={RX} y2={FL} stroke="#00e5ff" strokeWidth="1.2" strokeDasharray="8,4"/>
+        {/* Ceiling */}
+        <line x1={FX} y1={CL} x2={RX} y2={CL} stroke="#00e5ff" strokeWidth="1.2" strokeDasharray="8,4"/>
 
-              {/* Rising water inside car */}
-              <div style={{
-                position: 'absolute', bottom: 0, left: 0, right: 0,
-                height: `${waterPercent}%`,
-                background: `linear-gradient(0deg, rgba(29,78,216,0.7) 0%, rgba(59,130,246,0.4) 100%)`,
-                transition: 'height 0.3s',
-                borderRadius: '0 0 8px 8px',
-                zIndex: 2,
-              }}>
-                {/* Water surface ripple */}
-                <div style={{
-                  position: 'absolute', top: -2, left: 0, right: 0, height: 4,
-                  background: 'rgba(147,197,253,0.5)',
-                  borderRadius: 2,
-                }} />
-              </div>
-            </div>
+        {/* B-pillar */}
+        <line x1={BX} y1={CL} x2={BX} y2={FL} stroke="#00e5ff" strokeWidth="2"/>
 
-            {/* Wheels */}
-            <div style={{ ...s.wheel, left: 20 }}>⚫</div>
-            <div style={{ ...s.wheel, right: 20 }}>⚫</div>
-          </div>
+        {/* A-pillar (windshield frame) */}
+        <line x1={FX} y1={CL} x2={FX} y2={FL} stroke="#00e5ff" strokeWidth="1.5"/>
 
-          {/* Water level gauge */}
-          <div style={s.waterGauge}>
-            <div style={s.gaugeLabel}>🌊 Water Level</div>
-            <div style={s.gaugeTrack}>
-              <div style={{
-                ...s.gaugeFill,
-                height: `${waterPercent}%`,
-                background: waterLevel > 70 ? 'linear-gradient(0deg, #dc2626, #ef4444)' : waterLevel > 40 ? 'linear-gradient(0deg, #f59e0b, #fbbf24)' : 'linear-gradient(0deg, #1d4ed8, #3b82f6)',
-              }} />
-            </div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: waterColor, fontFamily: 'monospace' }}>
-              {waterPercent}%
-            </div>
-            {waterLevel > 70 && (
-              <div style={{ fontSize: 11, color: '#ef4444', fontWeight: 700, animation: 'pulse 0.5s infinite alternate' }}>
-                ⚠️ CRITICAL
-              </div>
+        {/* C-pillar */}
+        <line x1={RX} y1={CL} x2={RX} y2={FL} stroke="#00e5ff" strokeWidth="1.5"/>
+
+        {/* ── Window fills ── */}
+        {/* Windshield zone (between nose and cabin) */}
+        <path d="M 80,170 L 128,78 L 128,78 L 50,155"
+              fill="rgba(0,229,255,0.04)" stroke="#00e5ff" strokeWidth="1" opacity="0.6"/>
+
+        {/* Front side window */}
+        <rect x={FX+2} y={CL+2} width={BX-FX-4} height={FL-CL-4}
+              fill={s.flash?.target==='WINDSHIELD'||s.flash?.target==='SIDE' ? 'rgba(255,255,255,0.06)' : 'rgba(0,229,255,0.03)'}
+              stroke={s.flash?.target==='SIDE' ? '#ef4444' : '#00e5ff'} strokeWidth="1" opacity="0.6"/>
+        {/* LAMINATED label on front window */}
+        <text x={(FX+BX)/2} y={CL+30} fill="#ef444466" fontSize="9" fontFamily="monospace"
+              textAnchor="middle" letterSpacing="1">LAMINATED</text>
+        <text x={(FX+BX)/2} y={CL+42} fill="#ef444455" fontSize="7" fontFamily="monospace"
+              textAnchor="middle">FMVSS-226</text>
+
+        {/* Rear side window */}
+        <rect x={BX+2} y={CL+2} width={RX-BX-4} height={FL-CL-4}
+              fill={s.rearSmashed ? 'rgba(34,197,94,0.08)' : 'rgba(0,229,255,0.03)'}
+              stroke={s.rearSmashed ? '#22c55e' : s.flash?.target==='REAR' ? '#22c55e' : '#00e5ff'}
+              strokeWidth="1" opacity="0.7"/>
+        {s.rearSmashed ? (
+          <>
+            <text x={(BX+RX)/2} y={CL+30} fill="#22c55e" fontSize="10" fontFamily="monospace"
+                  textAnchor="middle" letterSpacing="1">SHATTERED</text>
+            <text x={(BX+RX)/2} y={CL+44} fill="#22c55e88" fontSize="8" fontFamily="monospace"
+                  textAnchor="middle">ESCAPE OPEN</text>
+            {/* Shatter lines */}
+            {[[BX+40,CL+20,RX-20,FL-20],[BX+80,CL+5,BX+20,FL-10],[BX+150,CL+10,RX-10,CL+80]].map(([x1,y1,x2,y2],i)=>(
+              <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#22c55e" strokeWidth="1" opacity="0.5"/>
+            ))}
+          </>
+        ) : (
+          <>
+            <text x={(BX+RX)/2} y={CL+30} fill="#22c55e66" fontSize="9" fontFamily="monospace"
+                  textAnchor="middle" letterSpacing="1">TEMPERED</text>
+            <text x={(BX+RX)/2} y={CL+42} fill="#22c55e55" fontSize="7" fontFamily="monospace"
+                  textAnchor="middle">BREAKABLE</text>
+          </>
+        )}
+
+        {/* Rear window (back of car) */}
+        <path d="M 562,78 Q 610,115 640,155 L 650,190 L 562,190"
+              fill="rgba(0,229,255,0.03)" stroke={s.rearSmashed ? '#22c55e' : '#00e5ff'} strokeWidth="1.2"/>
+
+        {/* ── Internal water ── */}
+        {s.intWater > 0.05 && (
+          <polygon points={intWaterPoly} fill="rgba(37,99,235,0.55)"
+                   style={{ animation: 'water-slosh 3s ease-in-out infinite' }}/>
+        )}
+        {s.intWater > 0.1 && (
+          <line x1={FX} y1={FL - frontWPx} x2={RX} y2={FL - rearWPx}
+                stroke="#93c5fd" strokeWidth="1.5"
+                style={{ animation: 'wave-h 1.5s ease-in-out infinite alternate' }}/>
+        )}
+
+        {/* ── Seats ── */}
+        {/* Front seat */}
+        <g opacity={s.playerLoc === 'FRONT' ? 1 : 0.4}>
+          <rect x={190} y={FL-50} width={80} height={48} rx="4"
+                fill="rgba(0,100,60,0.3)" stroke="#22c55e" strokeWidth={s.playerLoc==='FRONT'?2:1}/>
+          <rect x={185} y={FL-90} width={12} height={42}
+                fill="rgba(0,100,60,0.3)" stroke="#22c55e" strokeWidth="1"/>
+          {/* Seatbelt indicator */}
+          {s.isBuckled && s.playerLoc === 'FRONT' && (
+            <path d="M 230,FL-48 Q 200,FL-30 192,FL-10" stroke="#fbbf24" strokeWidth="2"
+                  fill="none" style={{ animation: 'glow-amber 1s ease-in-out infinite' }}
+                  transform={`translate(0,${-(FL)}) translate(0,${FL})`}/>
+          )}
+        </g>
+
+        {/* Rear seat */}
+        <g opacity={s.playerLoc === 'REAR' ? 1 : 0.4}>
+          <rect x={400} y={FL-50} width={120} height={48} rx="4"
+                fill="rgba(0,80,100,0.3)" stroke={s.playerLoc==='REAR'?'#00e5ff':'#1e3a5f'}
+                strokeWidth={s.playerLoc==='REAR'?2:1}/>
+          <rect x={396} y={FL-90} width={12} height={42}
+                fill="rgba(0,80,100,0.3)" stroke={s.playerLoc==='REAR'?'#00e5ff':'#1e3a5f'} strokeWidth="1"/>
+        </g>
+
+        {/* ── Player silhouette ── */}
+        {s.playerLoc === 'FRONT' ? (
+          <g transform="translate(240, 142)">
+            <circle cx={0} cy={-22} r={11} fill="#00e5ff44" stroke="#00e5ff" strokeWidth="1.5"/>
+            <rect x={-10} y={-11} width={20} height={28} rx="4" fill="#00e5ff44" stroke="#00e5ff" strokeWidth="1.5"/>
+            {/* Seatbelt strap across body */}
+            {s.isBuckled && (
+              <line x1={-10} y1={-8} x2={10} y2={17} stroke="#fbbf24" strokeWidth="2"
+                    style={{ animation: 'glow-amber 0.8s ease-in-out infinite alternate' }}/>
             )}
-          </div>
+          </g>
+        ) : (
+          <g transform="translate(455, 142)">
+            <circle cx={0} cy={-22} r={11} fill="#00e5ff44" stroke="#00e5ff" strokeWidth="1.5"/>
+            <rect x={-10} y={-11} width={20} height={28} rx="4" fill="#00e5ff44" stroke="#00e5ff" strokeWidth="1.5"/>
+          </g>
+        )}
 
-          {/* Bubbles decoration */}
-          {waterLevel > 20 && (
-            <>
-              <span style={{ position: 'absolute', bottom: '15%', left: '20%', fontSize: 12, opacity: 0.4, animation: 'float 2s infinite' }}>🫧</span>
-              <span style={{ position: 'absolute', bottom: '25%', right: '30%', fontSize: 10, opacity: 0.3, animation: 'float 3s infinite' }}>🫧</span>
-            </>
-          )}
-        </div>
+        {/* Steering wheel */}
+        <circle cx={215} cy={163} r={22} fill="none" stroke="#fbbf2488" strokeWidth="2"/>
+        <line x1={215} y1={141} x2={215} y2={185} stroke="#fbbf2444" strokeWidth="1"/>
+        <line x1={193} y1={163} x2={237} y2={163} stroke="#fbbf2444" strokeWidth="1"/>
 
-        {/* Choice panel */}
-        <div style={s.choicePanel}>
-          <div style={s.stepHeader}>
-            <span style={{ fontSize: 32 }}>{step.emoji}</span>
-            <h3 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: 0 }}>
-              Step {currentStep + 1}: {step.title}
-            </h3>
-          </div>
+        {/* Dashboard line */}
+        <line x1={FX} y1={145} x2={BX-20} y2={148} stroke="#00e5ff44" strokeWidth="2"/>
 
-          <p style={{ color: '#e2e8f0', fontSize: 15, lineHeight: 1.7, marginBottom: 20 }}>
-            {step.instruction}
-          </p>
+        {/* Zone labels */}
+        <text x={(FX+BX)/2} y={FL-55} fill="#00e5ff44" fontSize="9" fontFamily="monospace"
+              textAnchor="middle">FRONT SEAT</text>
+        <text x={(BX+RX)/2} y={FL-55} fill="#00e5ff44" fontSize="9" fontFamily="monospace"
+              textAnchor="middle">REAR SEAT</text>
 
-          {feedbackMsg ? (
-            <div style={{
-              padding: 16, borderRadius: 10,
-              background: feedbackMsg.correct ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
-              border: `1px solid ${feedbackMsg.correct ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
-              color: feedbackMsg.correct ? '#86efac' : '#fca5a5',
-              fontSize: 14, lineHeight: 1.7,
-            }}>
-              {feedbackMsg.text}
-            </div>
-          ) : (
-            <div style={s.choiceList}>
-              {shuffledChoices.map(choice => (
-                <button
-                  key={choice.id}
-                  onClick={() => handleChoice(choice)}
-                  style={s.choiceBtn}
-                >
-                  <span style={{ fontSize: 15, fontWeight: 600, color: '#f1f5f9' }}>{choice.label}</span>
-                </button>
-              ))}
-            </div>
-          )}
+        {/* Front ceiling flood warning */}
+        {frontWPx >= IH * 0.9 && s.playerLoc === 'FRONT' && (
+          <rect x={FX} y={CL} width={BX-FX} height={FL-CL} fill="rgba(239,68,68,0.15)"
+                style={{ animation: 'glow-pulse 0.3s ease-in-out infinite' }}/>
+        )}
 
-          {wrongChoices > 0 && !feedbackMsg && (
-            <div style={{ marginTop: 16, padding: 10, background: 'rgba(239,68,68,0.08)', borderRadius: 8, border: '1px solid rgba(239,68,68,0.15)' }}>
-              <p style={{ color: '#fca5a5', fontSize: 12, margin: 0 }}>
-                ⚠️ Water is rising faster! Each wrong choice increases the flow rate. Choose carefully!
-              </p>
-            </div>
-          )}
-        </div>
+        {/* Pitch label */}
+        <text x={680} y={FL-15} fill="#fbbf24" fontSize="9" fontFamily="monospace"
+              textAnchor="end">PITCH: {s.pitchAngle.toFixed(1)}°</text>
+
+      </g>{/* end rotating car group */}
+    </svg>
+  )
+}
+
+// ─── Vertical gauge ────────────────────────────────────────────────────────────
+function Gauge({ label, value, max, colorFn, unit = '', invert = false, h = 150 }) {
+  const pct   = Math.min(1, Math.max(0, (invert ? max - value : value) / max))
+  const color = colorFn(invert ? 1 - pct : pct)
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+      <div style={{ color:'#334155', fontFamily:MONO, fontSize:8, letterSpacing:1, textAlign:'center', maxWidth:56, lineHeight:1.3 }}>{label}</div>
+      <div style={{ position:'relative', width:28, height:h, background:'#0a0a0a', border:'1px solid #1a2535', borderRadius:3, overflow:'hidden' }}>
+        <div style={{
+          position:'absolute', bottom:0, left:0, right:0,
+          height:`${pct*100}%`,
+          background:`linear-gradient(0deg,${color}dd,${color}66)`,
+          transition:'height 0.08s, background 0.3s',
+          boxShadow:`0 0 10px ${color}44`,
+        }}/>
+        {[0.25,0.5,0.75].map(t=><div key={t} style={{position:'absolute',bottom:`${t*100}%`,left:0,right:0,height:1,background:'rgba(255,255,255,0.05)'}}/>)}
       </div>
-
-      <style>{`
-        @keyframes pulse { from { opacity: 1; } to { opacity: 0.5; } }
-        @keyframes float { 0% { transform: translateY(0); } 50% { transform: translateY(-10px); } 100% { transform: translateY(0); } }
-      `}</style>
+      <div style={{ color, fontFamily:MONO, fontSize:11, fontWeight:700 }}>{value.toFixed(value>9?0:1)}{unit}</div>
     </div>
   )
 }
 
-const s = {
-  screen: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    minHeight: '100vh', padding: 24, color: '#f1f5f9',
-    background: 'linear-gradient(135deg, #0a0e1a 0%, #1a1a2e 100%)',
-  },
-  introCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    maxWidth: 560, padding: 48, background: 'rgba(255,255,255,0.04)',
-    borderRadius: 16, border: '1px solid rgba(255,255,255,0.08)', textAlign: 'center', color: '#f1f5f9',
-  },
-  introTitle: { fontSize: 28, fontWeight: 800, marginTop: 16, marginBottom: 20, color: '#f1f5f9' },
-  introBody: { textAlign: 'left', lineHeight: 1.8, fontSize: 15, color: '#cbd5e1' },
-  introList: { marginTop: 8, paddingLeft: 20, listStyle: 'disc', color: '#e2e8f0' },
-  goBtn: {
-    marginTop: 28, padding: '14px 40px', fontSize: 17, fontWeight: 700,
-    background: 'linear-gradient(135deg, #dc2626, #ef4444)', color: '#fff',
-    border: 'none', borderRadius: 12, cursor: 'pointer',
-    boxShadow: '0 4px 20px rgba(220,38,38,0.4)',
-  },
-  gameContainer: {
-    minHeight: '100vh', display: 'flex', flexDirection: 'column',
-    background: 'linear-gradient(180deg, #0a0e1a 0%, #0f172a 100%)', color: '#f1f5f9',
-  },
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '16px 24px', borderBottom: '1px solid rgba(255,255,255,0.06)',
-    background: 'rgba(0,0,0,0.3)',
-  },
-  gameTitle: { fontSize: 20, fontWeight: 700, color: '#f1f5f9' },
-  backBtnSmall: { background: 'none', border: 'none', color: '#60a5fa', cursor: 'pointer', fontSize: 13 },
-  stepProgress: {
-    display: 'flex', gap: 4, padding: '10px 24px', background: 'rgba(0,0,0,0.2)',
-    borderBottom: '1px solid rgba(255,255,255,0.04)', justifyContent: 'center',
-  },
-  stepDot: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-    padding: '6px 12px', borderRadius: 8, border: '1.5px solid',
-    transition: 'all 0.3s', minWidth: 60,
-  },
-  gameLayout: {
-    display: 'flex', flex: 1, overflow: 'hidden',
-  },
-  carScene: {
-    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 24, position: 'relative',
-    background: 'linear-gradient(180deg, #1e3a5f 0%, #0c2340 100%)',
-  },
-  carBody: {
-    position: 'relative', width: 320, height: 200,
-    background: 'linear-gradient(180deg, #374151, #4b5563)',
-    borderRadius: '60px 60px 12px 12px',
-    border: '3px solid #6b7280',
-    boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-  },
-  carInterior: {
-    position: 'absolute', top: 20, left: 20, right: 20, bottom: 10,
-    background: '#1f2937', borderRadius: '40px 40px 8px 8px',
-    overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)',
-  },
-  dashboard: {
-    display: 'flex', justifyContent: 'space-around', alignItems: 'center',
-    padding: '6px 16px', background: 'rgba(0,0,0,0.3)',
-  },
-  seatsArea: {
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: '8px 16px', gap: 12, position: 'relative', zIndex: 3,
-  },
-  seat: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-  },
-  seatDivider: {
-    width: 2, height: 30, background: 'rgba(255,255,255,0.1)', borderRadius: 1,
-  },
-  gloveboxHighlight: {
-    position: 'absolute', top: 8, right: 30,
-    background: 'rgba(251,191,36,0.3)', border: '2px solid #fbbf24',
-    borderRadius: 6, padding: '2px 6px',
-    animation: 'pulse 0.7s infinite alternate', zIndex: 5,
-  },
-  windowLeft: {
-    position: 'absolute', left: 4, top: '30%',
-    background: 'rgba(59,130,246,0.15)', borderRadius: 4, padding: '2px 4px',
-    border: '1px solid rgba(59,130,246,0.3)', zIndex: 3,
-  },
-  windowRight: {
-    position: 'absolute', right: 4, top: '30%',
-    background: 'rgba(59,130,246,0.15)', borderRadius: 4, padding: '2px 4px',
-    border: '1px solid rgba(59,130,246,0.3)', zIndex: 3,
-  },
-  wheel: {
-    position: 'absolute', bottom: -14, fontSize: 20,
-  },
-  waterGauge: {
-    position: 'absolute', right: 24, top: 24, bottom: 24,
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-  },
-  gaugeLabel: { fontSize: 11, color: '#93c5fd', fontWeight: 600 },
-  gaugeTrack: {
-    width: 24, flex: 1, background: 'rgba(255,255,255,0.08)', borderRadius: 12,
-    overflow: 'hidden', position: 'relative', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end',
-  },
-  gaugeFill: {
-    width: '100%', borderRadius: 12, transition: 'height 0.3s',
-  },
-  choicePanel: {
-    width: 360, minWidth: 300, padding: 24, display: 'flex', flexDirection: 'column',
-    background: 'rgba(255,255,255,0.02)', borderLeft: '1px solid rgba(255,255,255,0.06)',
-    overflowY: 'auto',
-  },
-  stepHeader: {
-    display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12,
-    padding: 12, background: 'rgba(59,130,246,0.08)', borderRadius: 10,
-    border: '1px solid rgba(59,130,246,0.2)',
-  },
-  choiceList: { display: 'flex', flexDirection: 'column', gap: 10 },
-  choiceBtn: {
-    padding: '14px 16px', borderRadius: 10, border: '2px solid rgba(255,255,255,0.15)',
-    background: 'rgba(255,255,255,0.05)', cursor: 'pointer', transition: 'all 0.2s',
-    textAlign: 'left',
-  },
-  resultCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    maxWidth: 640, width: '100%', padding: 40, background: 'rgba(255,255,255,0.04)',
-    borderRadius: 16, border: '1px solid rgba(255,255,255,0.08)',
-    maxHeight: '90vh', overflowY: 'auto', color: '#f1f5f9',
-  },
-  resultTitle: { fontSize: 28, fontWeight: 800, marginTop: 8 },
-  scoreText: { fontSize: 16, marginTop: 8, color: '#cbd5e1' },
-  failBox: {
-    marginTop: 16, padding: 16, background: 'rgba(239,68,68,0.1)',
-    border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
-    fontSize: 14, lineHeight: 1.6, width: '100%', color: '#fca5a5',
-  },
-  educationBox: {
-    marginTop: 20, padding: 20, background: 'rgba(59,130,246,0.08)', borderRadius: 12,
-    border: '1px solid rgba(59,130,246,0.2)', width: '100%',
-  },
-  stepReview: {
-    padding: '12px 14px', marginBottom: 8, borderRadius: 6,
-    background: 'rgba(255,255,255,0.03)', borderLeft: '3px solid',
-  },
-  retryBtn: {
-    padding: '10px 28px', fontSize: 15, fontWeight: 600,
-    background: 'linear-gradient(135deg, #2563eb, #3b82f6)', color: '#fff',
-    border: 'none', borderRadius: 8, cursor: 'pointer',
-  },
-  backBtn: {
-    padding: '10px 28px', fontSize: 15, fontWeight: 600,
-    background: '#334155', color: '#e0e0e0',
-    border: 'none', borderRadius: 8, cursor: 'pointer',
-  },
+// ─── Main component ────────────────────────────────────────────────────────────
+export default function Module4_SinkingCar() {
+  const { dispatch: gd } = useGame()
+  const [s, dispatch]   = useReducer(reducer, INIT)
+  const tickRef         = useRef(null)
+
+  // 100 ms game loop
+  useEffect(() => {
+    if (s.phase !== 'running') { clearInterval(tickRef.current); return }
+    tickRef.current = setInterval(() => dispatch({ type: 'TICK' }), TICK_MS)
+    return () => clearInterval(tickRef.current)
+  }, [s.phase])
+
+  // Record score on end
+  useEffect(() => {
+    if (s.phase !== 'escaped' && s.phase !== 'failed') return
+    const score = Math.min(100, Math.max(0, s.finalScore ?? Math.round(s.o2 * 0.5)))
+    gd({ type:'RECORD_SCORE', payload:{ key:'flood-4', result:{ score, passed: s.phase==='escaped' } } })
+  }, [s.phase]) // eslint-disable-line
+
+  // Derived values
+  const pitchRad    = s.pitchAngle * Math.PI / 180
+  const frontWL     = s.intWater * (1 + 0.48 * Math.sin(pitchRad))
+  const rearWL      = s.intWater * (1 - 0.30 * Math.sin(pitchRad))
+  const frontFull   = frontWL >= FRONT_CEIL_FT
+  const tensionLock = s.pitchAngle > TENSIONER_DEG
+  const canEscape   = !s.isBuckled && s.playerLoc === 'REAR' && (s.rearSmashed || s.doorForce < 80)
+  const timePct     = s.timeS / MAX_TIME_S
+  const tunnelVision= s.o2 < 30
+  const tunnelAlpha = tunnelVision ? Math.min(0.85, (30 - s.o2) / 30 * 0.85) : 0
+
+  // ── BRIEFING ──────────────────────────────────────────────────────────────
+  if (s.phase === 'briefing') return (
+    <div style={{ position:'fixed', inset:0, background:'#080808', fontFamily:MONO, display:'flex', alignItems:'center', justifyContent:'center', padding:24, overflowY:'auto' }}>
+      <style>{`
+        @keyframes shake{0%,100%{transform:translate(0,0)}15%{transform:translate(-4px,2px)}30%{transform:translate(4px,-3px)}45%{transform:translate(-3px,3px)}60%{transform:translate(3px,-2px)}75%{transform:translate(-2px,2px)}90%{transform:translate(2px,-1px)}}
+        @keyframes wave-h{from{transform:translateY(0)}to{transform:translateY(3px)}}
+        @keyframes water-slosh{0%,100%{opacity:0.55}50%{opacity:0.72}}
+        @keyframes glow-amber{0%,100%{opacity:1}50%{opacity:0.35}}
+        @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:0.2}}
+        @keyframes tunnel{to{box-shadow: inset 0 0 120px 80px rgba(0,0,0,0.92)}}
+        @keyframes fade-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes blink-fast{0%,100%{opacity:1}50%{opacity:0.2}}
+      `}</style>
+
+      <div style={{ maxWidth:700, width:'100%' }}>
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ color:'#ef4444', fontSize:11, letterSpacing:4, marginBottom:10, animation:'blink-fast 1.2s ease-in-out infinite' }}>
+            ⚠ PRIORITY 1 — VEHICLE IN WATER
+          </div>
+          <div style={{ color:'#00e5ff', fontSize:24, fontWeight:700, letterSpacing:3 }}>MODULE 4: SINKING CAR</div>
+          <div style={{ color:'#1e3050', fontSize:11, letterSpacing:2, marginTop:5 }}>
+            HYDROSTATIC QTE SIMULATOR · VEHICLE ANATOMY PHYSICS ENGINE
+          </div>
+        </div>
+
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:18 }}>
+          <div style={{ background:'#0d0d0d', border:'1px solid #1a2535', borderRadius:6, padding:16 }}>
+            <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:10 }}>SCENARIO</div>
+            <p style={{ color:'#647a8e', fontSize:12, lineHeight:1.8, margin:'0 0 12px' }}>
+              Your vehicle has entered floodwater and is sinking. The car is pitching nose-down.
+              You have approximately <span style={{color:'#00e5ff'}}>120 seconds</span> before the cabin is fully submerged.
+            </p>
+            <div style={{ background:'rgba(239,68,68,0.05)', border:'1px solid rgba(239,68,68,0.18)', borderRadius:4, padding:'10px 14px' }}>
+              <div style={{ color:'#ef4444', fontSize:9, letterSpacing:1, marginBottom:8 }}>FAIL CONDITIONS</div>
+              {[
+                ['O₂ DEPLETION', 'Panic + submersion drain your oxygen to zero'],
+                ['VEHICLE SUBMERGED', 'Time limit exceeded — cabin sealed by water'],
+              ].map(([t,d]) => (
+                <div key={t} style={{ marginBottom:5 }}>
+                  <span style={{ color:'#f87171', fontSize:10, fontWeight:700 }}>▪ {t}</span>
+                  <div style={{ color:'#2a4055', fontSize:10, marginLeft:10 }}>{d}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background:'#0d0d0d', border:'1px solid #1a2535', borderRadius:6, padding:16 }}>
+            <div style={{ color:'#00e5ff', fontSize:9, letterSpacing:2, marginBottom:10 }}>VEHICLE SPECS</div>
+            {[
+              ['WINDSHIELD',    'LAMINATED (FMVSS-205)',   '#ef4444', 'Cannot be shattered — punch deflects'],
+              ['SIDE WINDOWS',  'LAMINATED (FMVSS-226)',   '#ef4444', 'Shatterproof safety glass — do NOT waste energy'],
+              ['REAR WINDOW',   'TEMPERED GLASS',          '#22c55e', 'CAN be shattered with center punch'],
+              ['SEATBELT',      'TENSIONER LOCKS AT 20°',  '#fbbf24', 'Pitch > 20° locks buckle — requires Hook Cutter'],
+            ].map(([part, spec, c, note]) => (
+              <div key={part} style={{ marginBottom:10 }}>
+                <div style={{ display:'flex', justifyContent:'space-between' }}>
+                  <span style={{ color:'#647a8e', fontSize:10 }}>{part}</span>
+                  <span style={{ color:c, fontSize:10, fontWeight:700 }}>{spec}</span>
+                </div>
+                <div style={{ color:'#2a4055', fontSize:9, marginTop:2 }}>{note}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background:'#0d0d0d', border:'1px solid rgba(251,191,36,0.2)', borderRadius:6, padding:'12px 16px', marginBottom:18 }}>
+          <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:8 }}>ESCAPE SEQUENCE</div>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+            {[
+              ['1', 'UNBUCKLE', 'Before pitch > 20° OR use Hook Cutter'],
+              ['2', 'MOVE REAR', 'Front ceiling floods first — get to rear'],
+              ['3', 'STRIKE REAR', 'Center Punch on rear window (TEMPERED)'],
+              ['4', 'ESCAPE', 'Through shattered glass or equalized door'],
+            ].map(([n, t, d]) => (
+              <div key={n} style={{ flex:'1 1 160px', background:'rgba(0,229,255,0.04)', border:'1px solid #1a2535', borderRadius:4, padding:'8px 10px' }}>
+                <div style={{ display:'flex', gap:6, alignItems:'center', marginBottom:4 }}>
+                  <span style={{ fontSize:14, fontWeight:900, color:'#00e5ff' }}>{n}</span>
+                  <span style={{ color:'#00e5ff', fontSize:11, fontWeight:700 }}>{t}</span>
+                </div>
+                <div style={{ color:'#334155', fontSize:9, lineHeight:1.5 }}>{d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ textAlign:'center' }}>
+          <button onClick={() => dispatch({ type:'START' })} style={{
+            padding:'14px 60px', borderRadius:4, fontFamily:MONO, fontSize:16, fontWeight:700,
+            letterSpacing:3, cursor:'pointer', border:'2px solid #ef4444',
+            background:'rgba(239,68,68,0.08)', color:'#ef4444',
+            boxShadow:'0 0 20px rgba(239,68,68,0.2)',
+          }}>▶ ENTER VEHICLE</button>
+          <div style={{ marginTop:10 }}>
+            <button onClick={() => gd({ type:'BACK_TO_MODULES' })}
+              style={{ background:'none', border:'none', color:'#1e3050', fontFamily:MONO, fontSize:11, cursor:'pointer' }}>
+              ← BACK TO MODULES
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  // ── RESULT SCREENS ────────────────────────────────────────────────────────
+  if (s.phase === 'escaped' || s.phase === 'failed') return (
+    <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column' }}>
+      <style>{`@keyframes fade-in{from{opacity:0}to{opacity:1}}@keyframes blink-fast{0%,100%{opacity:1}50%{opacity:0.2}}`}</style>
+      <div style={{ height:48, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 16px', gap:16 }}>
+        <div style={{ color: s.phase==='escaped'?'#22c55e':'#ef4444', fontSize:13, fontWeight:700, letterSpacing:2 }}>
+          {s.phase==='escaped' ? 'ESCAPE CONFIRMED — SURVIVOR' : `FATAL — ${s.failReason}`}
+        </div>
+      </div>
+      <div style={{ flex:1, display:'flex' }}>
+        <div style={{ flex:1, padding:12 }}><CarSchematic s={s}/></div>
+        <div style={{ width:360, background:'#080808', borderLeft:'1px solid #111', padding:'20px 18px', display:'flex', flexDirection:'column', gap:16 }}>
+          {s.phase==='escaped' ? (
+            <>
+              <div style={{ fontSize:52, textAlign:'center' }}>🏊</div>
+              <div style={{ color:'#22c55e', fontFamily:MONO, fontSize:44, fontWeight:900, textAlign:'center' }}>
+                {s.finalScore}%
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                {[
+                  ['O₂ REMAINING', `${s.o2.toFixed(0)}%`, '#22c55e'],
+                  ['TIME ELAPSED', `${s.timeS.toFixed(1)}s`, '#00e5ff'],
+                  ['PITCH AT EXIT', `${s.pitchAngle.toFixed(1)}°`, '#fbbf24'],
+                  ['DOOR FORCE', `${s.doorForce.toFixed(0)} lbs`, '#60a5fa'],
+                ].map(([l,v,c]) => (
+                  <div key={l} style={{ background:'#0d0d0d', border:'1px solid #141414', borderRadius:3, padding:'8px 10px' }}>
+                    <div style={{ color:'#2a4055', fontSize:8, letterSpacing:1 }}>{l}</div>
+                    <div style={{ color:c, fontFamily:MONO, fontSize:15, fontWeight:700, marginTop:2 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize:52, textAlign:'center' }}>💀</div>
+              <div style={{ color:'#ef4444', fontFamily:MONO, fontSize:15, fontWeight:700, letterSpacing:2, textAlign:'center' }}>
+                {s.failReason}
+              </div>
+              <div style={{ background:'rgba(0,0,0,0.4)', border:'1px solid #1a2535', borderRadius:4, padding:'12px 14px' }}>
+                <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:8 }}>📋 FEMA / RED CROSS</div>
+                <div style={{ color:'#647a8e', fontSize:10, lineHeight:1.8 }}>
+                  {s.failReason?.includes('O₂') ? (
+                    <><b style={{color:'#f87171'}}>Red Cross:</b> Panic hyperventilation consumes O₂ rapidly. "Stay calm. Take slow, controlled breaths. You have more time than you think." A submerging car takes 1–2 minutes to fill — controlled breathing is your primary survival asset.</>
+                  ) : (
+                    <><b style={{color:'#f87171'}}>FEMA / NFPA 1670:</b> "Turn around, don't drown. Never drive through flooded roadways." Six inches of moving water can knock a person off their feet; 12 inches can carry away a vehicle. If trapped, act immediately — do not wait.</>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+          <div style={{ marginTop:'auto', display:'flex', gap:10 }}>
+            <button onClick={() => dispatch({ type:'RESET' })} style={{ flex:1, padding:'10px', borderRadius:3, fontFamily:MONO, fontSize:12, fontWeight:700, letterSpacing:2, cursor:'pointer', border:'1px solid #ef4444', background:'rgba(239,68,68,0.07)', color:'#ef4444' }}>↺ RETRY</button>
+            <button onClick={() => { dispatch({ type:'RESET' }); gd({ type:'BACK_TO_MODULES' }) }} style={{ padding:'10px 14px', borderRadius:3, fontFamily:MONO, fontSize:11, cursor:'pointer', border:'1px solid #1e2d3a', background:'transparent', color:'#334155' }}>← MODULES</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  // ── SIMULATION SCREEN ─────────────────────────────────────────────────────
+  return (
+    <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+      <style>{`
+        @keyframes shake{0%,100%{transform:translate(0,0)}15%{transform:translate(-5px,3px)}30%{transform:translate(5px,-4px)}45%{transform:translate(-4px,4px)}60%{transform:translate(4px,-3px)}75%{transform:translate(-2px,2px)}90%{transform:translate(2px,-1px)}}
+        @keyframes wave-h{from{transform:translateY(0)}to{transform:translateY(3px)}}
+        @keyframes water-slosh{0%,100%{opacity:0.55}50%{opacity:0.72}}
+        @keyframes glow-amber{0%,100%{opacity:1}50%{opacity:0.3}}
+        @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:0.15}}
+        @keyframes blink-fast{0%,100%{opacity:1}50%{opacity:0.2}}
+        @keyframes fade-in{from{opacity:0}to{opacity:1}}
+      `}</style>
+
+      {/* Tunnel vision overlay */}
+      {tunnelAlpha > 0 && (
+        <div style={{
+          position:'absolute', inset:0, zIndex:30, pointerEvents:'none',
+          background:`radial-gradient(ellipse 55% 55% at 50% 50%, transparent 0%, rgba(0,0,0,${tunnelAlpha}) 100%)`,
+          transition:'background 0.5s',
+        }}/>
+      )}
+      {/* O2 critical flash */}
+      {s.o2 < 10 && (
+        <div style={{ position:'absolute', inset:0, zIndex:31, pointerEvents:'none',
+                      background:'rgba(239,68,68,0.06)', animation:'glow-pulse 0.4s ease-in-out infinite' }}/>
+      )}
+
+      {/* ── TOP BAR ── */}
+      <div style={{ height:48, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 14px', gap:14, flexShrink:0 }}>
+        <button onClick={() => { dispatch({ type:'RESET' }); gd({ type:'BACK_TO_MODULES' }) }}
+          style={{ background:'none', border:'none', color:'#1e3050', fontFamily:MONO, fontSize:11, cursor:'pointer' }}>← EXIT</button>
+        <div style={{ color:'#ef4444', fontSize:11, fontWeight:700, letterSpacing:2, animation:'blink-fast 1s ease-in-out infinite' }}>
+          ⚠ M4 · SINKING CAR
+        </div>
+        {/* Time bar */}
+        <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, maxWidth:280 }}>
+          <span style={{ color:'#1e3050', fontSize:8, letterSpacing:1, flexShrink:0 }}>TIME</span>
+          <div style={{ flex:1, height:6, background:'#0a0a0a', border:'1px solid #141414', borderRadius:3, overflow:'hidden' }}>
+            <div style={{ height:'100%', borderRadius:3, width:`${(1-timePct)*100}%`,
+                          background:`linear-gradient(90deg,#22c55e,${timePct>0.6?'#ef4444':'#f59e0b'})`,
+                          transition:'width 0.08s' }}/>
+          </div>
+          <span style={{ color:timePct>0.7?'#ef4444':'#f59e0b', fontFamily:MONO, fontSize:12, fontWeight:700, minWidth:40 }}>
+            {Math.max(0, MAX_TIME_S - s.timeS).toFixed(0)}s
+          </span>
+        </div>
+        {/* Status indicators */}
+        <div style={{ display:'flex', gap:12 }}>
+          <span style={{ color: s.isBuckled ? '#ef4444' : '#22c55e', fontSize:10, fontWeight:700 }}>
+            {s.isBuckled ? '🔒 BUCKLED' : '✓ FREE'}
+          </span>
+          <span style={{ color: s.playerLoc === 'FRONT' ? '#fbbf24' : '#00e5ff', fontSize:10, fontWeight:700 }}>
+            📍 {s.playerLoc}
+          </span>
+          {canEscape && (
+            <span style={{ color:'#22c55e', fontSize:10, fontWeight:700, animation:'blink-fast 0.7s ease-in-out infinite' }}>
+              🟢 ESCAPE READY
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── MAIN: telemetry + car + inventory ── */}
+      <div style={{ flex:1, display:'flex', minHeight:0, animation: s.shake ? 'shake 0.15s ease-in-out' : 'none' }}>
+
+        {/* LEFT: telemetry gauges */}
+        <div style={{ width:120, background:'#080808', borderRight:'1px solid #111', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'12px 8px', gap:14 }}>
+          <div style={{ fontSize:8, color:'#1a2d40', letterSpacing:3 }}>TELEMETRY</div>
+          <Gauge label="PITCH°" value={s.pitchAngle} max={45}
+                 colorFn={p=>p<0.44?'#22c55e':p<0.77?'#f59e0b':'#ef4444'} unit="°" h={120}/>
+          <Gauge label="DOOR FORCE lbs" value={s.doorForce} max={3000}
+                 colorFn={p=>p<0.33?'#22c55e':p<0.66?'#fbbf24':'#ef4444'} unit="" h={120}/>
+          <Gauge label="O₂ SAT %" value={s.o2} max={100}
+                 colorFn={p=>p>0.6?'#22c55e':p>0.3?'#f59e0b':'#ef4444'} unit="%" h={120}/>
+          <Gauge label="PANIC BPM" value={s.bpm} max={200}
+                 colorFn={p=>p<0.5?'#22c55e':p<0.75?'#fbbf24':'#ef4444'} unit="" invert={false} h={120}/>
+        </div>
+
+        {/* CENTER: car schematic */}
+        <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:8, minWidth:0 }}>
+          <CarSchematic s={s}/>
+        </div>
+
+        {/* RIGHT: inventory + event log */}
+        <div style={{ width:200, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', padding:'12px 10px', gap:12 }}>
+          <div style={{ fontSize:8, color:'#1a2d40', letterSpacing:3 }}>INVENTORY</div>
+
+          {/* Center Punch */}
+          <div onClick={() => dispatch({ type:'SELECT_TOOL', t:'punch' })}
+            style={{
+              padding:'10px 12px', borderRadius:4, cursor:'pointer', transition:'all 0.15s',
+              border:`1px solid ${s.tool==='punch'?'#fbbf24':'#1a2535'}`,
+              background:s.tool==='punch'?'rgba(251,191,36,0.08)':'#0d0d0d',
+            }}>
+            <div style={{ color: s.tool==='punch'?'#fbbf24':'#94a3b8', fontSize:11, fontWeight:700, marginBottom:4 }}>
+              🔨 Center Punch
+            </div>
+            <div style={{ color:'#2a4055', fontSize:9, lineHeight:1.5 }}>
+              Use on REAR WINDOW only. Tempered glass shatters with focused strike.
+            </div>
+            {s.tool==='punch' && <div style={{ color:'#fbbf24', fontSize:9, marginTop:4 }}>▶ SELECTED — click a strike action</div>}
+          </div>
+
+          {/* Hook Cutter */}
+          <div onClick={() => dispatch({ type:'SELECT_TOOL', t:'cutter' })}
+            style={{
+              padding:'10px 12px', borderRadius:4, cursor:'pointer', transition:'all 0.15s',
+              border:`1px solid ${s.tool==='cutter'?'#00e5ff':'#1a2535'}`,
+              background:s.tool==='cutter'?'rgba(0,229,255,0.06)':'#0d0d0d',
+            }}>
+            <div style={{ color:s.tool==='cutter'?'#00e5ff':'#94a3b8', fontSize:11, fontWeight:700, marginBottom:4 }}>
+              ✂️ Hook Cutter
+            </div>
+            <div style={{ color:'#2a4055', fontSize:9, lineHeight:1.5 }}>
+              Cuts locked seatbelt when tensioner is engaged. Required if pitch &gt; 20°.
+            </div>
+            {s.tool==='cutter' && <div style={{ color:'#00e5ff', fontSize:9, marginTop:4 }}>▶ SELECTED — click "Use Cutter"</div>}
+          </div>
+
+          {/* Pitch warning */}
+          {tensionLock && (
+            <div style={{ padding:'8px 10px', borderRadius:4, background:'rgba(239,68,68,0.08)',
+                          border:'1px solid rgba(239,68,68,0.3)', animation:'blink-fast 1s ease-in-out infinite' }}>
+              <div style={{ color:'#ef4444', fontSize:9, fontWeight:700 }}>⚠ TENSIONER LOCKED</div>
+              <div style={{ color:'#7f2a2a', fontSize:9, marginTop:3 }}>Pitch {s.pitchAngle.toFixed(1)}° &gt; 20° — manual unbuckle FAILS. Use Hook Cutter.</div>
+            </div>
+          )}
+
+          {/* Front flood warning */}
+          {frontWL >= FRONT_CEIL_FT * 0.8 && s.playerLoc === 'FRONT' && (
+            <div style={{ padding:'8px 10px', borderRadius:4, background:'rgba(239,68,68,0.1)',
+                          border:'1px solid rgba(239,68,68,0.4)', animation:'glow-pulse 0.5s ease-in-out infinite' }}>
+              <div style={{ color:'#ef4444', fontSize:9, fontWeight:700 }}>⚠ FRONT CEILING FLOODING</div>
+              <div style={{ color:'#7f2a2a', fontSize:9, marginTop:3 }}>Move to rear immediately or be trapped!</div>
+            </div>
+          )}
+
+          {/* Door equalization status */}
+          <div style={{ marginTop:'auto', padding:'8px 10px', background:'#0d0d0d', border:'1px solid #141414', borderRadius:4 }}>
+            <div style={{ fontSize:8, color:'#1e3050', letterSpacing:1, marginBottom:4 }}>EQUALIZATION</div>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:9 }}>
+              <span style={{ color:'#334155' }}>EXT: {s.extDepth.toFixed(2)}ft</span>
+              <span style={{ color:'#334155' }}>INT: {s.intWater.toFixed(2)}ft</span>
+            </div>
+            <div style={{ height:4, background:'#0a0a0a', border:'1px solid #141414', borderRadius:2, overflow:'hidden', marginTop:5 }}>
+              <div style={{ height:'100%', borderRadius:2, transition:'width 0.1s',
+                            width:`${Math.min(100, (s.intWater / Math.max(0.01, s.extDepth)) * 100)}%`,
+                            background: s.doorForce < 80 ? '#22c55e' : '#3b82f6' }}/>
+            </div>
+            <div style={{ color: s.doorForce < 80 ? '#22c55e' : '#2a4055', fontSize:9, marginTop:3, fontWeight: s.doorForce < 80 ? 700 : 400 }}>
+              {s.doorForce < 80 ? '✓ DOOR OPENABLE' : `Force: ${s.doorForce.toFixed(0)} lbs`}
+            </div>
+          </div>
+
+          {/* Event log */}
+          <div style={{ borderTop:'1px solid #111', paddingTop:8 }}>
+            <div style={{ fontSize:8, color:'#1a2d40', letterSpacing:2, marginBottom:5 }}>LOG</div>
+            {s.log.slice(0,4).map((e,i) => (
+              <div key={i} style={{ fontSize:8.5, color: e.startsWith('✓')?'#22c55e':e.startsWith('⚠')||e.startsWith('✗')?'#ef4444':'#334155',
+                                    lineHeight:1.5, marginBottom:4,
+                                    opacity: 1 - i * 0.18,
+                                    animation: i===0?'fade-in 0.2s ease-out':'none' }}>
+                {e}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── ACTION DECK ── */}
+      <div style={{ background:'#080808', borderTop:'2px solid #1a2535', padding:'10px 14px', flexShrink:0 }}>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+
+          {/* Actions based on state */}
+          {s.isBuckled && (
+            <>
+              <ActionBtn
+                label="ATTEMPT UNBUCKLE"
+                icon="🔓"
+                color="#fbbf24"
+                warn={tensionLock}
+                warnText={tensionLock ? 'TENSIONER LOCKED' : ''}
+                onClick={() => dispatch({ type:'UNBUCKLE' })}
+              />
+              {s.tool === 'cutter' && (
+                <ActionBtn label="USE CUTTER — CUT BELT" icon="✂️" color="#00e5ff"
+                           onClick={() => dispatch({ type:'USE_CUTTER' })}/>
+              )}
+            </>
+          )}
+
+          {!s.isBuckled && s.playerLoc === 'FRONT' && (
+            <ActionBtn label="RELOCATE TO REAR SEAT" icon="➡️" color="#00e5ff"
+                       warn={frontWL >= FRONT_CEIL_FT * 0.8}
+                       warnText={frontWL >= FRONT_CEIL_FT * 0.8 ? 'FLOODING — ACT NOW' : ''}
+                       onClick={() => dispatch({ type:'MOVE_REAR' })}/>
+          )}
+
+          {s.playerLoc === 'REAR' && (
+            <>
+              {['WINDSHIELD','SIDE','REAR'].map(w => (
+                <ActionBtn key={w}
+                  label={`STRIKE ${w} WINDOW`}
+                  icon="🔨"
+                  color={w==='REAR'?'#22c55e':'#ef4444'}
+                  subText={w==='REAR'?'TEMPERED — BREAKABLE':'LAMINATED — WILL FAIL'}
+                  onClick={() => dispatch({ type:'STRIKE', target:w })}
+                />
+              ))}
+              <ActionBtn label="BREATHE & BRACE" icon="🫁" color="#3b82f6"
+                         subText="-10 BPM — wait for equalization"
+                         onClick={() => dispatch({ type:'BREATHE' })}/>
+            </>
+          )}
+
+          {canEscape && (
+            <ActionBtn
+              label={s.rearSmashed ? 'ESCAPE THROUGH REAR WINDOW' : 'OPEN DOOR — EQUALIZED'}
+              icon="🏊"
+              color="#22c55e"
+              urgent
+              onClick={() => dispatch({ type:'ESCAPE' })}
+            />
+          )}
+
+          <div style={{ marginLeft:'auto', display:'flex', flexDirection:'column', alignItems:'flex-end', gap:4 }}>
+            <div style={{ display:'flex', gap:10, fontSize:10, color:'#334155' }}>
+              <span>EXT: <b style={{color:'#3b82f6'}}>{s.extDepth.toFixed(1)}ft</b></span>
+              <span>F.WL: <b style={{color: frontFull?'#ef4444':'#60a5fa'}}>{frontWL.toFixed(1)}ft</b></span>
+              <span>R.WL: <b style={{color:'#60a5fa'}}>{rearWL.toFixed(1)}ft</b></span>
+            </div>
+            <div style={{ fontSize:9, color:'#2a4055' }}>
+              FRONT CEIL: {FRONT_CEIL_FT}ft · REAR CEIL: {REAR_CEIL_FT}ft
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Action button helper ──────────────────────────────────────────────────────
+function ActionBtn({ label, icon, color, onClick, warn, warnText, subText, urgent }) {
+  const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
+  return (
+    <button onClick={onClick} style={{
+      padding:'9px 14px', borderRadius:4, fontFamily:MONO, fontSize:11, fontWeight:700,
+      letterSpacing:1, cursor:'pointer', display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2,
+      border:`${urgent?2:1}px solid ${warn?'#ef4444':color}${urgent?'':'66'}`,
+      background: urgent ? `${color}18` : warn ? 'rgba(239,68,68,0.08)' : `${color}0d`,
+      color: warn ? '#ef4444' : color,
+      boxShadow: urgent ? `0 0 16px ${color}44` : 'none',
+      animation: urgent ? 'blink-fast 0.8s ease-in-out infinite' : warn ? 'glow-pulse 0.8s ease-in-out infinite' : 'none',
+      transition:'all 0.15s',
+    }}>
+      <span style={{ display:'flex', alignItems:'center', gap:6 }}>
+        <span>{icon}</span><span>{label}</span>
+      </span>
+      {(warnText || subText) && (
+        <span style={{ fontSize:8.5, color: warnText?'#ef4444':'#334155', fontWeight:400, letterSpacing:0 }}>
+          {warnText || subText}
+        </span>
+      )}
+    </button>
+  )
 }
