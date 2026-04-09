@@ -1,674 +1,647 @@
 /**
- * Module 5 — Geospatial Routing: Swiftwater Tactical Pathfinding Simulator
- * Aesthetic  : Tactical Command Center — #0a0a0a, cyan/amber/crimson, JetBrains Mono
- * Mechanics  : useReducer · vector field physics · sonar battery · route execution
- * References : NFPA 1670 Swiftwater Rescue, FEMA IS-1001, USACE Flood Ops Manual
+ * Module 5 — Dynamic Trek: Grid Survival with Moving Hazards, Darkness & Fatigue
+ * Aesthetic: Urban Flood Topography — dark mode, depth gradients, flowing CSS water
+ * Mechanics: 20×20 grid, fire ant rafts, debris logs, probe-and-step,
+ *            shrinking light radius, stamina/fatigue, ferry-angle physics
  */
-import { useReducer, useEffect, useRef, useMemo, useState } from 'react'
+import { useReducer, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const MONO    = "'JetBrains Mono','Courier New',Courier,monospace"
-const GS      = 15        // grid size 15×15
-const CPXL    = 38        // cell pixel size (large map)
-const CPXS    = 24        // cell pixel size (mini-map)
+// ── Constants ────────────────────────────────────────────────────────────────
+const BG = '#1e1e2e'
+const CARD = '#2a2a3e'
+const BORDER = 'rgba(255,255,255,0.08)'
+const TEXT = '#f1f2f6'
+const DIM = '#a4b0be'
+const GREEN = '#2ed573'
+const RED = '#ff4757'
+const YELLOW = '#ffa502'
+const BLUE = '#0984e3'
 
-// Physics thresholds
-const FORCE_THRESHOLD = 280   // V² × D_in above this = dangerous
-const START  = { x:0, y:0 }
-const EXIT   = { x:14, y:14 }
+const GRID = 20
+const CELL = 28                     // px per cell
+const START = { x: 0, y: 19 }      // bottom-left
+const EXIT  = { x: 19, y: 0 }      // top-right
+const LIGHT_DROP = 4                // per turn
+const STAMINA_WITH = 5              // moving with current
+const STAMINA_AGAINST = 20          // moving against current
+const STAMINA_REST = 15             // regain per rest
+const STAMINA_CRANK = 10            // cost to crank flashlight
+const LIGHT_CRANK = 30              // light restored by crank
+const PROBE_COST = 3                // stamina to probe
 
-// ─── Deterministic level generation ──────────────────────────────────────────
-function makeGrid() {
-  const G = Array.from({ length:GS }, (_, y) =>
-    Array.from({ length:GS }, (_, x) => ({
-      x, y,
-      depth_in:    3,
-      velocity_fps:1.5,
-      flowDx: 0.6, flowDy: 0.4,
-      hazard:      null,
-      isExplored:  false,
-    }))
-  )
-  const S = (x, y, p) => { if (x>=0&&x<GS&&y>=0&&y<GS) Object.assign(G[y][x], p) }
-
-  // ── Base residential: gentle SE drift ──
-  for (let y=0;y<GS;y++) for (let x=0;x<GS;x++) {
-    G[y][x].depth_in    = 2 + ((x*3+y*2)%4)           // 2-5 in
-    G[y][x].velocity_fps= 1 + ((x+y*2)%5)*0.25         // 1-2.25 fps
-    G[y][x].flowDx = 0.55; G[y][x].flowDy = 0.45
-  }
-
-  // ── MAIN STREET — row 7 — lethal E-flow ──
-  for (let x=0;x<GS;x++) S(x,7,{ depth_in:12, velocity_fps:8, flowDx:1, flowDy:0 })
-  // Strainers on Main Street (always visible — obvious danger)
-  ;[[3,7],[8,7],[12,7]].forEach(([x,y])=>S(x,y,{hazard:'STRAINER',isExplored:true}))
-
-  // ── SECONDARY CHANNEL — col 7 — dangerous S-flow ──
-  for (let y=0;y<GS;y++) if(y!==7) S(7,y,{ depth_in:9, velocity_fps:6, flowDx:0, flowDy:1 })
-
-  // ── ALLEY ROWS — slow E-flow, dense HIDDEN manholes ──
-  const alleyManholes = {
-    2:  [1,4,7,10,12],
-    4:  [2,5,8,11,13],
-    9:  [0,3,6,9,12,14],
-    12: [1,4,7,10,13],
-  }
-  for (const [rowStr, mxArr] of Object.entries(alleyManholes)) {
-    const row = +rowStr
-    for (let x=0;x<GS;x++) S(x,row,{ depth_in:4, velocity_fps:1.5, flowDx:0.85, flowDy:0.15 })
-    mxArr.forEach(x => S(x,row,{ hazard:'MANHOLE' }))   // NOT explored — hidden
-  }
-
-  // ── PARK — bottom-right quadrant — SE flow, STRAINER traps ──
-  for (let y=9;y<GS;y++) for (let x=9;x<GS;x++) {
-    if (y===9||y===12) continue   // already set as alleys
-    S(x,y,{ depth_in:7, velocity_fps:5, flowDx:0.7, flowDy:0.7 })
-  }
-  // Park strainers (hidden — down-current from SE flow)
-  S(12,11,{ hazard:'STRAINER' })
-  S(13,13,{ hazard:'STRAINER' })
-
-  // ── Scattered manholes in safe zones ──
-  ;[[2,1],[6,1],[11,1],[13,1],
-    [1,5],[9,5],[14,5],
-    [2,8],[5,8],[10,8],
-    [3,10],[7,10],[11,10],[1,13],[6,13]
-  ].forEach(([x,y])=>S(x,y,{ hazard:'MANHOLE' }))
-
-  // ── Start & Exit always explored ──
-  S(0,0, { depth_in:1, velocity_fps:0.5, flowDx:0.2, flowDy:0.2, isExplored:true })
-  S(14,14,{ depth_in:1, velocity_fps:0.5, flowDx:0.2, flowDy:0.2, isExplored:true })
-
-  return G
+// ── Deterministic level generation ───────────────────────────────────────────
+function seededRng(seed) {
+  let s = seed
+  return () => { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646 }
 }
 
-// ─── Force formula ─────────────────────────────────────────────────────────────
-const calcForce = c => c.velocity_fps ** 2 * c.depth_in
-
-// ─── Reducer ──────────────────────────────────────────────────────────────────
-const INIT = {
-  grid:         makeGrid(),
-  playerLoc:    START,
-  plannedRoute: [],
-  inventory:    { sonarBattery:100, anchors:2 },
-  simState:     'PLANNING',   // PLANNING|EXECUTING|FAILED|VICTORY
-  execStep:     0,
-  anchorActive: false,
-  failReason:   null,
-  score:        null,
+function generateLevel(seed) {
+  const rng = seededRng(seed)
+  const cells = []
+  for (let y = 0; y < GRID; y++) {
+    const row = []
+    for (let x = 0; x < GRID; x++) {
+      // Current direction: generally flows from top-left to bottom-right with variation
+      const baseFlowX = 0.4 + rng() * 0.4
+      const baseFlowY = 0.3 + rng() * 0.3
+      const depth = 4 + Math.floor(rng() * 18)          // 4-22 inches
+      const velocity = 1 + rng() * 5                      // 1-6 fps
+      let trap = null
+      // Scatter manholes (8-10 hidden hazards, not on start/exit)
+      if (rng() < 0.025 && !(x === START.x && y === START.y) && !(x === EXIT.x && y === EXIT.y)) {
+        trap = 'MANHOLE'
+      }
+      if (!trap && rng() < 0.015 && !(x === START.x && y === START.y) && !(x === EXIT.x && y === EXIT.y)) {
+        trap = 'FENCE'
+      }
+      row.push({
+        x, y, depth, velocity,
+        flowX: baseFlowX * (rng() > 0.3 ? 1 : -1),
+        flowY: baseFlowY * (rng() > 0.3 ? 1 : -1),
+        trap,
+        probed: false,
+        revealed: false,
+      })
+    }
+    cells.push(row)
+  }
+  // Ensure start/exit are safe
+  cells[START.y][START.x].trap = null
+  cells[START.y][START.x].probed = true
+  cells[START.y][START.x].revealed = true
+  cells[EXIT.y][EXIT.x].trap = null
+  return cells
 }
 
-function reducer(s, a) {
-  switch (a.type) {
+function generateHazards(seed) {
+  const rng = seededRng(seed + 999)
+  const hazards = []
+  for (let i = 0; i < 4; i++) {
+    const x = 3 + Math.floor(rng() * 14)
+    const y = 3 + Math.floor(rng() * 14)
+    hazards.push({
+      id: `ant-${i}`, type: 'ANTS', x, y,
+      vx: rng() > 0.5 ? 1 : -1, vy: 0, emoji: '🐜',
+    })
+  }
+  for (let i = 0; i < 3; i++) {
+    const x = 2 + Math.floor(rng() * 16)
+    const y = 2 + Math.floor(rng() * 16)
+    hazards.push({
+      id: `log-${i}`, type: 'DEBRIS', x, y,
+      vx: 0, vy: rng() > 0.5 ? 1 : -1, emoji: '🪵',
+    })
+  }
+  return hazards
+}
 
-    case 'ADD_WP': {
-      if (s.simState !== 'PLANNING') return s
-      const { x, y } = a
-      if (x<0||x>=GS||y<0||y>=GS) return s
-      const last = s.plannedRoute.length ? s.plannedRoute[s.plannedRoute.length-1] : s.playerLoc
-      if (Math.abs(x-last.x)>1 || Math.abs(y-last.y)>1) return s  // non-adjacent
-      if (x===last.x && y===last.y) return s                        // same cell
-      // MUST PROBE FIRST — block waypoints on unexplored tiles
-      if (!s.grid[y][x].isExplored) return { ...s, _blocked: 'MUST PROBE FIRST — you cannot step on unexplored tiles!', _blockedAt: Date.now() }
-      // If clicking existing waypoint, truncate route there
-      const idx = s.plannedRoute.findIndex(p=>p.x===x&&p.y===y)
-      if (idx>=0) return { ...s, plannedRoute: s.plannedRoute.slice(0,idx) }
-      return { ...s, plannedRoute: [...s.plannedRoute, {x,y}], _blocked: null }
-    }
+// ── Movement helpers ─────────────────────────────────────────────────────────
+function isMovingWithCurrent(cell, dx, dy) {
+  // dot product of movement direction with current direction
+  const dot = dx * cell.flowX + dy * cell.flowY
+  return dot > 0
+}
 
-    case 'CLEAR_WP':
-      return { ...s, plannedRoute:[], anchorActive:false }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 
-    case 'SONAR': {
-      if (s.inventory.sonarBattery < 20) return s
-      const { x, y } = s.playerLoc
-      const newGrid = s.grid.map(row => row.map(c =>
-        Math.abs(c.x-x)<=1 && Math.abs(c.y-y)<=1 ? {...c, isExplored:true} : c
-      ))
-      return { ...s, grid:newGrid, inventory:{ ...s.inventory, sonarBattery:s.inventory.sonarBattery-20 } }
-    }
+// ── Reducer ──────────────────────────────────────────────────────────────────
+const SEED = 42
 
-    case 'ANCHOR': {
-      if (s.inventory.anchors<=0||s.anchorActive) return s
-      return { ...s, anchorActive:true, inventory:{ ...s.inventory, anchors:s.inventory.anchors-1 } }
-    }
+const initState = {
+  phase: 'intro',       // intro | play | dead | win | result
+  cells: generateLevel(SEED),
+  hazards: generateHazards(SEED),
+  player: { ...START },
+  stamina: 100,
+  lightLevel: 100,
+  turn: 0,
+  hasStick: true,        // wading stick (always have for probing)
+  hasFlashlight: true,
+  log: [],
+  deathCause: null,
+  probeTarget: null,     // { x, y } currently highlighted probe target
+  score: 0,
+  stepsWithCurrent: 0,
+  stepsAgainst: 0,
+  totalProbes: 0,
+  hazardsAvoided: 0,
+}
 
-    case 'COMMIT': {
-      if (s.plannedRoute.length===0||s.simState!=='PLANNING') return s
-      return { ...s, simState:'EXECUTING', execStep:0 }
-    }
+function moveHazards(hazards) {
+  return hazards.map(h => {
+    let nx = h.x + h.vx
+    let ny = h.y + h.vy
+    // Bounce off edges
+    let nvx = h.vx, nvy = h.vy
+    if (nx < 0 || nx >= GRID) { nvx = -nvx; nx = clamp(nx, 0, GRID - 1) }
+    if (ny < 0 || ny >= GRID) { nvy = -nvy; ny = clamp(ny, 0, GRID - 1) }
+    return { ...h, x: nx, y: ny, vx: nvx, vy: nvy }
+  })
+}
 
-    case 'STEP': {
-      if (s.simState!=='EXECUTING') return s
-      const { execStep, plannedRoute } = s
-      if (execStep >= plannedRoute.length) {
-        // Route finished without reaching exit
-        return { ...s, simState:'PLANNING', playerLoc: plannedRoute[plannedRoute.length-1] || s.playerLoc, plannedRoute:[], execStep:0 }
-      }
-      const next = plannedRoute[execStep]
-      const cell = s.grid[next.y][next.x]
-      const force = calcForce(cell)
+function checkHazardCollision(hazards, px, py) {
+  return hazards.find(h => h.x === px && h.y === py)
+}
 
-      // ── PROBE MANDATORY — block stepping on unexplored tiles ──
-      if (!cell.isExplored) {
-        return { ...s, simState:'FAILED', playerLoc:next, failReason:'MUST PROBE FIRST — you cannot step on unexplored tiles! Use sonar before entering unknown areas.' }
-      }
+function reducer(state, action) {
+  switch (action.type) {
+    case 'START': return { ...state, phase: 'play', log: ['📍 You enter the flooded streets. Reach the extraction point (top-right).'] }
 
-      // ── MANHOLE trap (unexplored) ──
-      if (cell.hazard==='MANHOLE' && !cell.isExplored) {
-        const newGrid = s.grid.map(r=>r.map(c=>c.x===next.x&&c.y===next.y?{...c,isExplored:true}:c))
-        return { ...s, simState:'FAILED', playerLoc:next, failReason:'SUBTERRANEAN ENTRAPMENT — unseen manhole displaced by flood. Unit pulled under.', grid:newGrid }
-      }
+    case 'MOVE': {
+      if (state.phase !== 'play') return state
+      const { dx, dy } = action.payload
+      const nx = state.player.x + dx
+      const ny = state.player.y + dy
+      if (nx < 0 || nx >= GRID || ny < 0 || ny >= GRID) return state
 
-      // ── STRAINER trap ──
-      if (cell.hazard==='STRAINER') {
-        return { ...s, simState:'FAILED', playerLoc:next, failReason:'PINNED BY HYDRODYNAMIC PRESSURE — strainer trapped unit against fence. Escape impossible.' }
-      }
+      const cell = state.cells[ny][nx]
+      const withCurrent = isMovingWithCurrent(cell, dx, dy)
+      const cost = withCurrent ? STAMINA_WITH : STAMINA_AGAINST
+      const newStamina = state.stamina - cost
 
-      // ── Force threshold check ──
-      if (force > FORCE_THRESHOLD) {
-        if (s.anchorActive) {
-          // Anchor saves — consumed
-          return { ...s, playerLoc:next, execStep:execStep+1, anchorActive:false }
+      if (newStamina <= 0) {
+        return {
+          ...state, phase: 'dead', stamina: 0,
+          deathCause: 'exhaustion',
+          log: [...state.log, '💀 MUSCLE EXHAUSTION: You collapsed into the current. Never fight the water directly — angle your path (ferry) across it.'],
         }
-        return { ...s, simState:'FAILED', playerLoc:next, failReason:`SWEPT AWAY — hydrodynamic force ${force.toFixed(0)} lbs exceeded safe limit (${FORCE_THRESHOLD} lbs). No anchor deployed.` }
       }
 
-      // ── Victory ──
-      if (next.x===EXIT.x && next.y===EXIT.y) {
-        const score = Math.min(100, Math.max(30, Math.round(
-          s.inventory.sonarBattery * 0.25 +
-          s.inventory.anchors * 20 +
-          Math.max(0, 55 - execStep * 0.4)
-        )))
-        return { ...s, simState:'VICTORY', playerLoc:next, score, plannedRoute:[] }
+      // Check for unprobed trap
+      if (cell.trap && !cell.probed) {
+        const msg = cell.trap === 'MANHOLE'
+          ? '💀 You stepped into a hidden open manhole! Storm pressure blew the cover off. ALWAYS probe before stepping.'
+          : '💀 Submerged chain-link fence snagged your legs. You fell face-first into the current.'
+        return { ...state, phase: 'dead', deathCause: cell.trap.toLowerCase(), player: { x: nx, y: ny }, log: [...state.log, msg] }
       }
 
-      return { ...s, playerLoc:next, execStep:execStep+1 }
+      // Move hazards
+      const newHazards = moveHazards(state.hazards)
+      const newLight = Math.max(0, state.lightLevel - LIGHT_DROP)
+
+      // Check hazard at new position
+      const hit = checkHazardCollision(newHazards, nx, ny)
+      if (hit) {
+        const msg = hit.type === 'ANTS'
+          ? '💀 You walked into a floating FIRE ANT RAFT! Thousands of stings caused anaphylaxis and panic. You lost your footing and drowned.'
+          : '💀 A heavy debris log swept into you at 6 fps. The impact knocked you into the current.'
+        return { ...state, phase: 'dead', deathCause: hit.type.toLowerCase(), player: { x: nx, y: ny }, hazards: newHazards, log: [...state.log, msg] }
+      }
+
+      // Reveal cell
+      const newCells = state.cells.map(row => row.map(c => ({ ...c })))
+      newCells[ny][nx].revealed = true
+
+      // Check win
+      if (nx === EXIT.x && ny === EXIT.y) {
+        const bonus = Math.round(state.stamina * 0.3) + Math.round(newLight * 0.2) + state.totalProbes * 2
+        const sc = Math.min(100, 40 + bonus)
+        return {
+          ...state, phase: 'win', player: { x: nx, y: ny }, stamina: newStamina, lightLevel: newLight,
+          hazards: newHazards, cells: newCells, turn: state.turn + 1, score: sc,
+          stepsWithCurrent: withCurrent ? state.stepsWithCurrent + 1 : state.stepsWithCurrent,
+          stepsAgainst: !withCurrent ? state.stepsAgainst + 1 : state.stepsAgainst,
+          log: [...state.log, '🎉 EXTRACTION REACHED! You survived the flood.'],
+        }
+      }
+
+      return {
+        ...state, player: { x: nx, y: ny }, stamina: newStamina, lightLevel: newLight,
+        hazards: newHazards, cells: newCells, turn: state.turn + 1,
+        stepsWithCurrent: withCurrent ? state.stepsWithCurrent + 1 : state.stepsWithCurrent,
+        stepsAgainst: !withCurrent ? state.stepsAgainst + 1 : state.stepsAgainst,
+        log: [...state.log, `Step to (${nx},${ny}) | ${withCurrent ? '-5' : '-20'} stamina | Light: ${newLight}%`],
+      }
     }
 
-    case 'RESET': return { ...INIT, grid:makeGrid() }
-    default:      return s
+    case 'PROBE': {
+      if (state.phase !== 'play') return state
+      const { dx, dy } = action.payload
+      const tx = state.player.x + dx
+      const ty = state.player.y + dy
+      if (tx < 0 || tx >= GRID || ty < 0 || ty >= GRID) return state
+      const newStamina = state.stamina - PROBE_COST
+      if (newStamina <= 0) return { ...state, log: [...state.log, '⚠️ Too exhausted to probe. Rest first.'] }
+      const newCells = state.cells.map(row => row.map(c => ({ ...c })))
+      const cell = newCells[ty][tx]
+      cell.probed = true
+      cell.revealed = true
+      let msg = `🔍 Probed (${tx},${ty}): Depth ${cell.depth}in, Flow ${cell.velocity.toFixed(1)}fps`
+      if (cell.trap === 'MANHOLE') msg += ' — ⚠️ OPEN MANHOLE DETECTED!'
+      else if (cell.trap === 'FENCE') msg += ' — ⚠️ SUBMERGED FENCE DETECTED!'
+      else msg += ' — Clear.'
+      return { ...state, cells: newCells, stamina: newStamina, totalProbes: state.totalProbes + 1, log: [...state.log, msg] }
+    }
+
+    case 'REST': {
+      if (state.phase !== 'play') return state
+      const newHazards = moveHazards(state.hazards)
+      const newLight = Math.max(0, state.lightLevel - LIGHT_DROP)
+      const hit = checkHazardCollision(newHazards, state.player.x, state.player.y)
+      if (hit) {
+        const msg = hit.type === 'ANTS'
+          ? '💀 While resting, a fire ant raft floated into you!'
+          : '💀 While resting, a debris log hit you!'
+        return { ...state, phase: 'dead', deathCause: hit.type.toLowerCase(), hazards: newHazards, log: [...state.log, msg] }
+      }
+      const newStamina = Math.min(100, state.stamina + STAMINA_REST)
+      return {
+        ...state, stamina: newStamina, lightLevel: newLight, hazards: newHazards, turn: state.turn + 1,
+        log: [...state.log, `⏸️ Rested. Stamina +${STAMINA_REST} → ${newStamina}%. Light: ${newLight}%`],
+      }
+    }
+
+    case 'CRANK_FLASHLIGHT': {
+      if (state.phase !== 'play') return state
+      if (state.stamina <= STAMINA_CRANK) return { ...state, log: [...state.log, '⚠️ Too exhausted to crank. Rest first.'] }
+      const newStamina = state.stamina - STAMINA_CRANK
+      const newLight = Math.min(100, state.lightLevel + LIGHT_CRANK)
+      return {
+        ...state, stamina: newStamina, lightLevel: newLight,
+        log: [...state.log, `🔦 Cranked flashlight. Stamina -${STAMINA_CRANK}, Light +${LIGHT_CRANK} → ${newLight}%`],
+      }
+    }
+
+    case 'SET_PHASE': return { ...state, phase: action.payload }
+    case 'RESTART': return { ...initState, cells: generateLevel(SEED + Date.now() % 1000), hazards: generateHazards(SEED + Date.now() % 1000) }
+    default: return state
   }
 }
 
-// ─── Vector Arrow ─────────────────────────────────────────────────────────────
-function Arrow({ dx, dy, v, px }) {
-  const len = Math.min(px*0.35, 3 + v * 1.6)
-  const m = Math.sqrt(dx*dx+dy*dy)||1
-  const nx=dx/m, ny=dy/m
-  const cx=px/2, cy=px/2
-  const ex=cx+nx*len, ey=cy+ny*len
-  const sx=cx-nx*len*0.4, sy=cy-ny*len*0.4
-  const ang=Math.atan2(ny,nx), ah=len*0.36
-  const a1x=ex-ah*Math.cos(ang-0.5), a1y=ey-ah*Math.sin(ang-0.5)
-  const a2x=ex-ah*Math.cos(ang+0.5), a2y=ey-ah*Math.sin(ang+0.5)
-  const col = v>5?'#ef4444':v>3?'#f59e0b':v>1.8?'#fbbf24':'#22c55e'
-  const op  = 0.35 + Math.min(0.55, v*0.07)
-  return (
-    <svg width={px} height={px} style={{position:'absolute',inset:0,pointerEvents:'none'}}>
-      <line x1={sx} y1={sy} x2={ex} y2={ey} stroke={col} strokeWidth={1.2} opacity={op}/>
-      <polygon points={`${ex},${ey} ${a1x},${a1y} ${a2x},${a2y}`} fill={col} opacity={op}/>
-    </svg>
-  )
-}
+// ── CSS Keyframes (injected once) ────────────────────────────────────────────
+const KEYFRAMES = `
+@keyframes m5flow { 0%{background-position:0 0} 100%{background-position:30px 20px} }
+@keyframes m5pulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+@keyframes m5heartbeat { 0%,100%{transform:scale(1)} 50%{transform:scale(1.15)} }
+@keyframes m5antFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
+`
 
-// ─── Main component ────────────────────────────────────────────────────────────
-export default function Module5_TreacherousTrek() {
-  const { dispatch: gd } = useGame()
-  const [s, dispatch]   = useReducer(reducer, INIT)
-  const [hover, setHover] = useState(null)
-  const [sonarAnim, setSonarAnim] = useState(null)
-  const [blockedMsg, setBlockedMsg] = useState(null)
-  const execRef = useRef(null)
+// ── Component ────────────────────────────────────────────────────────────────
+export default function Module5_DynamicTrek() {
+  const { dispatch: gDispatch } = useGame()
+  const [state, dispatch] = useReducer(reducer, initState)
+  const logRef = useRef(null)
+  const styleRef = useRef(false)
 
-  // Show blocked message when trying to step on unexplored tile
+  // Inject CSS once
   useEffect(() => {
-    if (s._blocked) {
-      setBlockedMsg(s._blocked)
-      const t = setTimeout(() => setBlockedMsg(null), 2000)
-      return () => clearTimeout(t)
+    if (styleRef.current) return
+    styleRef.current = true
+    const el = document.createElement('style')
+    el.textContent = KEYFRAMES
+    document.head.appendChild(el)
+    return () => { try { document.head.removeChild(el) } catch {} }
+  }, [])
+
+  // Auto-scroll log
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [state.log])
+
+  const goBack = useCallback(() => gDispatch({ type: 'BACK_TO_MODULES' }), [gDispatch])
+
+  const finishGame = useCallback(() => {
+    const passed = state.phase === 'win'
+    const score = passed ? state.score : Math.max(0, Math.round(state.turn * 0.5 + state.totalProbes * 2))
+    gDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-5', result: { score, passed } } })
+    dispatch({ type: 'SET_PHASE', payload: 'result' })
+  }, [state, gDispatch])
+
+  // Light radius for fog-of-war
+  const lightRadius = Math.max(1, Math.round((state.lightLevel / 100) * 10))
+  const staminaLow = state.stamina <= 30
+
+  // Hazard positions as set for quick lookup
+  const hazardMap = useMemo(() => {
+    const m = {}
+    state.hazards.forEach(h => { m[`${h.x},${h.y}`] = h })
+    return m
+  }, [state.hazards])
+
+  // ── Key handler ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (state.phase !== 'play') return
+    const handler = (e) => {
+      const map = { ArrowUp: { dx: 0, dy: -1 }, ArrowDown: { dx: 0, dy: 1 }, ArrowLeft: { dx: -1, dy: 0 }, ArrowRight: { dx: 1, dy: 0 } }
+      if (map[e.key]) {
+        e.preventDefault()
+        if (e.shiftKey) dispatch({ type: 'PROBE', payload: map[e.key] })
+        else dispatch({ type: 'MOVE', payload: map[e.key] })
+      }
+      if (e.key === 'r' || e.key === 'R') dispatch({ type: 'REST' })
+      if (e.key === 'f' || e.key === 'F') dispatch({ type: 'CRANK_FLASHLIGHT' })
     }
-  }, [s._blockedAt]) // re-trigger on each blocked attempt via timestamp
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [state.phase])
 
-  // Execution loop
-  useEffect(() => {
-    if (s.simState !== 'EXECUTING') return
-    execRef.current = setInterval(() => dispatch({ type:'STEP' }), 500)
-    return () => clearInterval(execRef.current)
-  }, [s.simState])
-
-  // Clear sonar animation
-  useEffect(() => {
-    if (!sonarAnim) return
-    const t = setTimeout(() => setSonarAnim(null), 900)
-    return () => clearTimeout(t)
-  }, [sonarAnim])
-
-  // Record score
-  useEffect(() => {
-    if (s.simState !== 'VICTORY' && s.simState !== 'FAILED') return
-    const score = s.simState==='VICTORY' ? (s.score??50) : 0
-    gd({ type:'RECORD_SCORE', payload:{ key:'flood-5', result:{ score, passed:s.simState==='VICTORY' } } })
-  }, [s.simState]) // eslint-disable-line
-
-  // Computed route max force
-  const maxForce = useMemo(() => {
-    const pts = [s.playerLoc, ...s.plannedRoute]
-    return pts.reduce((m,p) => {
-      const c = s.grid[p.y]?.[p.x]; return c ? Math.max(m, calcForce(c)) : m
-    }, 0)
-  }, [s.playerLoc, s.plannedRoute, s.grid])
-
-  const handleSonar = () => {
-    dispatch({ type:'SONAR' })
-    setSonarAnim({ x:s.playerLoc.x, y:s.playerLoc.y })
-  }
-
-  const isWP = (x,y) => s.plannedRoute.findIndex(p=>p.x===x&&p.y===y)
-
-  const mapW = GS * CPXL
-  const mapH = GS * CPXL
-
-  // ── RESULT screens ──────────────────────────────────────────────────────────
-  if (s.simState === 'VICTORY' || s.simState === 'FAILED') {
-    const pass = s.simState === 'VICTORY'
+  // ── INTRO ──────────────────────────────────────────────────────────────────
+  if (state.phase === 'intro') {
     return (
-      <div style={{position:'fixed',inset:0,background:'#080808',fontFamily:MONO,display:'flex',flexDirection:'column',overflow:'hidden'}}>
-        <style>{`@keyframes swept{0%{transform:translate(0,0);opacity:1}100%{transform:translate(190px,20px);opacity:0}}@keyframes blink-r{0%,100%{opacity:1}50%{opacity:.2}}`}</style>
-        <div style={{height:48,background:'#080808',borderBottom:'1px solid #111',display:'flex',alignItems:'center',padding:'0 16px',gap:16}}>
-          <div style={{color:pass?'#22c55e':'#ef4444',fontSize:13,fontWeight:700,letterSpacing:2}}>
-            {pass?'ROUTE COMPLETE — EXTRACTION SUCCESSFUL':`MISSION ABORT — ${s.failReason}`}
+      <div style={S.screen}>
+        <div style={S.introCard}>
+          <div style={{ fontSize: 56 }}>🌊</div>
+          <h1 style={{ color: TEXT, fontSize: 26, margin: '8px 0' }}>Module 5: Dynamic Trek</h1>
+          <p style={{ color: DIM, fontSize: 14, lineHeight: 1.7, margin: '8px 0' }}>
+            Navigate flooded streets from <strong style={{ color: BLUE }}>bottom-left</strong> to
+            <strong style={{ color: GREEN }}> top-right extraction</strong>. The water hides deadly hazards, fire ant rafts float
+            with the current, and <strong style={{ color: YELLOW }}>darkness is closing in</strong>.
+          </p>
+          <div style={{ background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 14, width: '100%', textAlign: 'left', border: `1px solid ${BORDER}` }}>
+            <h3 style={{ color: YELLOW, margin: '0 0 8px', fontSize: 14 }}>Mechanics</h3>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 12, lineHeight: 2, color: DIM }}>
+              <li>🏃 <strong style={{ color: TEXT }}>Move:</strong> Arrow keys (with current = -5 stamina, against = -20)</li>
+              <li>🔍 <strong style={{ color: TEXT }}>Probe:</strong> Shift+Arrow to check the next tile for hidden traps</li>
+              <li>⏸️ <strong style={{ color: TEXT }}>Rest:</strong> Press R to recover stamina (but hazards still move!)</li>
+              <li>🔦 <strong style={{ color: TEXT }}>Flashlight:</strong> Press F to restore vision (-10 stamina)</li>
+              <li>🐜 <strong style={{ color: RED }}>Fire Ant Rafts:</strong> Move every turn. Lethal on contact.</li>
+              <li>🪵 <strong style={{ color: RED }}>Debris Logs:</strong> Move every turn. Lethal impact.</li>
+              <li>🕳️ <strong style={{ color: RED }}>Manholes:</strong> Hidden. Must probe first or die.</li>
+              <li>🌑 <strong style={{ color: TEXT }}>Darkness:</strong> Vision shrinks each turn. Crank flashlight to restore.</li>
+            </ul>
           </div>
-          <div style={{marginLeft:'auto',display:'flex',gap:10}}>
-            <button onClick={()=>dispatch({type:'RESET'})} style={{padding:'7px 20px',borderRadius:3,fontFamily:MONO,fontSize:12,fontWeight:700,letterSpacing:2,cursor:'pointer',border:'1px solid #ef4444',background:'rgba(239,68,68,0.07)',color:'#ef4444'}}>↺ RETRY</button>
-            <button onClick={()=>gd({type:'BACK_TO_MODULES'})} style={{padding:'7px 16px',borderRadius:3,fontFamily:MONO,fontSize:11,cursor:'pointer',border:'1px solid #1e2d3a',background:'transparent',color:'#334155'}}>← MODULES</button>
-          </div>
+          <button style={S.primaryBtn} onClick={() => dispatch({ type: 'START' })}>
+            Enter the Flood Zone
+          </button>
+          <button style={S.ghost} onClick={goBack}>← Back to Modules</button>
         </div>
-        <div style={{flex:1,display:'flex',overflow:'hidden'}}>
-          {/* Mini result map */}
-          <div style={{flex:1,padding:16,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto'}}>
-            <div style={{position:'relative',width:GS*CPXS,height:GS*CPXS,flexShrink:0}}>
-              {s.grid.map(row=>row.map(c=>{
-                const force=calcForce(c)
-                const bg=c.depth_in>8?'#2a0a0a':c.depth_in>6?'#1a1208':c.isExplored?'#121a12':'#0a0a0a'
-                return(
-                  <div key={`${c.x}-${c.y}`} style={{position:'absolute',left:c.x*CPXS,top:c.y*CPXS,width:CPXS,height:CPXS,background:bg,border:'1px solid #111',overflow:'hidden'}}>
-                    <Arrow dx={c.flowDx} dy={c.flowDy} v={c.velocity_fps} px={CPXS}/>
-                    {c.isExplored&&c.hazard==='MANHOLE'&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9}}>⬛</div>}
-                    {c.isExplored&&c.hazard==='STRAINER'&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:9}}>🕸</div>}
-                    {c.x===EXIT.x&&c.y===EXIT.y&&<div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:10}}>🏁</div>}
-                  </div>
-                )
-              }))}
-              {/* Final player position */}
-              <div style={{
-                position:'absolute',
-                left:s.playerLoc.x*CPXS,top:s.playerLoc.y*CPXS,
-                width:CPXS,height:CPXS,
-                display:'flex',alignItems:'center',justifyContent:'center',
-                fontSize:12,zIndex:10,
-                animation:s.failReason?.includes('SWEPT')?'swept 1.2s ease-in forwards':'none',
-              }}>🧑</div>
+      </div>
+    )
+  }
+
+  // ── RESULT ─────────────────────────────────────────────────────────────────
+  if (state.phase === 'result') {
+    const passed = state.score >= 50
+    return (
+      <div style={S.screen}>
+        <div style={{ ...S.introCard, maxWidth: 560 }}>
+          <div style={{ fontSize: 56 }}>{passed ? '🎉' : '💀'}</div>
+          <h1 style={{ color: passed ? GREEN : RED, fontSize: 24, margin: '8px 0' }}>
+            {passed ? 'Extraction Successful!' : 'Mission Failed'}
+          </h1>
+          <div style={{ fontSize: 40, fontWeight: 800, color: passed ? GREEN : RED }}>{state.score}/100</div>
+          {state.deathCause && (
+            <div style={{ background: 'rgba(255,71,87,0.1)', border: '1px solid rgba(255,71,87,0.2)', borderRadius: 10, padding: 14, width: '100%' }}>
+              <p style={{ color: '#ff6b81', fontSize: 13, margin: 0, lineHeight: 1.6 }}>
+                {state.deathCause === 'exhaustion' && 'You fought the current head-on until your muscles gave out. In real floods, "ferry" at an angle across the current — never fight it directly.'}
+                {state.deathCause === 'manhole' && 'You stepped on an open manhole without probing. Storm surges blow manhole covers off — ALWAYS probe before stepping into turbid water.'}
+                {state.deathCause === 'fence' && 'A submerged fence trapped your legs. In floodwater, hidden obstacles are invisible. Probe every step.'}
+                {state.deathCause === 'ants' && 'Fire ant colonies form floating rafts in floods. They cling to anything that contacts them. Track all moving objects, not just the ground.'}
+                {state.deathCause === 'debris' && 'A fast-moving debris log hit you. Moving hazards in floodwater are as dangerous as the water itself.'}
+              </p>
+            </div>
+          )}
+          <div style={{ background: 'rgba(255,255,255,0.04)', border: `1px solid ${BORDER}`, borderRadius: 10, padding: 14, width: '100%', textAlign: 'left' }}>
+            <h3 style={{ color: BLUE, margin: '0 0 8px', fontSize: 14 }}>Stats</h3>
+            <div style={{ fontSize: 12, color: DIM, lineHeight: 2 }}>
+              <div>Turns: {state.turn}</div>
+              <div>Steps with current: {state.stepsWithCurrent} | Against: {state.stepsAgainst}</div>
+              <div>Probes: {state.totalProbes}</div>
+              <div>Final stamina: {state.stamina}% | Light: {state.lightLevel}%</div>
             </div>
           </div>
-          {/* Stats */}
-          <div style={{width:340,background:'#080808',borderLeft:'1px solid #111',padding:'20px 18px',display:'flex',flexDirection:'column',gap:14}}>
-            <div style={{fontSize:pass?44:44,textAlign:'center'}}>{pass?'🏁':'💀'}</div>
-            {pass&&<div style={{color:'#00e5ff',fontFamily:MONO,fontSize:42,fontWeight:900,textAlign:'center'}}>{s.score}%</div>}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-              {[
-                ['SONAR BATTERY',`${s.inventory.sonarBattery}%`,'#00e5ff'],
-                ['ANCHORS LEFT', `${s.inventory.anchors}`,     '#fbbf24'],
-                ['MAX FORCE',    `${maxForce.toFixed(0)} lbs`, maxForce>FORCE_THRESHOLD?'#ef4444':'#22c55e'],
-                ['OUTCOME',      pass?'EXTRACTED':'FAILED',    pass?'#22c55e':'#ef4444'],
-              ].map(([l,v,c])=>(
-                <div key={l} style={{background:'#0d0d0d',border:'1px solid #141414',borderRadius:3,padding:'8px 10px'}}>
-                  <div style={{color:'#1e3050',fontSize:8,letterSpacing:1}}>{l}</div>
-                  <div style={{color:c,fontFamily:MONO,fontSize:14,fontWeight:700,marginTop:2}}>{v}</div>
-                </div>
-              ))}
-            </div>
-            {!pass&&(
-              <div style={{background:'rgba(0,0,0,0.4)',border:'1px solid #1a2535',borderRadius:4,padding:'12px 14px'}}>
-                <div style={{color:'#fbbf24',fontSize:9,letterSpacing:2,marginBottom:8}}>📋 NFPA 1670 REFERENCE</div>
-                <div style={{color:'#647a8e',fontSize:10,lineHeight:1.8}}>
-                  {s.failReason?.includes('SWEPT')&&<><b style={{color:'#f87171'}}>NFPA 1670:</b> "Swiftwater force = V²×D. Crossing channels exceeding this threshold without a belay line or anchor system results in loss of footing. Deploy a throw bag anchor before traversing high-velocity nodes."</>}
-                  {s.failReason?.includes('STRAINER')&&<><b style={{color:'#f87171'}}>USACE:</b> "Strainers (chain-link fences, debris piles) trap victims against their face. Hydrodynamic pressure at 5 fps creates 60+ lbs of force per square foot — impossible to push against. Always survey down-current for strainers before entry."</>}
-                  {s.failReason?.includes('MANHOLE')&&<><b style={{color:'#f87171'}}>FEMA IS-1001:</b> "Flooded urban environments hide open utility access points. Manhole covers displace at ≥2ft of water depth. Deploy sonar or probe equipment before foot entry in low-turbidity channels."</>}
-                </div>
-              </div>
-            )}
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button style={S.primaryBtn} onClick={() => dispatch({ type: 'RESTART' })}>🔄 Try Again</button>
+            <button style={{ ...S.actionBtn, background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }} onClick={goBack}>📋 Modules</button>
           </div>
         </div>
       </div>
     )
   }
 
-  // ── MAIN SIMULATION ────────────────────────────────────────────────────────
+  // ── PLAY / DEAD / WIN ──────────────────────────────────────────────────────
+  const isDead = state.phase === 'dead'
+  const isWin = state.phase === 'win'
+  const exhaustionFilter = staminaLow ? `blur(${Math.round((30 - state.stamina) / 10)}px)` : 'none'
+  const darknessOpacity = 1 - (state.lightLevel / 100) * 0.85
+
   return (
-    <div style={{position:'fixed',inset:0,background:'#070707',fontFamily:MONO,display:'flex',flexDirection:'column',overflow:'hidden'}}>
-      <style>{`
-        @keyframes sonar-ring{0%{width:4px;height:4px;opacity:.9;border-width:3px}100%{width:${CPXL*3.2}px;height:${CPXL*3.2}px;opacity:0;border-width:1px}}
-        @keyframes blink-r{0%,100%{opacity:1}50%{opacity:.2}}
-        @keyframes swept{0%{transform:translate(0,0);opacity:1}100%{transform:translate(180px,10px);opacity:0}}
-        @keyframes pulse-wp{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
-        @keyframes exec-step{0%{background:rgba(0,229,255,0.2)}100%{background:transparent}}
-      `}</style>
-
-      {/* ── TOP BAR ── */}
-      <div style={{height:48,background:'#080808',borderBottom:'1px solid #111',display:'flex',alignItems:'center',padding:'0 14px',gap:14,flexShrink:0}}>
-        <button onClick={()=>gd({type:'BACK_TO_MODULES'})} style={{background:'none',border:'none',color:'#1e3050',fontFamily:MONO,fontSize:11,cursor:'pointer'}}>← EXIT</button>
-        <div style={{color:'#00e5ff',fontSize:12,fontWeight:700,letterSpacing:2}}>M5 · GEOSPATIAL ROUTING</div>
-        <div style={{fontSize:9,color:'#1e3050',letterSpacing:1}}>SWIFTWATER RESCUE TACTICAL PATHFINDING</div>
-        <div style={{marginLeft:'auto',display:'flex',gap:14,alignItems:'center'}}>
-          <span style={{color:s.simState==='EXECUTING'?'#fbbf24':'#22c55e',fontFamily:MONO,fontSize:11,fontWeight:700,letterSpacing:2,
-                        animation:s.simState==='EXECUTING'?'blink-r 1s ease-in-out infinite':'none'}}>
-            {s.simState}
-          </span>
-          <span style={{color:'#334155',fontSize:10}}>
-            PLAYER: <span style={{color:'#00e5ff',fontWeight:700}}>({s.playerLoc.x},{s.playerLoc.y})</span>
-          </span>
-          <span style={{color:'#334155',fontSize:10}}>
-            WPS: <span style={{color:'#fbbf24',fontWeight:700}}>{s.plannedRoute.length}</span>
-          </span>
-          <span style={{color:'#334155',fontSize:10}}>
-            MAX F: <span style={{color:maxForce>FORCE_THRESHOLD?'#ef4444':'#22c55e',fontWeight:700}}>{maxForce.toFixed(0)} lbs</span>
-          </span>
-        </div>
-      </div>
-
-      {/* ── MAIN CONTENT ── */}
-      <div style={{flex:1,display:'flex',minHeight:0,overflow:'hidden'}}>
-
-        {/* ── GIS MAP ── */}
-        <div style={{flex:1,overflowY:'auto',overflowX:'auto',padding:10,display:'flex',alignItems:'flex-start',justifyContent:'center'}}>
-          <div style={{position:'relative',width:mapW,height:mapH,flexShrink:0}}>
-
-            {/* Cells */}
-            {s.grid.map(row=>row.map(c=>{
-              const force = calcForce(c)
-              const wpIdx = isWP(c.x, c.y)
-              const isPlayer = s.playerLoc.x===c.x && s.playerLoc.y===c.y
-              const isStart  = c.x===START.x && c.y===START.y
-              const isExit   = c.x===EXIT.x  && c.y===EXIT.y
-
-              // Cell background: turbidity = depth-based muddy brown, darker = deeper
-              const depthR = 12 + c.depth_in * 3
-              const depthG = 8  + c.depth_in * 1.5
-              const bg = c.isExplored
-                ? `rgba(${depthR},${depthG},6,0.92)`
-                : `rgba(8,6,4,0.97)`   // unexplored = opaque dark
-
-              const borderCol = force>FORCE_THRESHOLD?'#ef444455':force>100?'#f59e0b33':'#0d1a0d'
-
-              return (
-                <div key={`${c.x}-${c.y}`}
-                  onClick={()=>s.simState==='PLANNING'&&dispatch({type:'ADD_WP',x:c.x,y:c.y})}
-                  onMouseEnter={()=>setHover(c)}
-                  onMouseLeave={()=>setHover(null)}
-                  style={{
-                    position:'absolute', left:c.x*CPXL, top:c.y*CPXL,
-                    width:CPXL, height:CPXL,
-                    background:bg,
-                    border:`1px solid ${borderCol}`,
-                    cursor:s.simState==='PLANNING'?'crosshair':'default',
-                    overflow:'visible',
-                    zIndex:1,
-                  }}>
-
-                  {/* Vector arrow */}
-                  <Arrow dx={c.flowDx} dy={c.flowDy} v={c.velocity_fps} px={CPXL}/>
-
-                  {/* Hazard icons (explored only) */}
-                  {c.isExplored && c.hazard==='MANHOLE' && (
-                    <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,zIndex:3}}>⬛</div>
-                  )}
-                  {c.isExplored && c.hazard==='STRAINER' && (
-                    <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,zIndex:3}}>🕸</div>
-                  )}
-
-                  {/* Depth/vel on extreme cells (explored) */}
-                  {c.isExplored && force>FORCE_THRESHOLD && (
-                    <div style={{position:'absolute',top:2,left:2,fontSize:6.5,color:'#ef4444',fontFamily:MONO,lineHeight:1.2,zIndex:4}}>
-                      {c.depth_in}in<br/>{c.velocity_fps}fps
-                    </div>
-                  )}
-
-                  {/* Start marker */}
-                  {isStart && !isPlayer && (
-                    <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,zIndex:7}}>▶</div>
-                  )}
-
-                  {/* Exit marker */}
-                  {isExit && (
-                    <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,zIndex:7}}>🏁</div>
-                  )}
-
-                  {/* Waypoint number */}
-                  {wpIdx >= 0 && (
-                    <div style={{
-                      position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',zIndex:8,
-                    }}>
-                      <div style={{
-                        width:18,height:18,borderRadius:'50%',
-                        background:'#fbbf24',border:'2px solid #fff',
-                        display:'flex',alignItems:'center',justifyContent:'center',
-                        fontSize:8,fontWeight:700,color:'#000',fontFamily:MONO,
-                        animation:'pulse-wp 1.2s ease-in-out infinite',
-                      }}>{wpIdx+1}</div>
-                    </div>
-                  )}
-
-                  {/* Player */}
-                  {isPlayer && (
-                    <div style={{
-                      position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
-                      fontSize:18,zIndex:10,
-                    }}>🧑</div>
-                  )}
-
-                  {/* Execution flash */}
-                  {s.simState==='EXECUTING' && isPlayer && (
-                    <div style={{position:'absolute',inset:0,background:'rgba(0,229,255,0.2)',zIndex:9,animation:'exec-step 0.5s ease-out'}}/>
-                  )}
-                </div>
-              )
-            }))}
-
-            {/* Route path lines */}
-            <svg style={{position:'absolute',top:0,left:0,width:mapW,height:mapH,pointerEvents:'none',zIndex:6}}>
-              {[s.playerLoc,...s.plannedRoute].map((p,i,arr)=>{
-                if(i===arr.length-1)return null
-                const n=arr[i+1]
-                const x1=p.x*CPXL+CPXL/2, y1=p.y*CPXL+CPXL/2
-                const x2=n.x*CPXL+CPXL/2, y2=n.y*CPXL+CPXL/2
-                return(<line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#fbbf24" strokeWidth={1.8} strokeDasharray="5,3" opacity={0.75}/>)
-              })}
-            </svg>
-
-            {/* Sonar ring animation */}
-            {sonarAnim && (
-              <div style={{
-                position:'absolute',
-                left: sonarAnim.x*CPXL + CPXL/2,
-                top:  sonarAnim.y*CPXL + CPXL/2,
-                width:4, height:4,
-                borderRadius:'50%',
-                border:'3px solid #00e5ff',
-                boxShadow:'0 0 8px #00e5ff',
-                transform:'translate(-50%,-50%)',
-                animation:'sonar-ring 0.85s ease-out forwards',
-                zIndex:20, pointerEvents:'none',
-              }}/>
-            )}
-
-            {/* Legend overlay */}
-            <div style={{position:'absolute',top:6,right:6,background:'rgba(8,8,8,0.92)',border:'1px solid #1a2535',borderRadius:4,padding:'6px 8px',zIndex:25}}>
-              {[['#ef4444','V>5 fps / D>8 in (LETHAL)'],['#f59e0b','V>3 fps (CAUTION)'],['#22c55e','Safe velocity']].map(([c,t])=>(
-                <div key={t} style={{display:'flex',alignItems:'center',gap:5,marginBottom:3}}>
-                  <div style={{width:10,height:2,background:c}}/>
-                  <span style={{fontSize:7.5,color:'#334155',fontFamily:MONO}}>{t}</span>
-                </div>
-              ))}
-              <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:3}}><span style={{fontSize:9}}>⬛</span><span style={{fontSize:7.5,color:'#334155',fontFamily:MONO}}>MANHOLE (sonar req.)</span></div>
-              <div style={{display:'flex',alignItems:'center',gap:5}}><span style={{fontSize:9}}>🕸</span><span style={{fontSize:7.5,color:'#334155',fontFamily:MONO}}>STRAINER (lethal)</span></div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── RIGHT: Route Analytics ── */}
-        <div style={{width:268,background:'#080808',borderLeft:'1px solid #111',display:'flex',flexDirection:'column',overflow:'hidden'}}>
-
-          {/* Hover telemetry */}
-          <div style={{padding:'12px 14px',borderBottom:'1px solid #111',flexShrink:0}}>
-            <div style={{fontSize:8,color:'#1a2d40',letterSpacing:3,marginBottom:8}}>HOVER NODE DATA</div>
-            {hover ? (
-              <>
-                <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4}}>
-                  <span style={{color:'#334155'}}>Coord</span>
-                  <span style={{color:'#00e5ff',fontWeight:700}}>({hover.x}, {hover.y})</span>
-                </div>
-                {[
-                  ['Depth',    `${hover.depth_in} in`,         '#3b82f6'],
-                  ['Velocity', `${hover.velocity_fps.toFixed(2)} fps`, hover.velocity_fps>4?'#ef4444':hover.velocity_fps>2.5?'#f59e0b':'#22c55e'],
-                  ['Force',    `${calcForce(hover).toFixed(0)} lbs`,   calcForce(hover)>FORCE_THRESHOLD?'#ef4444':'#22c55e'],
-                  ['Flow Dir', `${hover.flowDx>=0?'+':''}${hover.flowDx.toFixed(1)}dx / ${hover.flowDy>=0?'+':''}${hover.flowDy.toFixed(1)}dy`, '#60a5fa'],
-                  ['Status',   hover.isExplored?(hover.hazard||'CLEAR'):'UNEXPLORED', hover.isExplored?hover.hazard?'#ef4444':'#22c55e':'#fbbf24'],
-                ].map(([l,v,c])=>(
-                  <div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:3}}>
-                    <span style={{color:'#2a4055'}}>{l}</span>
-                    <span style={{color:c,fontWeight:700,fontFamily:MONO}}>{v}</span>
-                  </div>
-                ))}
-              </>
-            ) : (
-              <div style={{color:'#1e3050',fontSize:10}}>Hover a cell to inspect</div>
-            )}
-          </div>
-
-          {/* Route analytics */}
-          <div style={{padding:'12px 14px',borderBottom:'1px solid #111',flexShrink:0}}>
-            <div style={{fontSize:8,color:'#1a2d40',letterSpacing:3,marginBottom:8}}>ROUTE ANALYTICS</div>
-            {[
-              ['Waypoints',  `${s.plannedRoute.length}`,       '#fbbf24'],
-              ['Max Force',  `${maxForce.toFixed(0)} lbs`,     maxForce>FORCE_THRESHOLD?'#ef4444':'#22c55e'],
-              ['Route Safe', maxForce>FORCE_THRESHOLD?'NO — ANCHOR REQ':'YES', maxForce>FORCE_THRESHOLD?'#ef4444':'#22c55e'],
-            ].map(([l,v,c])=>(
-              <div key={l} style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:5}}>
-                <span style={{color:'#2a4055'}}>{l}</span>
-                <span style={{color:c,fontWeight:700,fontFamily:MONO}}>{v}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Inventory */}
-          <div style={{padding:'12px 14px',borderBottom:'1px solid #111',flexShrink:0}}>
-            <div style={{fontSize:8,color:'#1a2d40',letterSpacing:3,marginBottom:10}}>INVENTORY</div>
-
-            {/* Sonar battery */}
-            <div style={{marginBottom:10}}>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#2a4055',marginBottom:4}}>
-                <span>📡 SONAR BATTERY</span>
-                <span style={{color:s.inventory.sonarBattery>40?'#00e5ff':'#ef4444',fontWeight:700}}>{s.inventory.sonarBattery}%</span>
-              </div>
-              <div style={{height:5,background:'#0a0a0a',border:'1px solid #141e2a',borderRadius:2,overflow:'hidden'}}>
-                <div style={{height:'100%',borderRadius:2,transition:'width 0.3s',
-                  width:`${s.inventory.sonarBattery}%`,
-                  background:s.inventory.sonarBattery>40?'#00e5ff':s.inventory.sonarBattery>20?'#f59e0b':'#ef4444'}}/>
-              </div>
-              <div style={{fontSize:9,color:'#1e3050',marginTop:3}}>Reveals 3×3 area · 20% per ping</div>
-            </div>
-
-            {/* Anchors */}
-            <div>
-              <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#2a4055',marginBottom:4}}>
-                <span>⚓ ANCHORS</span>
-                <span style={{color:'#fbbf24',fontWeight:700}}>{s.inventory.anchors} remaining</span>
-              </div>
-              <div style={{display:'flex',gap:6}}>
-                {[0,1].map(i=>(
-                  <div key={i} style={{
-                    width:28,height:22,borderRadius:3,
-                    background:i<s.inventory.anchors?'rgba(251,191,36,0.15)':'rgba(0,0,0,0.3)',
-                    border:`1px solid ${i<s.inventory.anchors?'#fbbf24':'#141414'}`,
-                    display:'flex',alignItems:'center',justifyContent:'center',
-                    fontSize:12,
-                  }}>
-                    {i<s.inventory.anchors?'⚓':'—'}
-                  </div>
-                ))}
-              </div>
-              {s.anchorActive&&(
-                <div style={{marginTop:5,fontSize:9,color:'#22c55e',fontWeight:700,animation:'blink-r 0.8s ease-in-out infinite'}}>
-                  ● ANCHOR DEPLOYED — traverses 1 high-force node
-                </div>
-              )}
-              <div style={{fontSize:9,color:'#1e3050',marginTop:3}}>Enables 1 high-force traversal</div>
-            </div>
-          </div>
-
-          {/* Mission brief */}
-          <div style={{padding:'10px 14px',flex:1,overflowY:'auto'}}>
-            <div style={{fontSize:8,color:'#1a2d40',letterSpacing:3,marginBottom:8}}>MISSION BRIEF</div>
-            {[
-              {c:'#ef4444',t:'MAIN STREET (row 7)',d:'V=8fps, D=12in, Force=768lbs. Requires anchor or route around.'},
-              {c:'#f59e0b',t:'SECONDARY CHANNEL (col 7)',d:'V=6fps, D=9in, Force=324lbs. Requires anchor.'},
-              {c:'#fbbf24',t:'ALLEY ROWS (2,4,9,12)',d:'V=1.5fps, D=4in, safe — but dense hidden manholes. Use sonar.'},
-              {c:'#a78bfa',t:'PARK (bottom-right)',d:'V=5fps, D=7in, Force=175lbs. Strainer traps at (12,11) and (13,13).'},
-              {c:'#22c55e',t:'SAFE ZONES',d:'General residential. Low force. Some scattered manholes.'},
-            ].map(({c,t,d})=>(
-              <div key={t} style={{marginBottom:10}}>
-                <div style={{color:c,fontSize:9,fontWeight:700}}>{t}</div>
-                <div style={{color:'#2a4055',fontSize:9,lineHeight:1.5,marginTop:2}}>{d}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ── BLOCKED WARNING ── */}
-      {blockedMsg && (
-        <div style={{background:'#7f1d1d',border:'2px solid #ef4444',padding:'8px 16px',textAlign:'center',fontFamily:MONO,fontSize:12,color:'#fca5a5',fontWeight:700,letterSpacing:1,flexShrink:0}}>
-          ⚠️ {blockedMsg}
-        </div>
+    <div style={{ ...S.screen, flexDirection: 'column', padding: 12, gap: 10, position: 'relative' }}>
+      {/* Exhaustion vignette */}
+      {staminaLow && state.phase === 'play' && (
+        <div style={{
+          position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 100,
+          background: 'radial-gradient(ellipse at center, transparent 40%, rgba(255,50,50,0.15) 100%)',
+          animation: 'm5heartbeat 1s ease infinite',
+        }} />
       )}
 
-      {/* ── ACTION DECK ── */}
-      <div style={{background:'#080808',borderTop:'2px solid #1a2535',padding:'10px 14px',flexShrink:0}}>
-        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+      {/* Top bar */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center', width: '100%', maxWidth: 800 }}>
+        <button style={S.ghost} onClick={goBack}>← Quit</button>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', gap: 16, fontSize: 12, color: DIM }}>
+          <span>Turn: <strong style={{ color: TEXT }}>{state.turn}</strong></span>
+          <span style={{ color: staminaLow ? RED : GREEN }}>
+            Stamina: <strong>{state.stamina}%</strong>
+            {staminaLow && ' ❤️'}
+          </span>
+          <span style={{ color: state.lightLevel < 30 ? RED : YELLOW }}>
+            Light: <strong>{state.lightLevel}%</strong>
+          </span>
+        </div>
+      </div>
 
-          <DeckBtn icon="📡" label="SONAR PING" sub="-20% BATTERY · 3×3 REVEAL"
-            color="#00e5ff"
-            disabled={s.inventory.sonarBattery<20||s.simState==='EXECUTING'}
-            onClick={handleSonar}/>
+      {/* Main layout: grid + side panel */}
+      <div style={{ display: 'flex', gap: 12, flex: 1, maxWidth: 900, width: '100%' }}>
+        {/* Grid */}
+        <div style={{
+          position: 'relative',
+          width: GRID * CELL, height: GRID * CELL,
+          background: '#0a0a1e',
+          borderRadius: 8, overflow: 'hidden',
+          border: `1px solid ${BORDER}`,
+          flexShrink: 0,
+          filter: exhaustionFilter,
+        }}>
+          {/* Water flow background */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: `repeating-linear-gradient(135deg, rgba(9,132,227,0.04) 0px, transparent 4px, rgba(9,132,227,0.02) 8px)`,
+            backgroundSize: '30px 20px',
+            animation: 'm5flow 2s linear infinite',
+          }} />
 
-          <DeckBtn icon="⚓" label="DEPLOY ANCHOR" sub="-1 ANCHOR · HIGH-FORCE BYPASS"
-            color="#fbbf24"
-            active={s.anchorActive}
-            disabled={s.inventory.anchors<=0||s.anchorActive||s.simState==='EXECUTING'}
-            onClick={()=>dispatch({type:'ANCHOR'})}/>
+          {/* Cells */}
+          {state.cells.map((row, y) => row.map((cell, x) => {
+            const dist = Math.abs(x - state.player.x) + Math.abs(y - state.player.y)
+            const visible = dist <= lightRadius || cell.revealed
+            const isPlayer = x === state.player.x && y === state.player.y
+            const isExit = x === EXIT.x && y === EXIT.y
+            const hazard = hazardMap[`${x},${y}`]
+            const depthColor = `rgba(9,132,227,${Math.min(0.5, cell.depth / 30)})`
 
-          <div style={{width:1,height:34,background:'#141414'}}/>
+            return (
+              <div key={`${x}-${y}`} style={{
+                position: 'absolute',
+                left: x * CELL, top: y * CELL,
+                width: CELL, height: CELL,
+                background: visible ? depthColor : '#020210',
+                borderRight: '1px solid rgba(255,255,255,0.03)',
+                borderBottom: '1px solid rgba(255,255,255,0.03)',
+                transition: 'background 0.3s',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: CELL * 0.55,
+              }}>
+                {/* Trap indicators (only if probed) */}
+                {visible && cell.probed && cell.trap === 'MANHOLE' && !isPlayer && (
+                  <span style={{ color: RED, fontSize: CELL * 0.5 }}>⚠</span>
+                )}
+                {visible && cell.probed && cell.trap === 'FENCE' && !isPlayer && (
+                  <span style={{ color: YELLOW, fontSize: CELL * 0.45 }}>⚡</span>
+                )}
+                {/* Probed safe indicator */}
+                {visible && cell.probed && !cell.trap && !isPlayer && !isExit && !hazard && (
+                  <span style={{ color: 'rgba(46,213,115,0.3)', fontSize: CELL * 0.35 }}>·</span>
+                )}
+                {/* Exit */}
+                {isExit && visible && <span style={{ fontSize: CELL * 0.6, animation: 'm5pulse 1.5s ease infinite' }}>🏁</span>}
+                {/* Hazards */}
+                {hazard && visible && !isPlayer && (
+                  <span style={{ fontSize: CELL * 0.6, animation: hazard.type === 'ANTS' ? 'm5antFloat 0.8s ease infinite' : 'none' }}>
+                    {hazard.emoji}
+                  </span>
+                )}
+                {/* Player */}
+                {isPlayer && <span style={{ fontSize: CELL * 0.65, zIndex: 2 }}>🧍</span>}
+                {/* Flow arrow (subtle) */}
+                {visible && !isPlayer && !isExit && !hazard && !cell.trap && cell.probed && (
+                  <span style={{
+                    position: 'absolute', fontSize: 8, color: 'rgba(116,185,255,0.25)',
+                    transform: `rotate(${Math.atan2(cell.flowY, cell.flowX) * 180 / Math.PI}deg)`,
+                  }}>→</span>
+                )}
+              </div>
+            )
+          }))}
 
-          <DeckBtn icon="▶" label="COMMIT ROUTE" sub={`${s.plannedRoute.length} WAYPOINTS`}
-            color="#22c55e"
-            disabled={s.plannedRoute.length===0||s.simState==='EXECUTING'}
-            urgent
-            onClick={()=>dispatch({type:'COMMIT'})}/>
+          {/* Darkness overlay */}
+          <div style={{
+            position: 'absolute', inset: 0, pointerEvents: 'none',
+            background: `radial-gradient(circle ${lightRadius * CELL * 1.2}px at ${state.player.x * CELL + CELL / 2}px ${state.player.y * CELL + CELL / 2}px, transparent 0%, rgba(0,0,0,${darknessOpacity}) 100%)`,
+            transition: 'all 0.5s',
+          }} />
 
-          <DeckBtn icon="✕" label="CLEAR WPS" sub="RESET PATH"
-            color="#ef4444"
-            disabled={s.plannedRoute.length===0||s.simState==='EXECUTING'}
-            onClick={()=>dispatch({type:'CLEAR_WP'})}/>
-
-          <div style={{marginLeft:'auto',display:'flex',flexDirection:'column',alignItems:'flex-end',gap:3}}>
-            <div style={{fontSize:9,color:'#1e3050'}}>
-              FORCE THRESHOLD: <span style={{color:'#fbbf24'}}>{FORCE_THRESHOLD} lbs</span> · Formula: <span style={{color:'#334155'}}>V² × D</span>
+          {/* Death / Win overlay */}
+          {(isDead || isWin) && (
+            <div style={{
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: isDead ? 'rgba(255,20,20,0.3)' : 'rgba(46,213,115,0.2)',
+              backdropFilter: 'blur(4px)', zIndex: 10, flexDirection: 'column', gap: 12,
+            }}>
+              <div style={{ fontSize: 48 }}>{isDead ? '💀' : '🎉'}</div>
+              <div style={{ color: isDead ? RED : GREEN, fontSize: 18, fontWeight: 700 }}>
+                {isDead ? 'YOU DIED' : 'EXTRACTED!'}
+              </div>
+              <button onClick={finishGame} style={{ ...S.primaryBtn, fontSize: 14 }}>
+                See Results
+              </button>
             </div>
-            <div style={{fontSize:9,color:'#1e3050'}}>
-              START: (0,0) → EXIT: (14,14) · Click adjacent cells to plot route
+          )}
+        </div>
+
+        {/* Side panel */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 200 }}>
+          {/* Current cell info */}
+          {state.phase === 'play' && (
+            <div style={{ ...S.sideCard }}>
+              <div style={{ color: DIM, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Current Position</div>
+              <div style={{ color: TEXT, fontSize: 13, marginTop: 4 }}>
+                Depth: <strong>{state.cells[state.player.y][state.player.x].depth}"</strong> |
+                Current: <strong>{state.cells[state.player.y][state.player.x].velocity.toFixed(1)} fps</strong>
+              </div>
             </div>
+          )}
+
+          {/* Stamina bar */}
+          <div style={{ ...S.sideCard }}>
+            <div style={{ color: DIM, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Stamina</div>
+            <div style={{ height: 8, borderRadius: 4, background: '#1a1a2e', marginTop: 6, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 4, transition: 'width 0.3s',
+                width: `${state.stamina}%`,
+                background: state.stamina > 50 ? GREEN : state.stamina > 30 ? YELLOW : RED,
+              }} />
+            </div>
+            <div style={{ color: staminaLow ? RED : TEXT, fontSize: 12, marginTop: 4, fontWeight: 700 }}>
+              {state.stamina}% {staminaLow && '⚠️ EXHAUSTION WARNING'}
+            </div>
+          </div>
+
+          {/* Light bar */}
+          <div style={{ ...S.sideCard }}>
+            <div style={{ color: DIM, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Ambient Light</div>
+            <div style={{ height: 8, borderRadius: 4, background: '#1a1a2e', marginTop: 6, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 4, transition: 'width 0.3s',
+                width: `${state.lightLevel}%`,
+                background: `linear-gradient(90deg, #2d3436, ${YELLOW})`,
+              }} />
+            </div>
+            <div style={{ color: DIM, fontSize: 11, marginTop: 4 }}>{state.lightLevel}%</div>
+          </div>
+
+          {/* Actions */}
+          {state.phase === 'play' && (
+            <div style={{ ...S.sideCard }}>
+              <div style={{ color: DIM, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Actions</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {/* Directional move */}
+                {[
+                  { label: '↑', dx: 0, dy: -1 },
+                  { label: '↓', dx: 0, dy: 1 },
+                  { label: '←', dx: -1, dy: 0 },
+                  { label: '→', dx: 1, dy: 0 },
+                ].map(d => (
+                  <button key={d.label} onClick={() => dispatch({ type: 'MOVE', payload: { dx: d.dx, dy: d.dy } })}
+                    style={{ ...S.smallBtn, background: 'rgba(9,132,227,0.15)', color: BLUE }}>
+                    {d.label} Step
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }}>
+                {[
+                  { label: '↑🔍', dx: 0, dy: -1 },
+                  { label: '↓🔍', dx: 0, dy: 1 },
+                  { label: '←🔍', dx: -1, dy: 0 },
+                  { label: '→🔍', dx: 1, dy: 0 },
+                ].map(d => (
+                  <button key={d.label} onClick={() => dispatch({ type: 'PROBE', payload: { dx: d.dx, dy: d.dy } })}
+                    style={{ ...S.smallBtn, background: 'rgba(255,165,2,0.12)', color: YELLOW, fontSize: 11 }}>
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <button onClick={() => dispatch({ type: 'REST' })}
+                  style={{ ...S.smallBtn, flex: 1, background: 'rgba(46,213,115,0.12)', color: GREEN }}>
+                  ⏸ Rest
+                </button>
+                <button onClick={() => dispatch({ type: 'CRANK_FLASHLIGHT' })}
+                  style={{ ...S.smallBtn, flex: 1, background: 'rgba(255,255,0,0.1)', color: YELLOW }}>
+                  🔦 Crank
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Legend */}
+          <div style={{ ...S.sideCard, fontSize: 11, color: DIM, lineHeight: 1.8 }}>
+            <div>🧍 You | 🏁 Exit</div>
+            <div>🐜 Fire Ants | 🪵 Debris</div>
+            <div>⚠ Manhole | ⚡ Fence</div>
+            <div style={{ marginTop: 4, color: 'rgba(255,255,255,0.3)', fontSize: 10 }}>
+              Keyboard: Arrows=Move, Shift+Arrow=Probe, R=Rest, F=Flashlight
+            </div>
+          </div>
+
+          {/* Log */}
+          <div ref={logRef} style={{
+            ...S.sideCard, flex: 1, overflow: 'auto', maxHeight: 160,
+            fontSize: 10, color: DIM, lineHeight: 1.6,
+          }}>
+            {state.log.slice(-15).map((l, i) => <div key={i} style={{ padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>{l}</div>)}
           </div>
         </div>
       </div>
@@ -676,22 +649,35 @@ export default function Module5_TreacherousTrek() {
   )
 }
 
-function DeckBtn({ icon, label, sub, color, onClick, disabled, active, urgent }) {
-  const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
-  return (
-    <button onClick={onClick} disabled={disabled}
-      style={{
-        padding:'8px 14px', borderRadius:4, fontFamily:MONO, fontSize:11, fontWeight:700,
-        letterSpacing:1, cursor:disabled?'not-allowed':'pointer',
-        display:'flex', flexDirection:'column', alignItems:'flex-start', gap:2,
-        border:`${urgent?2:1}px solid ${active?'#fff':color}${disabled?'33':'66'}`,
-        background: active ? `${color}25` : disabled ? 'rgba(0,0,0,0.3)' : `${color}0d`,
-        color: disabled ? '#2a4055' : active ? '#fff' : color,
-        opacity: disabled ? 0.4 : 1, transition:'all 0.15s',
-        boxShadow: urgent && !disabled ? `0 0 14px ${color}33` : 'none',
-      }}>
-      <span style={{display:'flex',alignItems:'center',gap:6}}><span>{icon}</span><span>{label}</span></span>
-      {sub&&<span style={{fontSize:8,color:disabled?'#1e3050':active?'#ccc':'#334155',fontWeight:400,letterSpacing:0}}>{sub}</span>}
-    </button>
-  )
+// ── Styles ───────────────────────────────────────────────────────────────────
+const S = {
+  screen: {
+    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    background: BG, fontFamily: 'system-ui, -apple-system, sans-serif', padding: 12,
+  },
+  introCard: {
+    maxWidth: 520, padding: '32px 28px', textAlign: 'center',
+    background: 'rgba(255,255,255,0.03)', border: `1px solid ${BORDER}`,
+    borderRadius: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+  },
+  card: { background: CARD, borderRadius: 10, padding: '12px 14px', border: `1px solid ${BORDER}` },
+  sideCard: { background: CARD, borderRadius: 8, padding: '10px 12px', border: `1px solid ${BORDER}` },
+  primaryBtn: {
+    padding: '13px 36px', fontSize: 15, fontWeight: 700,
+    background: 'linear-gradient(135deg, #0984e3, #74b9ff)', color: '#fff',
+    border: 'none', borderRadius: 10, cursor: 'pointer',
+  },
+  actionBtn: {
+    padding: '10px 20px', fontSize: 13, fontWeight: 600,
+    background: 'rgba(255,255,255,0.06)', color: TEXT,
+    border: `1px solid ${BORDER}`, borderRadius: 8, cursor: 'pointer',
+  },
+  smallBtn: {
+    padding: '6px 8px', fontSize: 12, fontWeight: 600,
+    border: `1px solid ${BORDER}`, borderRadius: 6, cursor: 'pointer',
+    background: 'rgba(255,255,255,0.04)', color: TEXT,
+  },
+  ghost: {
+    background: 'none', border: 'none', color: DIM, cursor: 'pointer', fontSize: 13, padding: 0,
+  },
 }
