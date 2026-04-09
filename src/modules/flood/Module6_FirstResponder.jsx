@@ -1,580 +1,715 @@
 /**
- * Module 6 — Mass Casualty Triage (START Protocol)
+ * Module 6 — First Aid Triage (START Protocol)
  *
- * Flash flood aftermath: 5 casualties, scavenged supplies, 180-second golden window.
- * Real-time patient deterioration. Correctly triage, stabilize saveable patients,
- * avoid the PT-04 (expectant) resource trap.
+ * Two-phase educational puzzle:
+ *   Phase 1: Triage — Assign 10 flood-aftermath patients to START categories
+ *   Phase 2: Treatment — Apply correct med-kit items to each treatable patient
+ *
+ * All inline CSS. No external dependencies beyond React.
  */
-import { useState, useEffect, useReducer, useCallback, useRef } from 'react'
+import { useState, useReducer, useCallback, useRef } from 'react'
 import { useGame } from '../../context/GameContext'
 
-// ── Constants ────────────────────────────────────────────────────────────────
-const TICK_MS = 100
-const FONT = "'JetBrains Mono', 'Courier New', monospace"
-const TAG_COLORS = {
-  GREEN:  '#39ff14',
-  YELLOW: '#ffe600',
-  RED:    '#ff1744',
-  BLACK:  '#424242',
+/* ─── Color palette ──────────────────────────────────────────────────────── */
+const C = {
+  bg:        '#1e1e2e',
+  card:      '#2a2a3e',
+  red:       '#ff4757',
+  yellow:    '#ffa502',
+  green:     '#2ed573',
+  black:     '#57606f',
+  text:      '#f1f2f6',
+  secondary: '#a4b0be',
+  border:    'rgba(255,255,255,0.08)',
+  font:      "system-ui, -apple-system, sans-serif",
 }
-const TAG_LABELS = ['GREEN', 'YELLOW', 'RED', 'BLACK']
 
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
-
-// ── Reducer ──────────────────────────────────────────────────────────────────
-const initialState = {
-  timeRemaining: 180,
-  phase: 'intro',
-  activePatient: null,
-  triageTags: { 0: null, 1: null, 2: null, 3: null, 4: null },
-  patients: [
-    {
-      id: 'PT-01', name: 'Marcus', age: 34, label: 'Severe Laceration',
-      desc: 'Arterial spurt from right thigh. Tourniquet-grade hemorrhage.',
-      correctTag: 'RED',
-      bpm: 118, map: 62, coreTemp: 36.4, respRate: 28,
-      bleedRate: 0.8,
-      tissueDamage: 0,
-      treated: false, stabilized: false, deceased: false,
-    },
-    {
-      id: 'PT-02', name: 'Diana', age: 28, label: 'Open Femur Fracture',
-      desc: 'Exposed bone fragment from left femur. Screaming in agony.',
-      correctTag: 'YELLOW',
-      bpm: 105, map: 78, coreTemp: 36.8, respRate: 22,
-      painSpike: 0.3,
-      shockTimer: 0,
-      treated: false, stabilized: false, deceased: false,
-    },
-    {
-      id: 'PT-03', name: 'James', age: 52, label: 'Severe Hypothermia',
-      desc: 'Pulled from submerged vehicle. Shivering violently. Lips blue.',
-      correctTag: 'RED',
-      bpm: 52, map: 70, coreTemp: 33.5, respRate: 10,
-      coolingRate: 0.015,
-      treated: false, stabilized: false, deceased: false,
-    },
-    {
-      id: 'PT-04', name: 'Ruth', age: 67, label: 'Massive Head Trauma',
-      desc: 'Unresponsive. No spontaneous breathing. Fixed dilated pupils.',
-      correctTag: 'BLACK',
-      bpm: 0, map: 0, coreTemp: 34.0, respRate: 0,
-      treated: false, stabilized: false, deceased: true,
-    },
-    {
-      id: 'PT-05', name: 'Alex', age: 19, label: 'Minor Cuts, Hysterical',
-      desc: 'Superficial lacerations. Hyperventilating. Blocking your workspace.',
-      correctTag: 'GREEN',
-      bpm: 138, map: 95, coreTemp: 37.1, respRate: 32,
-      hysteriaLevel: 80,
-      taskAssigned: false,
-      treated: false, stabilized: false, deceased: false,
-    },
-  ],
-  inventory: {
-    tornShirts: 4,
-    ductTapeSplint: 2,
-    garbageBags: 3,
-    bottledWater: 1,
+/* ─── Patient definitions ────────────────────────────────────────────────── */
+const PATIENTS = [
+  {
+    id: 'PT-1', name: 'Near-Drowning Victim', trueCategory: 'RED',
+    symptoms: ['Unconscious', 'Faint pulse detected', 'Water in lungs — gurgling sounds', 'Cyanotic (blue) lips'],
+    injuryZone: 'chest',
+    correctTreatment: ['rescueMask', 'mylarBlanket'],
+    treatmentSlotCount: 2,
+    treatmentExplanation: 'Rescue breathing clears water from lungs and restores oxygen. Mylar blanket prevents hypothermia in a wet, unconscious patient.',
   },
-  log: [],
-  resourceWastedOnBlack: false,
-  timeSpentOnPT04: 0,
+  {
+    id: 'PT-2', name: 'Arterial Debris Cut', trueCategory: 'RED',
+    symptoms: ['Deep laceration on right thigh', 'Bright red blood SPURTING rhythmically', 'Patient pale and confused', 'Rapid weak pulse'],
+    injuryZone: 'rightLeg',
+    correctTreatment: ['tourniquet'],
+    treatmentSlotCount: 1,
+    treatmentExplanation: 'Arterial bleeding kills in minutes. A tourniquet applied HIGH and TIGHT above the wound is the only field intervention that stops arterial hemorrhage.',
+  },
+  {
+    id: 'PT-3', name: 'Crush Syndrome', trueCategory: 'RED',
+    symptoms: ['Right leg trapped under concrete slab for 4+ hours', 'Leg is swollen and discolored', 'Patient alert but in severe pain', 'Dark urine output'],
+    injuryZone: 'rightLeg',
+    correctTreatment: ['tourniquet', 'cleanWater'],
+    treatmentSlotCount: 2,
+    treatmentExplanation: 'CRITICAL: Tourniquet MUST be applied BEFORE lifting debris. Crushed muscle releases lethal potassium and myoglobin — a "toxic wave" that causes cardiac arrest. IV fluids (clean water) dilute toxins.',
+  },
+  {
+    id: 'PT-4', name: 'Severe Asthma Attack', trueCategory: 'RED',
+    symptoms: ['Severe wheezing and gasping', 'Cannot complete sentences', 'Blue lips (cyanosis)', 'Using accessory muscles to breathe'],
+    injuryZone: 'chest',
+    correctTreatment: ['inhaler'],
+    treatmentSlotCount: 1,
+    treatmentExplanation: 'Albuterol is a bronchodilator — it relaxes the smooth muscle of the airways. Without it, severe bronchospasm leads to respiratory arrest.',
+  },
+  {
+    id: 'PT-5', name: 'Snakebite Victim', trueCategory: 'YELLOW',
+    symptoms: ['Two puncture wounds on left calf', 'Rapidly spreading swelling', 'Severe burning pain', 'Patient anxious but stable vitals'],
+    injuryZone: 'leftLeg',
+    correctTreatment: ['cleanWater', 'splintTape'],
+    treatmentSlotCount: 2,
+    trapItems: ['tourniquet'],
+    trapFeedback: 'NEVER tourniquet a snakebite! It traps venom in the limb, causing tissue necrosis and potential amputation. Immobilize the limb with a splint to slow lymphatic spread.',
+    treatmentExplanation: 'Clean the wound with water, then IMMOBILIZE the limb (splint) to reduce lymphatic flow. Keep the bite below heart level. Tourniquets are contraindicated.',
+  },
+  {
+    id: 'PT-6', name: 'Diabetic Emergency', trueCategory: 'YELLOW',
+    symptoms: ['Profuse sweating', 'Hands shaking uncontrollably', 'Confused and slurring words', 'Lost insulin supply in the flood'],
+    injuryZone: 'head',
+    correctTreatment: ['glucose'],
+    treatmentSlotCount: 1,
+    treatmentExplanation: 'Hypoglycemia (low blood sugar) can cause seizures, coma, and death. Oral glucose is the fastest field treatment. If unconscious, do NOT give oral fluids — aspiration risk.',
+  },
+  {
+    id: 'PT-7', name: 'Closed Forearm Fracture', trueCategory: 'YELLOW',
+    symptoms: ['Visible deformity of left forearm', 'Extreme pain and swelling', 'Good radial pulse in hand', 'Can wiggle fingers'],
+    injuryZone: 'leftArm',
+    correctTreatment: ['splintTape'],
+    treatmentSlotCount: 1,
+    treatmentExplanation: 'A closed fracture with good distal pulse is stable. Splint in the position found — do NOT try to straighten it. Check circulation (pulse, sensation) after splinting.',
+  },
+  {
+    id: 'PT-8', name: 'Hypothermia Patient', trueCategory: 'GREEN',
+    symptoms: ['Slurred speech', 'Violently shivering', 'Soaking wet clothes', 'Stumbling gait but ambulatory'],
+    injuryZone: 'torso',
+    correctTreatment: ['dryClothes', 'mylarBlanket'],
+    treatmentSlotCount: 2,
+    treatmentExplanation: 'Wet clothes cause evaporative heat loss 25x faster than dry. Remove wet layers FIRST, then wrap in Mylar blanket to trap radiant body heat.',
+  },
+  {
+    id: 'PT-9', name: 'Dysentery / Cholera', trueCategory: 'GREEN',
+    symptoms: ['Severe watery diarrhea', 'Vomiting for 12+ hours', 'Drank untreated floodwater', 'Sunken eyes, dry mouth (severe dehydration)'],
+    injuryZone: 'abdomen',
+    correctTreatment: ['cleanWater', 'ors'],
+    treatmentSlotCount: 2,
+    treatmentExplanation: 'Cholera kills through dehydration, not infection. ORS (Oral Rehydration Salts) replace lost electrolytes. Clean water + ORS can reduce cholera mortality from 50% to under 1%.',
+  },
+  {
+    id: 'PT-10', name: 'Massive Head Trauma', trueCategory: 'BLACK',
+    symptoms: ['Exposed brain matter visible', 'No spontaneous breathing', 'No pulse after opening airway', 'Fixed dilated pupils'],
+    injuryZone: 'head',
+    correctTreatment: [],
+    treatmentSlotCount: 0,
+    treatmentExplanation: 'This patient has injuries incompatible with life. Using resources here means another patient dies. Triage means making the hardest decision to save the most lives.',
+  },
+]
+
+/* ─── Triage error messages (per patient) ────────────────────────────────── */
+function triageErrorMessage(patient, assigned) {
+  const { id, trueCategory, name } = patient
+  if (assigned === trueCategory) return null
+  switch (id) {
+    case 'PT-1':
+      if (assigned === 'YELLOW' || assigned === 'GREEN')
+        return `Triage Error (${name}): An unconscious patient with no gag reflex and water in lungs is at immediate risk of death. Faint pulse = still salvageable. This is RED — Immediate.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Faint pulse detected means this patient is alive and salvageable. BLACK is only for patients with injuries incompatible with life. This is RED — Immediate.`
+      return `Triage Error (${name}): Unconscious near-drowning with cyanosis requires immediate intervention. Correct category: RED — Immediate.`
+    case 'PT-2':
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): Active arterial SPURTING blood is an immediate life threat (RED). This patient will bleed out in minutes without intervention.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): Bright red blood spurting rhythmically = arterial hemorrhage. This patient will die in minutes. This is RED — Immediate, not walking wounded.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Patient is pale and confused but has a pulse and is conscious. Arterial bleeding is immediately life-threatening but treatable. This is RED — Immediate.`
+      return `Triage Error (${name}): Arterial hemorrhage = RED — Immediate. This patient will die without a tourniquet within minutes.`
+    case 'PT-3':
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): Crush syndrome releases lethal toxins when pressure is released. Without immediate tourniquet + fluids, this patient faces cardiac arrest. This is RED — Immediate.`
+      if (assigned === 'GREEN' || assigned === 'BLACK')
+        return `Triage Error (${name}): Despite being alert, crush syndrome is immediately life-threatening. The "toxic wave" from reperfusion can cause cardiac arrest in minutes. RED — Immediate.`
+      return `Triage Error (${name}): Crush syndrome requires immediate intervention. Correct: RED — Immediate.`
+    case 'PT-4':
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): Cannot complete sentences + cyanosis = severe respiratory distress. Without bronchodilator, this progresses to respiratory arrest in minutes. RED — Immediate.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): Blue lips and accessory muscle use = imminent respiratory failure. This is far beyond "walking wounded." RED — Immediate.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Patient is still breathing (wheezing) and conscious. A single inhaler puff can save this life. This is RED — Immediate, not expectant.`
+      return `Triage Error (${name}): Severe asthma with cyanosis = RED — Immediate.`
+    case 'PT-5':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): Snakebites progress over hours, not minutes. With stable vitals, this is YELLOW — Delayed. Prioritize patients who will die in the next 30 minutes.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): Rapidly spreading swelling from a venomous bite needs medical attention — just not immediately. YELLOW — Delayed.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Snakebite with stable vitals is very treatable. Correct category: YELLOW — Delayed.`
+      return `Triage Error (${name}): Snakebite with stable vitals = YELLOW — Delayed.`
+    case 'PT-6':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): Hypoglycemia is serious but correctable with simple oral glucose. Patient is conscious. YELLOW — Delayed.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): Confusion and slurred speech indicate declining mental status. This patient needs treatment soon, not just observation. YELLOW — Delayed.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): This patient just needs sugar! Hypoglycemia is one of the most treatable emergencies. YELLOW — Delayed.`
+      return `Triage Error (${name}): Diabetic emergency with declining consciousness = YELLOW — Delayed.`
+    case 'PT-7':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): Good distal pulse and finger movement = no vascular compromise. A closed fracture is painful but not immediately life-threatening. YELLOW — Delayed.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): A visible deformity fracture needs splinting to prevent nerve/vascular damage. Not just "walking wounded." YELLOW — Delayed.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): A broken arm is very treatable. This patient needs a splint. YELLOW — Delayed.`
+      return `Triage Error (${name}): Closed fracture with intact circulation = YELLOW — Delayed.`
+    case 'PT-8':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): This patient is ambulatory (walking). In START triage, anyone who can walk is GREEN — regardless of how bad they look.`
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): Key word: "ambulatory." In START triage, the very first step is "Can the patient walk?" If yes = GREEN, period. Stumbling still counts as walking.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Shivering is actually a good sign — the body is still generating heat. This ambulatory patient is GREEN — Walking Wounded.`
+      return `Triage Error (${name}): Ambulatory patient = GREEN — Walking Wounded.`
+    case 'PT-9':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): Dehydration from cholera is serious but progresses over hours. ORS can be self-administered. GREEN — Walking Wounded (can walk to hydration station).`
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): Despite looking terrible, this patient can walk to a rehydration point. Dehydration treatment (ORS) is simple and self-administrable. GREEN — Walking Wounded.`
+      if (assigned === 'BLACK')
+        return `Triage Error (${name}): Cholera/dysentery is highly treatable with ORS! Mortality drops from 50% to under 1% with simple rehydration. GREEN — Walking Wounded.`
+      return `Triage Error (${name}): Ambulatory dehydration patient = GREEN — Walking Wounded.`
+    case 'PT-10':
+      if (assigned === 'RED')
+        return `Triage Error (${name}): Exposed brain matter with no pulse or breathing after airway opened = injuries incompatible with life. This is BLACK — Expectant. Resources must go to the living.`
+      if (assigned === 'YELLOW')
+        return `Triage Error (${name}): No pulse, no breathing, fixed dilated pupils, exposed brain matter. No amount of field treatment can save this patient. BLACK — Expectant.`
+      if (assigned === 'GREEN')
+        return `Triage Error (${name}): This patient is deceased. Exposed brain matter and no vital signs = BLACK — Expectant. Do not allocate resources.`
+      return `Triage Error (${name}): No vital signs + catastrophic injury = BLACK — Expectant.`
+    default:
+      return `Triage Error: ${name} was incorrectly categorized as ${assigned}. Correct: ${trueCategory}.`
+  }
 }
 
-function gameReducer(state, action) {
+/* ─── Wrong-item feedback for treatment ──────────────────────────────────── */
+function wrongItemFeedback(patient, itemKey) {
+  const { id } = patient
+  const lookup = {
+    'PT-1': {
+      tourniquet: 'A tourniquet is for limb hemorrhage. This patient needs airway management, not bleeding control.',
+      gauze: 'There is no external wound to dress. The problem is water IN the lungs — you need to restore breathing.',
+      splintTape: 'Nothing is broken. This patient is drowning from the inside. Focus on airway and warmth.',
+      inhaler: 'The airway obstruction is from water, not bronchospasm. You need rescue breathing to clear fluid.',
+    },
+    'PT-2': {
+      gauze: 'Gauze and pressure cannot stop arterial bleeding — the pressure from a spurting artery will blow right through. You need a tourniquet.',
+      splintTape: 'A splint does nothing for hemorrhage. This patient is bleeding out.',
+      mylarBlanket: 'A blanket will not stop arterial bleeding. Apply a tourniquet first.',
+    },
+    'PT-3': {
+      gauze: 'There is no open wound. The danger is internal — crushed muscle toxins. Think: tourniquet before extrication + fluids.',
+      mylarBlanket: 'Warmth is secondary. The lethal threat is potassium and myoglobin release when the slab is lifted.',
+      splintTape: 'The leg is trapped, not broken in a standard sense. You need to prevent toxic reperfusion.',
+    },
+    'PT-4': {
+      rescueMask: 'The patient IS breathing (wheezing). The problem is bronchospasm — constricted airways. You need a bronchodilator, not rescue breathing.',
+      tourniquet: 'There is no bleeding. This is a respiratory emergency.',
+      gauze: 'There is no wound. This patient cannot breathe due to airway constriction.',
+    },
+    'PT-5': {
+      gauze: 'Puncture wounds from fangs are tiny — gauze does not address the spreading venom. Immobilize the limb instead.',
+      inhaler: 'This is a snakebite, not a respiratory condition. Focus on slowing venom spread.',
+      glucose: 'Sugar does nothing for venom. Clean the wound and immobilize the limb.',
+    },
+    'PT-6': {
+      inhaler: 'This is not a breathing problem. The patient has low blood sugar — they need glucose.',
+      tourniquet: 'There is no bleeding or venom. This patient needs sugar, urgently.',
+      cleanWater: 'Water will not raise blood sugar. The patient needs glucose or sugar specifically.',
+    },
+    'PT-7': {
+      tourniquet: 'There is no bleeding — this is a closed fracture. Good distal pulse means circulation is intact. Just splint it.',
+      gauze: 'No open wound. This is a closed fracture. Splint the limb in the position found.',
+      cleanWater: 'Water does not help a broken bone. Splint and immobilize.',
+    },
+    'PT-8': {
+      inhaler: 'This is hypothermia, not asthma. The patient needs dry clothes and insulation.',
+      tourniquet: 'Nothing is bleeding. This patient is cold. Remove wet clothes and insulate.',
+      glucose: 'While hypothermia can affect blood sugar, the priority is removing wet clothes and warming.',
+    },
+    'PT-9': {
+      inhaler: 'This is gastrointestinal, not respiratory. The patient needs rehydration.',
+      tourniquet: 'There is no wound. This patient needs fluids and electrolytes.',
+      gauze: 'There is nothing to bandage. The patient is losing fluids through diarrhea and vomiting.',
+      splintTape: 'Nothing is broken. This patient needs rehydration therapy.',
+    },
+  }
+  const patientLookup = lookup[id]
+  if (patientLookup && patientLookup[itemKey]) return patientLookup[itemKey]
+  return `This item does not address this patient's condition. Review the symptoms carefully.`
+}
+
+/* ─── Shake keyframes (injected once) ────────────────────────────────────── */
+const SHAKE_CSS = `
+@keyframes m6shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+@keyframes m6glow {
+  0% { box-shadow: 0 0 5px rgba(46,213,115,0.3); }
+  50% { box-shadow: 0 0 20px rgba(46,213,115,0.7); }
+  100% { box-shadow: 0 0 5px rgba(46,213,115,0.3); }
+}
+@keyframes m6fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+`
+
+/* ─── Med Kit definition ─────────────────────────────────────────────────── */
+const INITIAL_MEDKIT = {
+  cleanWater:    { name: 'Clean Water',           icon: '\uD83D\uDCA7', qty: 3 },
+  gauze:         { name: 'Gauze & Pressure',       icon: '\uD83E\uDE79', qty: 4 },
+  tourniquet:    { name: 'Tourniquet',             icon: '\uD83D\uDD17', qty: 2 },
+  mylarBlanket:  { name: 'Mylar Blanket',          icon: '\uD83E\uDEB6', qty: 2 },
+  ors:           { name: 'ORS Rehydration',        icon: '\uD83E\uDDC2', qty: 2 },
+  splintTape:    { name: 'Splint & Tape',          icon: '\uD83E\uDDB4', qty: 3 },
+  antiFungal:    { name: 'Anti-Fungal Powder',     icon: '\uD83E\uDDF4', qty: 2 },
+  inhaler:       { name: 'Albuterol Inhaler',      icon: '\uD83D\uDCA8', qty: 1 },
+  dryClothes:    { name: 'Dry Clothes',            icon: '\uD83D\uDC55', qty: 2 },
+  glucose:       { name: 'Glucose/Sugar',          icon: '\uD83C\uDF6C', qty: 2 },
+  rescueMask:    { name: 'Rescue Breathing Mask',  icon: '\uD83D\uDE2E\u200D\uD83D\uDCA8', qty: 1 },
+}
+
+/* ─── Build treatment order from triage assignments ──────────────────────── */
+function buildTreatmentOrder(triageAssignments) {
+  const priority = { RED: 0, YELLOW: 1, GREEN: 2, BLACK: 3 }
+  const sorted = [...PATIENTS]
+    .map(p => ({ ...p, assignedCategory: triageAssignments[p.id] || p.trueCategory }))
+    .sort((a, b) => priority[a.trueCategory] - priority[b.trueCategory])
+    .filter(p => p.trueCategory !== 'BLACK')
+  return sorted.map(p => p.id)
+}
+
+/* ─── Reducer ────────────────────────────────────────────────────────────── */
+const initialState = {
+  phase: 'intro',
+  patients: PATIENTS,
+  triageAssignments: {},
+  triageLocked: false,
+  triageErrors: [],
+  currentPatientIdx: 0,
+  treatmentOrder: [],
+  treatmentSlots: [],
+  treatmentFeedback: null,
+  treatedPatients: {},
+  medKit: JSON.parse(JSON.stringify(INITIAL_MEDKIT)),
+  wastedOnBlack: false,
+  score: 0,
+  triageScore: 0,
+  treatmentScore: 0,
+  triageCorrectCount: 0,
+  treatmentCorrectCount: 0,
+  shakeSlot: false,
+  glowSlot: false,
+  errorReviewIdx: 0,
+}
+
+function reducer(state, action) {
   switch (action.type) {
-    case 'START_GAME':
+    case 'START':
+      return { ...initialState, phase: 'triage', medKit: JSON.parse(JSON.stringify(INITIAL_MEDKIT)) }
+
+    case 'ASSIGN_TRIAGE': {
+      const { patientId, category } = action.payload
+      if (state.triageLocked) return state
       return {
-        ...initialState,
-        phase: 'active',
-        log: [{ text: 'GOLDEN WINDOW ACTIVE. 180 seconds. Triage and stabilize.', warn: false, t: Date.now() }],
+        ...state,
+        triageAssignments: { ...state.triageAssignments, [patientId]: category },
       }
+    }
 
-    case 'TICK': {
-      if (state.phase !== 'active') return state
-      const newTime = state.timeRemaining - 0.1
-      if (newTime <= 0) {
-        return { ...state, timeRemaining: 0, phase: 'result' }
-      }
-
-      const pts = state.patients.map((p, idx) => {
-        const pt = { ...p }
-        if (pt.deceased) return pt
-
-        // PT-01: Marcus — Arterial hemorrhage
-        if (idx === 0) {
-          if (!pt.treated) {
-            pt.map = pt.map - pt.bleedRate
-          } else {
-            // Tourniquet applied: bleedRate = 0 but tissue damage accrues
-            pt.tissueDamage = (pt.tissueDamage || 0) + 0.1
-          }
-          if (pt.map <= 0) {
-            pt.map = 0; pt.deceased = true; pt.bpm = 0; pt.respRate = 0
-          }
+    case 'LOCK_TRIAGE': {
+      const errors = []
+      let correctCount = 0
+      PATIENTS.forEach(p => {
+        const assigned = state.triageAssignments[p.id]
+        if (assigned === p.trueCategory) {
+          correctCount++
+        } else {
+          const msg = triageErrorMessage(p, assigned)
+          if (msg) errors.push(msg)
         }
+      })
+      const triageScore = correctCount * 8
+      return {
+        ...state,
+        triageLocked: true,
+        triageErrors: errors,
+        triageScore,
+        triageCorrectCount: correctCount,
+        phase: errors.length > 0 ? 'triageReview' : 'treatment',
+        errorReviewIdx: 0,
+        ...(errors.length === 0 ? {
+          treatmentOrder: buildTreatmentOrder(state.triageAssignments),
+          currentPatientIdx: 0,
+          treatmentSlots: [],
+        } : {}),
+      }
+    }
 
-        // PT-02: Diana — Open femur fracture
-        if (idx === 1) {
-          if (!pt.treated) {
-            pt.bpm = pt.bpm + pt.painSpike
-            if (pt.bpm > 160) {
-              pt.shockTimer = (pt.shockTimer || 0) + 1
-              pt.map = pt.map - 0.4
+    case 'NEXT_ERROR': {
+      const nextIdx = state.errorReviewIdx + 1
+      if (nextIdx >= state.triageErrors.length) {
+        const order = buildTreatmentOrder(state.triageAssignments)
+        return {
+          ...state,
+          phase: 'treatment',
+          errorReviewIdx: 0,
+          treatmentOrder: order,
+          currentPatientIdx: 0,
+          treatmentSlots: [],
+        }
+      }
+      return { ...state, errorReviewIdx: nextIdx }
+    }
+
+    case 'SKIP_TO_TREATMENT': {
+      const order = buildTreatmentOrder(state.triageAssignments)
+      return {
+        ...state,
+        phase: 'treatment',
+        errorReviewIdx: 0,
+        treatmentOrder: order,
+        currentPatientIdx: 0,
+        treatmentSlots: [],
+      }
+    }
+
+    case 'PLACE_ITEM': {
+      const { itemKey } = action.payload
+      const currentPid = state.treatmentOrder[state.currentPatientIdx]
+      const patient = PATIENTS.find(p => p.id === currentPid)
+      if (!patient) return state
+      if (state.treatmentSlots.length >= patient.treatmentSlotCount) return state
+      const kitItem = state.medKit[itemKey]
+      if (!kitItem || kitItem.qty <= 0) return state
+      const newKit = JSON.parse(JSON.stringify(state.medKit))
+      newKit[itemKey].qty -= 1
+      return {
+        ...state,
+        treatmentSlots: [...state.treatmentSlots, itemKey],
+        medKit: newKit,
+        treatmentFeedback: null,
+        shakeSlot: false,
+        glowSlot: false,
+      }
+    }
+
+    case 'REMOVE_SLOT_ITEM': {
+      const { slotIdx } = action.payload
+      const itemKey = state.treatmentSlots[slotIdx]
+      if (!itemKey) return state
+      const newKit = JSON.parse(JSON.stringify(state.medKit))
+      newKit[itemKey].qty += 1
+      const newSlots = [...state.treatmentSlots]
+      newSlots.splice(slotIdx, 1)
+      return {
+        ...state,
+        treatmentSlots: newSlots,
+        medKit: newKit,
+        treatmentFeedback: null,
+        shakeSlot: false,
+        glowSlot: false,
+      }
+    }
+
+    case 'CONFIRM_TREATMENT': {
+      const currentPid = state.treatmentOrder[state.currentPatientIdx]
+      const patient = PATIENTS.find(p => p.id === currentPid)
+      if (!patient) return state
+      if (state.treatmentSlots.length !== patient.treatmentSlotCount) {
+        return {
+          ...state,
+          treatmentFeedback: { text: `This patient requires exactly ${patient.treatmentSlotCount} treatment item(s). Fill all slots before confirming.`, correct: false },
+          shakeSlot: true,
+          glowSlot: false,
+        }
+      }
+
+      /* Check for trap items first */
+      if (patient.trapItems) {
+        for (const slot of state.treatmentSlots) {
+          if (patient.trapItems.includes(slot)) {
+            /* Return ALL items to kit */
+            const newKit = JSON.parse(JSON.stringify(state.medKit))
+            state.treatmentSlots.forEach(k => { newKit[k].qty += 1 })
+            return {
+              ...state,
+              treatmentFeedback: { text: patient.trapFeedback, correct: false },
+              treatmentSlots: [],
+              medKit: newKit,
+              shakeSlot: true,
+              glowSlot: false,
             }
           }
-          if (pt.map <= 0) {
-            pt.map = 0; pt.deceased = true; pt.bpm = 0; pt.respRate = 0
-          }
         }
+      }
 
-        // PT-03: James — Hypothermia
-        if (idx === 2) {
-          if (!pt.treated) {
-            pt.coreTemp = pt.coreTemp - pt.coolingRate
-          } else {
-            // Vapor barrier: slowly rewarm
-            pt.coolingRate = -0.005
-            pt.coreTemp = pt.coreTemp - pt.coolingRate // subtracting negative = adding
-          }
-          if (pt.coreTemp <= 28.0) {
-            pt.deceased = true; pt.bpm = 0; pt.respRate = 0; pt.map = 0
-          }
+      /* Check correctness — order matters */
+      const isCorrect = patient.correctTreatment.length === state.treatmentSlots.length &&
+        patient.correctTreatment.every((item, i) => state.treatmentSlots[i] === item)
+
+      if (isCorrect) {
+        return {
+          ...state,
+          treatmentFeedback: { text: patient.treatmentExplanation, correct: true },
+          treatedPatients: {
+            ...state.treatedPatients,
+            [currentPid]: { correct: true, itemsUsed: [...state.treatmentSlots] },
+          },
+          treatmentCorrectCount: state.treatmentCorrectCount + 1,
+          shakeSlot: false,
+          glowSlot: true,
         }
+      }
 
-        // PT-05: Alex — Hysteria
-        if (idx === 4) {
-          if (pt.taskAssigned) {
-            pt.bpm = Math.max(90, pt.bpm - 0.5)
-            pt.hysteriaLevel = Math.max(0, (pt.hysteriaLevel || 0) - 0.4)
-          }
+      /* Wrong combination — give specific feedback for the first wrong item */
+      let feedbackText = ''
+      for (const slot of state.treatmentSlots) {
+        if (!patient.correctTreatment.includes(slot)) {
+          feedbackText = wrongItemFeedback(patient, slot)
+          break
         }
-
-        return pt
-      })
-
-      // Track time spent on PT-04
-      let pt04Time = state.timeSpentOnPT04
-      if (state.activePatient === 3) {
-        pt04Time += 0.1
+      }
+      if (!feedbackText) {
+        /* Items are correct but in wrong order */
+        feedbackText = 'The items are relevant, but the ORDER matters. Think about what must be done FIRST to save this patient.'
       }
 
-      return { ...state, timeRemaining: newTime, patients: pts, timeSpentOnPT04: pt04Time }
-    }
+      /* Return items to kit */
+      const newKit = JSON.parse(JSON.stringify(state.medKit))
+      state.treatmentSlots.forEach(k => { newKit[k].qty += 1 })
 
-    case 'SELECT_PATIENT':
-      return { ...state, activePatient: action.payload }
-
-    case 'ASSIGN_TAG':
       return {
         ...state,
-        triageTags: { ...state.triageTags, [action.payload.idx]: action.payload.tag },
-      }
-
-    case 'APPLY_TOURNIQUET': {
-      if (state.inventory.tornShirts <= 0) return state
-      const pts = [...state.patients]
-      const pt = { ...pts[0] }
-      if (pt.treated || pt.deceased) return state
-      pt.treated = true
-      pt.stabilized = true
-      pt.bleedRate = 0
-      pts[0] = pt
-      return {
-        ...state,
-        patients: pts,
-        inventory: { ...state.inventory, tornShirts: state.inventory.tornShirts - 1 },
-        log: [...state.log, { text: 'Tourniquet applied to PT-01 (Marcus). Hemorrhage controlled.', warn: false, t: Date.now() }],
+        treatmentFeedback: { text: feedbackText, correct: false },
+        treatmentSlots: [],
+        medKit: newKit,
+        shakeSlot: true,
+        glowSlot: false,
       }
     }
 
-    case 'APPLY_SPLINT': {
-      if (state.inventory.ductTapeSplint <= 0) return state
-      const pts = [...state.patients]
-      const pt = { ...pts[1] }
-      if (pt.treated || pt.deceased) return state
-      pt.treated = true
-      pt.stabilized = true
-      pt.painSpike = 0
-      pts[1] = pt
+    case 'NEXT_PATIENT': {
+      const nextIdx = state.currentPatientIdx + 1
+      if (nextIdx >= state.treatmentOrder.length) {
+        /* Calculate final scores */
+        const treatmentScore = state.treatmentCorrectCount * 5
+        const trapPenalty = state.wastedOnBlack ? -20 : 0
+        const total = Math.min(100, state.triageScore + treatmentScore + trapPenalty)
+        return {
+          ...state,
+          phase: 'result',
+          treatmentScore,
+          score: total,
+        }
+      }
       return {
         ...state,
-        patients: pts,
-        inventory: { ...state.inventory, ductTapeSplint: state.inventory.ductTapeSplint - 1 },
-        log: [...state.log, { text: 'Improvised splint applied to PT-02 (Diana). Fracture immobilized.', warn: false, t: Date.now() }],
+        currentPatientIdx: nextIdx,
+        treatmentSlots: [],
+        treatmentFeedback: null,
+        shakeSlot: false,
+        glowSlot: false,
       }
     }
 
-    case 'APPLY_VAPOR_BARRIER': {
-      if (state.inventory.garbageBags <= 0) return state
-      const pts = [...state.patients]
-      const pt = { ...pts[2] }
-      if (pt.treated || pt.deceased) return state
-      pt.treated = true
-      pt.stabilized = true
-      pts[2] = pt
+    case 'FINISH': {
+      const treatmentScore = state.treatmentCorrectCount * 5
+      const trapPenalty = state.wastedOnBlack ? -20 : 0
+      const total = Math.min(100, state.triageScore + treatmentScore + trapPenalty)
       return {
         ...state,
-        patients: pts,
-        inventory: { ...state.inventory, garbageBags: state.inventory.garbageBags - 1 },
-        log: [...state.log, { text: 'Vapor barrier (garbage bag) applied to PT-03 (James). Rewarming initiated.', warn: false, t: Date.now() }],
+        phase: 'result',
+        treatmentScore,
+        score: total,
       }
     }
 
-    case 'ASSIGN_TASK': {
-      const pts = [...state.patients]
-      const pt = { ...pts[4] }
-      if (pt.taskAssigned) return state
-      pt.taskAssigned = true
-      pt.treated = true
-      pts[4] = pt
-      return {
-        ...state,
-        patients: pts,
-        log: [...state.log, { text: 'PT-05 (Alex) assigned task: sorting supplies. Hysteria subsiding.', warn: false, t: Date.now() }],
-      }
-    }
-
-    case 'GIVE_WATER': {
-      if (state.inventory.bottledWater <= 0) return state
-      const targetIdx = action.payload
-      const pts = [...state.patients]
-      const pt = { ...pts[targetIdx] }
-      let newLog = [...state.log]
-      let wasted = state.resourceWastedOnBlack
-
-      if (targetIdx === 3) {
-        // PT-04 trap
-        wasted = true
-        newLog.push({ text: 'CRITICAL: Resources wasted on expectant patient. Others may die.', warn: true, t: Date.now() })
-      } else if (targetIdx === 0) {
-        pt.map = Math.min(100, pt.map + 5)
-        newLog.push({ text: 'Water given to PT-01 (Marcus). Small MAP boost (+5).', warn: false, t: Date.now() })
-      } else {
-        newLog.push({ text: `Water given to ${pt.id} (${pt.name}).`, warn: false, t: Date.now() })
-      }
-      pts[targetIdx] = pt
-      return {
-        ...state,
-        patients: pts,
-        inventory: { ...state.inventory, bottledWater: state.inventory.bottledWater - 1 },
-        log: newLog,
-        resourceWastedOnBlack: wasted,
-      }
-    }
-
-    case 'END_GAME':
-      return { ...state, phase: 'result' }
+    case 'CLEAR_SHAKE':
+      return { ...state, shakeSlot: false }
 
     default:
       return state
   }
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
-export default function Module6_MassCasualtyTriage() {
+/* ─── Body Outline SVG ───────────────────────────────────────────────────── */
+function BodyOutline({ zone, size = 100 }) {
+  const s = size
+  const scale = s / 100
+  const zoneHighlights = {
+    head:     <circle cx={50*scale} cy={14*scale} r={10*scale} fill="rgba(255,71,87,0.5)" stroke={C.red} strokeWidth={1.5} />,
+    chest:    <ellipse cx={50*scale} cy={36*scale} rx={16*scale} ry={10*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+    abdomen:  <ellipse cx={50*scale} cy={52*scale} rx={14*scale} ry={8*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+    torso:    <ellipse cx={50*scale} cy={44*scale} rx={17*scale} ry={18*scale} fill="rgba(255,71,87,0.3)" stroke={C.red} strokeWidth={1.5} />,
+    leftArm:  <rect x={16*scale} y={30*scale} width={8*scale} height={28*scale} rx={4*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+    rightArm: <rect x={76*scale} y={30*scale} width={8*scale} height={28*scale} rx={4*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+    leftLeg:  <rect x={36*scale} y={64*scale} width={9*scale} height={30*scale} rx={4*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+    rightLeg: <rect x={55*scale} y={64*scale} width={9*scale} height={30*scale} rx={4*scale} fill="rgba(255,71,87,0.4)" stroke={C.red} strokeWidth={1.5} />,
+  }
+
+  return (
+    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} style={{ flexShrink: 0 }}>
+      {/* Head */}
+      <circle cx={50*scale} cy={14*scale} r={8*scale} fill="none" stroke={C.secondary} strokeWidth={1.2} />
+      {/* Neck */}
+      <line x1={50*scale} y1={22*scale} x2={50*scale} y2={26*scale} stroke={C.secondary} strokeWidth={1.2} />
+      {/* Torso */}
+      <rect x={34*scale} y={26*scale} width={32*scale} height={36*scale} rx={6*scale} fill="none" stroke={C.secondary} strokeWidth={1.2} />
+      {/* Left arm */}
+      <line x1={34*scale} y1={28*scale} x2={20*scale} y2={34*scale} stroke={C.secondary} strokeWidth={1.2} />
+      <line x1={20*scale} y1={34*scale} x2={18*scale} y2={56*scale} stroke={C.secondary} strokeWidth={1.2} />
+      {/* Right arm */}
+      <line x1={66*scale} y1={28*scale} x2={80*scale} y2={34*scale} stroke={C.secondary} strokeWidth={1.2} />
+      <line x1={80*scale} y1={34*scale} x2={82*scale} y2={56*scale} stroke={C.secondary} strokeWidth={1.2} />
+      {/* Left leg */}
+      <line x1={42*scale} y1={62*scale} x2={40*scale} y2={94*scale} stroke={C.secondary} strokeWidth={1.2} />
+      {/* Right leg */}
+      <line x1={58*scale} y1={62*scale} x2={60*scale} y2={94*scale} stroke={C.secondary} strokeWidth={1.2} />
+      {/* Highlight zone */}
+      {zone && zoneHighlights[zone]}
+    </svg>
+  )
+}
+
+/* ─── Category styling helpers ───────────────────────────────────────────── */
+const CAT_COLORS = { RED: C.red, YELLOW: C.yellow, GREEN: C.green, BLACK: C.black }
+const CAT_LABELS = {
+  RED: 'RED \u2014 Immediate',
+  YELLOW: 'YELLOW \u2014 Delayed',
+  GREEN: 'GREEN \u2014 Walking Wounded',
+  BLACK: 'BLACK \u2014 Expectant',
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ════════════════════════════════════════════════════════════════════════════ */
+export default function Module6_FirstAidTriage() {
   const { dispatch: gameDispatch } = useGame()
-  const [state, dispatch] = useReducer(gameReducer, initialState)
-  const tickRef = useRef(null)
-  const logEndRef = useRef(null)
-  const stateRef = useRef(state)
-  const [pulse, setPulse] = useState(false)
-  const [hiddenInvItem, setHiddenInvItem] = useState(null)
-  const [pt04Warning, setPt04Warning] = useState(false)
-  const [crashingPatients, setCrashingPatients] = useState(new Set())
-  const hysteriaTimerRef = useRef(0)
-  const scoreRecorded = useRef(false)
+  const [state, dispatch] = useReducer(reducer, initialState)
+  const [hoveredItem, setHoveredItem] = useState(null)
+  const styleRef = useRef(null)
+  const autoAdvanceRef = useRef(null)
+  const hasRecordedScore = useRef(false)
 
-  // Keep stateRef in sync
-  useEffect(() => { stateRef.current = state })
+  /* Inject keyframe CSS once */
+  if (!styleRef.current && typeof document !== 'undefined') {
+    const tag = document.createElement('style')
+    tag.textContent = SHAKE_CSS
+    document.head.appendChild(tag)
+    styleRef.current = tag
+  }
 
-  // Scroll log to bottom
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [state.log.length])
+  /* Clear shake after animation */
+  const clearShake = useCallback(() => {
+    setTimeout(() => dispatch({ type: 'CLEAR_SHAKE' }), 500)
+  }, [])
 
-  // Game loop
-  useEffect(() => {
-    if (state.phase !== 'active') {
-      clearInterval(tickRef.current)
-      return
-    }
-    tickRef.current = setInterval(() => {
-      dispatch({ type: 'TICK' })
-      setPulse(p => !p)
-    }, TICK_MS)
-    return () => clearInterval(tickRef.current)
-  }, [state.phase])
-
-  // PT-05 hysteria: hide random inventory item
-  useEffect(() => {
-    if (state.phase !== 'active') return
-    const pt05 = state.patients[4]
-    if (pt05.taskAssigned || pt05.deceased) {
-      setHiddenInvItem(null)
-      return
-    }
-    hysteriaTimerRef.current += TICK_MS
-    if (hysteriaTimerRef.current >= 3000) {
-      hysteriaTimerRef.current = 0
-      const items = ['tornShirts', 'ductTapeSplint', 'garbageBags', 'bottledWater']
-      const randomItem = items[Math.floor(Math.random() * items.length)]
-      setHiddenInvItem(randomItem)
-      setTimeout(() => setHiddenInvItem(null), 1500)
-    }
-  }, [state.timeRemaining, state.phase, state.patients])
-
-  // PT-04 warning
-  useEffect(() => {
-    setPt04Warning(state.timeSpentOnPT04 > 5)
-  }, [state.timeSpentOnPT04])
-
-  // Crashing patients detection
-  useEffect(() => {
-    const crashing = new Set()
-    state.patients.forEach((pt, idx) => {
-      if (pt.deceased || pt.stabilized) return
-      if (idx === 0 && pt.map < 30 && !pt.treated) crashing.add(idx)
-      if (idx === 1 && pt.bpm > 150 && !pt.treated) crashing.add(idx)
-      if (idx === 2 && pt.coreTemp < 30 && !pt.treated) crashing.add(idx)
-    })
-    setCrashingPatients(crashing)
-  }, [state.patients])
-
-  // Record score on result phase
-  useEffect(() => {
-    if (state.phase !== 'result' || scoreRecorded.current) return
-    scoreRecorded.current = true
-
-    const { triageTags, patients, resourceWastedOnBlack } = state
-    let triageScore = 0
-    patients.forEach((pt, idx) => {
-      if (triageTags[idx] === pt.correctTag) triageScore += 15
-    })
-
-    let survivalScore = 0
-    ;[0, 1, 2].forEach(idx => {
-      if (!patients[idx].deceased) survivalScore += 20
-    })
-
-    const resourcePenalty = resourceWastedOnBlack ? -25 : 0
-    const pt05Bonus = patients[4].taskAssigned ? 10 : -10
-
-    const total = clamp(triageScore + survivalScore + resourcePenalty + pt05Bonus, 0, 100)
-    const passed = total >= 50
-
-    gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-6', result: { score: total, passed } } })
-  }, [state.phase, state.triageTags, state.patients, state.resourceWastedOnBlack, gameDispatch])
-
-  const handleBack = useCallback(() => {
-    clearInterval(tickRef.current)
-    gameDispatch({ type: 'BACK_TO_MODULES' })
+  /* Record score when reaching result */
+  const recordScore = useCallback((score) => {
+    const passed = score >= 50
+    gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-6', result: { score, passed } } })
   }, [gameDispatch])
 
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60)
-    const s = Math.floor(seconds % 60)
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  /* ── Shared styles ──────────────────────────────────────────────────────── */
+  const pageStyle = {
+    background: C.bg,
+    minHeight: '100vh',
+    color: C.text,
+    fontFamily: C.font,
+    padding: '20px',
+    boxSizing: 'border-box',
+    animation: 'm6fadeIn 0.4s ease-out',
   }
 
-  // ── Scoring calculation for result display ─────────────────────────────────
-  const computeScore = () => {
-    const { triageTags, patients, resourceWastedOnBlack } = state
-    let triageScore = 0
-    const triageDetails = []
-    patients.forEach((pt, idx) => {
-      const correct = triageTags[idx] === pt.correctTag
-      if (correct) triageScore += 15
-      triageDetails.push({ id: pt.id, name: pt.name, assigned: triageTags[idx], correct: pt.correctTag, ok: correct })
-    })
-
-    let survivalScore = 0
-    const survivalDetails = []
-    ;[0, 1, 2].forEach(idx => {
-      const alive = !patients[idx].deceased
-      if (alive) survivalScore += 20
-      survivalDetails.push({ id: patients[idx].id, name: patients[idx].name, alive })
-    })
-
-    const resourcePenalty = resourceWastedOnBlack ? -25 : 0
-    const pt05Bonus = patients[4].taskAssigned ? 10 : -10
-
-    const total = clamp(triageScore + survivalScore + resourcePenalty + pt05Bonus, 0, 100)
-    const passed = total >= 50
-    return { triageScore, survivalScore, resourcePenalty, pt05Bonus, total, passed, triageDetails, survivalDetails }
+  const cardStyle = {
+    background: C.card,
+    borderRadius: 12,
+    border: `1px solid ${C.border}`,
+    padding: '16px',
+    boxSizing: 'border-box',
   }
 
-  // ── RENDER: INTRO ──────────────────────────────────────────────────────────
+  const btnBase = {
+    border: 'none',
+    borderRadius: 8,
+    padding: '10px 20px',
+    fontFamily: C.font,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    color: '#fff',
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     PHASE: INTRO
+     ════════════════════════════════════════════════════════════════════════ */
   if (state.phase === 'intro') {
     return (
-      <div style={styles.screen}>
-        <div style={styles.introCard}>
-          <div style={{ fontSize: 14, letterSpacing: 4, color: '#ff1744', fontFamily: FONT, textTransform: 'uppercase' }}>
-            EMERGENCY DISPATCH
-          </div>
-          <h1 style={{ color: '#f1f5f9', fontSize: 24, margin: '12px 0 4px', fontFamily: FONT }}>
-            Module 6: Mass Casualty Triage
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 700, margin: '0 auto', textAlign: 'center', paddingTop: 60 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>{'\u26D1\uFE0F'}</div>
+          <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 12, color: C.text }}>
+            Module 6: First Aid Triage
           </h1>
-          <h2 style={{ color: '#39ff14', fontSize: 13, fontWeight: 400, margin: 0, fontFamily: FONT, letterSpacing: 2 }}>
-            START PROTOCOL
+          <h2 style={{ fontSize: 18, fontWeight: 400, color: C.secondary, marginBottom: 32 }}>
+            Mass Casualty Incident {'\u2014'} START Protocol
           </h2>
-
-          <div style={styles.briefingBox}>
-            <div style={{ color: '#ffe600', fontFamily: FONT, fontSize: 12, fontWeight: 700, marginBottom: 8, letterSpacing: 1 }}>
-              SITUATION BRIEFING
-            </div>
-            <p style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.8, margin: 0, fontFamily: FONT }}>
-              Flash flood aftermath. Infrastructure destroyed. You are the first responder on scene.
-              Five casualties identified. Medical supplies are scavenged from debris: torn clothing,
-              duct tape, garbage bags, one bottle of water.
+          <div style={{ ...cardStyle, textAlign: 'left', marginBottom: 32 }}>
+            <p style={{ color: C.secondary, lineHeight: 1.7, marginBottom: 16, fontSize: 15 }}>
+              A flash flood has devastated the area. You are the first responder on scene with a limited
+              medical kit. Ten patients need your help {'\u2014'} but not all can be saved, and treating them
+              in the wrong order will cost lives.
             </p>
-            <p style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.8, margin: '10px 0 0', fontFamily: FONT }}>
-              You have a <span style={{ color: '#ff1744', fontWeight: 700 }}>180-second golden window</span> before
-              professional EMS arrives. Triage all patients using START protocol. Stabilize who you can.
-              Do NOT waste resources on expectant (BLACK tag) patients.
+            <p style={{ color: C.text, lineHeight: 1.7, marginBottom: 16, fontSize: 15, fontWeight: 600 }}>
+              This exercise has two phases:
             </p>
-          </div>
-
-          <div style={{ ...styles.briefingBox, borderColor: 'rgba(57,255,20,0.25)', background: 'rgba(57,255,20,0.04)' }}>
-            <div style={{ color: '#39ff14', fontFamily: FONT, fontSize: 11, letterSpacing: 1, marginBottom: 8 }}>
-              START TRIAGE CATEGORIES
+            <div style={{ paddingLeft: 16 }}>
+              <p style={{ color: C.red, lineHeight: 1.7, marginBottom: 8, fontSize: 15 }}>
+                <strong>Phase 1 {'\u2014'} Triage:</strong>{' '}
+                <span style={{ color: C.secondary }}>Assign each patient to a START category (RED, YELLOW, GREEN, or BLACK) based on their symptoms.</span>
+              </p>
+              <p style={{ color: C.green, lineHeight: 1.7, marginBottom: 8, fontSize: 15 }}>
+                <strong>Phase 2 {'\u2014'} Treatment:</strong>{' '}
+                <span style={{ color: C.secondary }}>Apply the correct items from your med kit to each patient, in priority order.</span>
+              </p>
             </div>
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-              {[
-                { tag: 'GREEN', label: 'Minor', desc: 'Walking wounded. Can wait.' },
-                { tag: 'YELLOW', label: 'Delayed', desc: 'Serious but stable. Can wait briefly.' },
-                { tag: 'RED', label: 'Immediate', desc: 'Life-threatening. Treat NOW.' },
-                { tag: 'BLACK', label: 'Expectant', desc: 'Dead or unsurvivable. Do not treat.' },
-              ].map(t => (
-                <div key={t.tag} style={{ flex: '1 1 120px', padding: '6px 0' }}>
-                  <div style={{ color: TAG_COLORS[t.tag], fontSize: 12, fontWeight: 700, fontFamily: FONT }}>
-                    {t.tag} - {t.label}
-                  </div>
-                  <div style={{ color: '#94a3b8', fontSize: 11, fontFamily: FONT }}>{t.desc}</div>
-                </div>
-              ))}
+            <div style={{ marginTop: 20, padding: '12px 16px', background: 'rgba(255,71,87,0.1)', borderRadius: 8, border: `1px solid rgba(255,71,87,0.2)` }}>
+              <p style={{ color: C.red, fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+                {'\u26A0\uFE0F'} Warning: Some treatment choices are TRAPS {'\u2014'} medically harmful actions that feel intuitive but are wrong.
+                Read symptoms carefully. This is designed to teach real triage decision-making.
+              </p>
             </div>
           </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
-              style={styles.primaryBtn}
-              onClick={() => dispatch({ type: 'START_GAME' })}
+              onClick={() => dispatch({ type: 'START' })}
+              style={{ ...btnBase, background: C.red, fontSize: 16, padding: '14px 40px' }}
             >
-              BEGIN TRIAGE
+              Begin Triage
             </button>
-            <button style={styles.ghostBtn} onClick={handleBack}>
-              &larr; Back to Modules
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  // ── RENDER: RESULT ─────────────────────────────────────────────────────────
-  if (state.phase === 'result') {
-    const sc = computeScore()
-    return (
-      <div style={styles.screen}>
-        <div style={{ ...styles.introCard, maxWidth: 700 }}>
-          <div style={{ fontSize: 14, letterSpacing: 4, color: sc.passed ? '#39ff14' : '#ff1744', fontFamily: FONT, textTransform: 'uppercase' }}>
-            {sc.passed ? 'MISSION COMPLETE' : 'MISSION FAILED'}
-          </div>
-          <div style={{ fontSize: 48, fontWeight: 800, fontFamily: FONT, color: sc.passed ? '#39ff14' : '#ff1744', margin: '8px 0' }}>
-            {sc.total}/100
-          </div>
-          <div style={{ color: sc.passed ? '#39ff14' : '#ff1744', fontSize: 13, fontFamily: FONT }}>
-            {sc.passed ? 'PASSED' : 'DID NOT PASS'} (threshold: 50)
-          </div>
-
-          {/* Score breakdown */}
-          <div style={{ width: '100%', marginTop: 16 }}>
-            <div style={styles.scoreRow}>
-              <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 12 }}>Triage Accuracy ({sc.triageDetails.filter(d => d.ok).length}/5 correct x 15)</span>
-              <span style={{ color: '#39ff14', fontFamily: FONT, fontSize: 14, fontWeight: 700 }}>+{sc.triageScore}</span>
-            </div>
-            <div style={styles.scoreRow}>
-              <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 12 }}>Patient Survival ({sc.survivalDetails.filter(d => d.alive).length}/3 alive x 20)</span>
-              <span style={{ color: '#39ff14', fontFamily: FONT, fontSize: 14, fontWeight: 700 }}>+{sc.survivalScore}</span>
-            </div>
-            <div style={styles.scoreRow}>
-              <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 12 }}>Resource Allocation {state.resourceWastedOnBlack ? '(wasted on BLACK)' : '(no waste)'}</span>
-              <span style={{ color: sc.resourcePenalty < 0 ? '#ff1744' : '#39ff14', fontFamily: FONT, fontSize: 14, fontWeight: 700 }}>
-                {sc.resourcePenalty < 0 ? sc.resourcePenalty : '+0'}
-              </span>
-            </div>
-            <div style={styles.scoreRow}>
-              <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 12 }}>PT-05 Management {state.patients[4].taskAssigned ? '(task assigned)' : '(not managed)'}</span>
-              <span style={{ color: sc.pt05Bonus > 0 ? '#39ff14' : '#ff1744', fontFamily: FONT, fontSize: 14, fontWeight: 700 }}>
-                {sc.pt05Bonus > 0 ? '+' : ''}{sc.pt05Bonus}
-              </span>
-            </div>
-          </div>
-
-          {/* Triage detail */}
-          <div style={{ width: '100%', marginTop: 12 }}>
-            <div style={{ color: '#ffe600', fontFamily: FONT, fontSize: 11, letterSpacing: 2, marginBottom: 8 }}>TRIAGE RESULTS</div>
-            {sc.triageDetails.map(d => (
-              <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 11, width: 55 }}>{d.id}</span>
-                <span style={{ color: '#e2e8f0', fontFamily: FONT, fontSize: 11, flex: 1 }}>{d.name}</span>
-                <span style={{ fontFamily: FONT, fontSize: 11, color: d.assigned ? TAG_COLORS[d.assigned] : '#555', minWidth: 60 }}>
-                  {d.assigned || 'NONE'}
-                </span>
-                <span style={{ fontFamily: FONT, fontSize: 11, color: TAG_COLORS[d.correct], minWidth: 60 }}>
-                  {d.correct}
-                </span>
-                <span style={{ fontFamily: FONT, fontSize: 12, width: 20, textAlign: 'center' }}>
-                  {d.ok ? '\u2713' : '\u2717'}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Survival detail */}
-          <div style={{ width: '100%', marginTop: 12 }}>
-            <div style={{ color: '#ffe600', fontFamily: FONT, fontSize: 11, letterSpacing: 2, marginBottom: 8 }}>PATIENT OUTCOMES</div>
-            {state.patients.map((pt, idx) => (
-              <div key={pt.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 11, width: 55 }}>{pt.id}</span>
-                <span style={{ color: '#e2e8f0', fontFamily: FONT, fontSize: 11, flex: 1 }}>{pt.name}</span>
-                <span style={{
-                  fontFamily: FONT, fontSize: 11,
-                  color: pt.deceased ? '#ff1744' : pt.stabilized ? '#38bdf8' : '#ffe600',
-                }}>
-                  {pt.deceased ? 'DECEASED' : pt.stabilized ? 'STABILIZED' : idx === 3 ? 'EXPECTANT' : 'UNSTABLE'}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Lessons */}
-          <div style={{ ...styles.briefingBox, borderColor: 'rgba(56,189,248,0.25)', background: 'rgba(56,189,248,0.04)', marginTop: 12 }}>
-            <div style={{ color: '#38bdf8', fontFamily: FONT, fontSize: 11, letterSpacing: 1, marginBottom: 8 }}>KEY LESSONS</div>
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              <li style={{ color: '#fca5a5', fontSize: 12, fontFamily: FONT, lineHeight: 2 }}>1. START triage: sort patients BEFORE treating. Tag determines priority.</li>
-              <li style={{ color: '#fde68a', fontSize: 12, fontFamily: FONT, lineHeight: 2 }}>2. BLACK tag patients consume resources without benefit. Hard triage saves lives.</li>
-              <li style={{ color: '#bbf7d0', fontSize: 12, fontFamily: FONT, lineHeight: 2 }}>3. RED patients die fastest. Treat them first with available improvised tools.</li>
-              <li style={{ color: '#e0e7ff', fontSize: 12, fontFamily: FONT, lineHeight: 2 }}>4. GREEN tag patients (like PT-05) can be given tasks to reduce chaos.</li>
-              <li style={{ color: '#fda4af', fontSize: 12, fontFamily: FONT, lineHeight: 2 }}>5. Scavenged materials can substitute for medical supplies in emergencies.</li>
-            </ul>
-          </div>
-
-          <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
             <button
-              style={styles.primaryBtn}
-              onClick={() => {
-                scoreRecorded.current = false
-                dispatch({ type: 'START_GAME' })
-              }}
+              onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })}
+              style={{ ...btnBase, background: 'transparent', border: `1px solid ${C.secondary}`, color: C.secondary }}
             >
-              RETRY
-            </button>
-            <button style={styles.ghostBtn} onClick={handleBack}>
               Back to Modules
             </button>
           </div>
@@ -583,645 +718,638 @@ export default function Module6_MassCasualtyTriage() {
     )
   }
 
-  // ── RENDER: ACTIVE ─────────────────────────────────────────────────────────
-  const activePt = state.activePatient !== null ? state.patients[state.activePatient] : null
-  const activeIdx = state.activePatient
+  /* ════════════════════════════════════════════════════════════════════════
+     PHASE: TRIAGE
+     ════════════════════════════════════════════════════════════════════════ */
+  if (state.phase === 'triage') {
+    const allAssigned = PATIENTS.every(p => state.triageAssignments[p.id])
 
-  // MAP bar color
-  const mapColor = (map) => {
-    if (map > 70) return '#39ff14'
-    if (map > 50) return '#ffe600'
-    if (map > 30) return '#ff9100'
-    return '#ff1744'
-  }
+    /* Count per category */
+    const counts = { RED: 0, YELLOW: 0, GREEN: 0, BLACK: 0 }
+    Object.values(state.triageAssignments).forEach(c => { if (c) counts[c]++ })
 
-  return (
-    <div style={styles.activeContainer}>
-      {/* ── HEADER BAR ── */}
-      <div style={styles.headerBar}>
-        <button style={styles.ghostBtn} onClick={handleBack}>&larr; QUIT</button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span style={{ color: '#94a3b8', fontFamily: FONT, fontSize: 11, letterSpacing: 2 }}>GOLDEN WINDOW</span>
-          <span style={{
-            fontFamily: FONT, fontSize: 22, fontWeight: 800,
-            color: state.timeRemaining > 60 ? '#39ff14' : state.timeRemaining > 30 ? '#ffe600' : '#ff1744',
-          }}>
-            {formatTime(state.timeRemaining)}
-          </span>
-        </div>
-        <div style={{ width: 80 }} />
-      </div>
-
-      {/* ── THREE-COLUMN LAYOUT ── */}
-      <div style={styles.threeCol}>
-
-        {/* LEFT PANEL: Triage Board */}
-        <div style={styles.leftPanel}>
-          <div style={styles.panelHeader}>TRIAGE BOARD</div>
-          {state.patients.map((pt, idx) => {
-            const tag = state.triageTags[idx]
-            const isActive = activeIdx === idx
-            const isCrashing = crashingPatients.has(idx)
-
-            let borderStyle = '1px solid rgba(255,255,255,0.12)'
-            let boxShadow = 'none'
-            if (pt.stabilized) {
-              borderStyle = '1px solid rgba(56,189,248,0.4)'
-              boxShadow = '0 0 12px rgba(56,189,248,0.5)'
-            } else if (pt.deceased) {
-              borderStyle = '1px solid rgba(255,255,255,0.06)'
-            } else if (isCrashing) {
-              borderStyle = '1px solid #ff1744'
-              boxShadow = `0 0 ${pulse ? '8' : '4'}px rgba(255,23,68,0.6)`
-            }
-
-            return (
-              <div
-                key={pt.id}
-                onClick={() => dispatch({ type: 'SELECT_PATIENT', payload: idx })}
-                style={{
-                  padding: '8px 10px',
-                  marginBottom: 6,
-                  border: borderStyle,
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  background: isActive ? 'rgba(255,255,255,0.06)' : pt.deceased ? 'rgba(66,66,66,0.15)' : 'rgba(255,255,255,0.02)',
-                  boxShadow,
-                  transition: 'all 0.2s',
-                  opacity: pt.deceased && idx !== 3 ? 0.5 : 1,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontFamily: FONT, fontSize: 11, color: pt.deceased ? '#666' : '#e2e8f0', fontWeight: 700 }}>
-                    {pt.id} {pt.name}
-                  </span>
-                  <span style={{ fontFamily: FONT, fontSize: 10, color: '#94a3b8' }}>
-                    {pt.age}y
-                  </span>
-                </div>
-                <div style={{ fontFamily: FONT, fontSize: 10, color: pt.deceased ? '#555' : '#94a3b8', marginBottom: 6 }}>
-                  {pt.label}
-                </div>
-                {/* Tag buttons */}
-                <div style={{ display: 'flex', gap: 3 }}>
-                  {TAG_LABELS.map(t => (
-                    <button
-                      key={t}
-                      onClick={(e) => { e.stopPropagation(); dispatch({ type: 'ASSIGN_TAG', payload: { idx, tag: t } }) }}
-                      style={{
-                        flex: 1,
-                        padding: '3px 0',
-                        fontSize: 9,
-                        fontFamily: FONT,
-                        fontWeight: 700,
-                        border: tag === t ? `2px solid ${TAG_COLORS[t]}` : '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 3,
-                        background: tag === t ? `${TAG_COLORS[t]}22` : 'transparent',
-                        color: TAG_COLORS[t],
-                        cursor: 'pointer',
-                        letterSpacing: 0.5,
-                      }}
-                    >
-                      {t.charAt(0)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-
-          {/* Event Log */}
-          <div style={{ marginTop: 12 }}>
-            <div style={styles.panelHeader}>EVENT LOG</div>
-            <div style={styles.logScroll}>
-              {state.log.map((entry, i) => (
-                <div key={i} style={{
-                  color: entry.warn ? '#ff1744' : '#94a3b8',
-                  fontSize: 10, fontFamily: FONT, lineHeight: 1.6, padding: '3px 0',
-                  borderBottom: '1px solid rgba(255,255,255,0.04)',
-                }}>
-                  {entry.text}
-                </div>
-              ))}
-              <div ref={logEndRef} />
-            </div>
+    return (
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+              Phase 1: Triage Assessment
+            </h2>
+            <span style={{ color: C.secondary, fontSize: 14 }}>
+              {Object.keys(state.triageAssignments).length} / {PATIENTS.length} assigned
+            </span>
           </div>
-        </div>
 
-        {/* CENTER PANEL: Patient Telemetry */}
-        <div style={styles.centerPanel}>
-          {activePt === null ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', opacity: 0.4 }}>
-              <div style={{ fontSize: 32, fontFamily: FONT, color: '#555' }}>SELECT PATIENT</div>
-              <div style={{ fontSize: 12, fontFamily: FONT, color: '#444', marginTop: 8 }}>Click a patient on the left panel to view telemetry</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 16 }}>
-              {/* Patient header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontFamily: FONT, fontSize: 18, fontWeight: 800, color: activePt.deceased ? '#666' : '#e2e8f0' }}>
-                    {activePt.id}: {activePt.name}
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 12, color: activePt.deceased ? '#555' : '#ffe600', marginTop: 2 }}>
-                    {activePt.label} | Age {activePt.age}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {activePt.stabilized && (
-                    <span style={{ fontFamily: FONT, fontSize: 10, color: '#38bdf8', border: '1px solid #38bdf8', padding: '2px 8px', borderRadius: 4 }}>
-                      STABILIZED
-                    </span>
-                  )}
-                  {activePt.deceased && (
-                    <span style={{ fontFamily: FONT, fontSize: 10, color: '#ff1744', border: '1px solid #ff1744', padding: '2px 8px', borderRadius: 4 }}>
-                      DECEASED
-                    </span>
-                  )}
-                  {state.triageTags[activeIdx] && (
-                    <span style={{
-                      fontFamily: FONT, fontSize: 10, fontWeight: 700,
-                      color: TAG_COLORS[state.triageTags[activeIdx]],
-                      border: `1px solid ${TAG_COLORS[state.triageTags[activeIdx]]}`,
-                      padding: '2px 8px', borderRadius: 4,
-                    }}>
-                      {state.triageTags[activeIdx]}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* PT-04 warning */}
-              {activeIdx === 3 && pt04Warning && (
-                <div style={{
-                  background: 'rgba(255,23,68,0.1)', border: '1px solid #ff1744',
-                  borderRadius: 6, padding: '8px 12px', marginBottom: 12, textAlign: 'center',
-                  animation: 'none',
-                  boxShadow: pulse ? '0 0 16px rgba(255,23,68,0.4)' : '0 0 4px rgba(255,23,68,0.2)',
-                  transition: 'box-shadow 0.1s',
-                }}>
-                  <span style={{ fontFamily: FONT, fontSize: 12, color: '#ff1744', fontWeight: 700 }}>
-                    WARNING: RESOURCE MISALLOCATION. EXPECTANT PATIENT.
-                  </span>
-                </div>
-              )}
-
-              {/* Vitals Grid */}
-              <div style={styles.vitalsGrid}>
-                {/* BPM */}
-                <div style={styles.vitalBox}>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', letterSpacing: 2, textTransform: 'uppercase' }}>
-                    HEART RATE
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                    <span style={{
-                      fontFamily: FONT, fontSize: 40, fontWeight: 800,
-                      color: activePt.deceased ? '#444' : activePt.bpm > 120 ? '#ff1744' : activePt.bpm < 60 ? '#ffe600' : '#39ff14',
-                      transform: !activePt.deceased && pulse ? 'scale(1.06)' : 'scale(1)',
-                      transition: 'transform 0.08s',
-                    }}>
-                      {activePt.deceased ? '--' : Math.round(activePt.bpm)}
-                    </span>
-                    <span style={{
-                      fontSize: 22,
-                      color: activePt.deceased ? '#333' : '#ff1744',
-                      opacity: !activePt.deceased && pulse ? 1 : 0.4,
-                      transition: 'opacity 0.08s',
-                    }}>
-                      {activePt.deceased ? '\u2014' : '\u2665'}
-                    </span>
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#555' }}>BPM</div>
-                </div>
-
-                {/* MAP */}
-                <div style={styles.vitalBox}>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', letterSpacing: 2, textTransform: 'uppercase' }}>
-                    MEAN ART. PRESSURE
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 28, fontWeight: 800, color: activePt.deceased ? '#444' : mapColor(activePt.map), marginTop: 4 }}>
-                    {activePt.deceased ? '--' : Math.round(activePt.map)}
-                  </div>
-                  <div style={{ width: '100%', height: 8, borderRadius: 4, background: '#1e1e1e', overflow: 'hidden', marginTop: 6, border: '1px solid rgba(255,255,255,0.08)' }}>
-                    <div style={{
-                      height: '100%', borderRadius: 4, transition: 'width 0.15s',
-                      width: `${clamp(activePt.map, 0, 100)}%`,
-                      background: activePt.deceased ? '#333' : `linear-gradient(90deg, #ff1744, ${mapColor(activePt.map)})`,
-                    }} />
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#555', marginTop: 4 }}>mmHg</div>
-                </div>
-
-                {/* Core Temp */}
-                <div style={styles.vitalBox}>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', letterSpacing: 2, textTransform: 'uppercase' }}>
-                    CORE TEMP
-                  </div>
-                  <div style={{
-                    fontFamily: FONT, fontSize: 28, fontWeight: 800, marginTop: 4,
-                    color: activePt.deceased ? '#444' : activePt.coreTemp < 30 ? '#ff1744' : activePt.coreTemp < 35 ? '#ffe600' : '#39ff14',
-                  }}>
-                    {activePt.deceased ? '--' : activePt.coreTemp.toFixed(1)}
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#555' }}>C</div>
-                </div>
-
-                {/* Resp Rate */}
-                <div style={styles.vitalBox}>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', letterSpacing: 2, textTransform: 'uppercase' }}>
-                    RESP RATE
-                  </div>
-                  <div style={{
-                    fontFamily: FONT, fontSize: 28, fontWeight: 800, marginTop: 4,
-                    color: activePt.deceased ? '#444' : activePt.respRate > 28 ? '#ffe600' : activePt.respRate < 12 ? '#ff1744' : '#39ff14',
-                  }}>
-                    {activePt.deceased ? '--' : Math.round(activePt.respRate)}
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#555' }}>/min</div>
-                </div>
-              </div>
-
-              {/* Symptom Description */}
-              <div style={{
-                marginTop: 16, padding: '12px 14px', borderRadius: 6,
-                border: '1px solid rgba(255,255,255,0.08)',
-                background: 'rgba(255,255,255,0.02)',
-                flex: 1, overflowY: 'auto',
+          {/* Category drop zones */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 24 }}>
+            {['RED', 'YELLOW', 'GREEN', 'BLACK'].map(cat => (
+              <div key={cat} style={{
+                ...cardStyle,
+                borderColor: CAT_COLORS[cat],
+                borderWidth: 2,
+                borderStyle: 'solid',
+                textAlign: 'center',
+                minHeight: 80,
               }}>
-                <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', letterSpacing: 2, marginBottom: 8 }}>
-                  CLINICAL NOTES
+                <div style={{ fontSize: 14, fontWeight: 700, color: CAT_COLORS[cat], marginBottom: 6 }}>
+                  {CAT_LABELS[cat]}
                 </div>
-                <p style={{ fontFamily: FONT, fontSize: 12, color: activePt.deceased ? '#555' : '#cbd5e1', lineHeight: 1.8, margin: 0 }}>
-                  {activePt.desc}
-                </p>
-                {/* Dynamic status lines */}
-                {activeIdx === 0 && !activePt.deceased && (
-                  <p style={{ fontFamily: FONT, fontSize: 11, color: activePt.treated ? '#38bdf8' : '#ff1744', lineHeight: 1.8, marginTop: 8 }}>
-                    {activePt.treated
-                      ? `Tourniquet applied. Tissue damage accruing: ${(activePt.tissueDamage || 0).toFixed(1)} units. Needs surgical intervention.`
-                      : `ACTIVE ARTERIAL BLEED. MAP declining at ${activePt.bleedRate}/tick. APPLY TOURNIQUET IMMEDIATELY.`}
-                  </p>
-                )}
-                {activeIdx === 1 && !activePt.deceased && (
-                  <p style={{ fontFamily: FONT, fontSize: 11, color: activePt.treated ? '#38bdf8' : '#ffe600', lineHeight: 1.8, marginTop: 8 }}>
-                    {activePt.treated
-                      ? 'Splint applied. Pain managed. Fracture immobilized for transport.'
-                      : `Pain escalating. BPM rising (+${activePt.painSpike}/tick). ${activePt.bpm > 160 ? 'NEUROGENIC SHOCK: MAP dropping rapidly!' : 'Risk of neurogenic shock if BPM exceeds 160.'}`}
-                  </p>
-                )}
-                {activeIdx === 2 && !activePt.deceased && (
-                  <p style={{ fontFamily: FONT, fontSize: 11, color: activePt.treated ? '#38bdf8' : '#ffe600', lineHeight: 1.8, marginTop: 8 }}>
-                    {activePt.treated
-                      ? `Vapor barrier applied. Rewarming in progress. Core temp: ${activePt.coreTemp.toFixed(1)}C.`
-                      : `Core temperature dropping. ${activePt.coreTemp < 30 ? 'CRITICAL: Cardiac arrest imminent!' : 'Below 28C = cardiac arrest.'}`}
-                  </p>
-                )}
-                {activeIdx === 3 && (
-                  <p style={{ fontFamily: FONT, fontSize: 11, color: '#ff1744', lineHeight: 1.8, marginTop: 8 }}>
-                    No spontaneous respiration. No pulse. Fixed dilated pupils. This patient is beyond intervention. Allocate resources to salvageable patients.
-                  </p>
-                )}
-                {activeIdx === 4 && (
-                  <p style={{ fontFamily: FONT, fontSize: 11, color: activePt.taskAssigned ? '#38bdf8' : '#ffe600', lineHeight: 1.8, marginTop: 8 }}>
-                    {activePt.taskAssigned
-                      ? `Task assigned. Hysteria level: ${Math.round(activePt.hysteriaLevel || 0)}%. Calming down. BPM normalizing.`
-                      : `Hysteria level: ${Math.round(activePt.hysteriaLevel)}%. Blocking workspace. Interfering with inventory access. ASSIGN TASK to redirect.`}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT PANEL: Inventory & Actions */}
-        <div style={styles.rightPanel}>
-          <div style={styles.panelHeader}>SCAVENGED INVENTORY</div>
-          <div style={{ marginBottom: 16 }}>
-            {[
-              { key: 'tornShirts', label: 'Torn T-Shirts', icon: '\uD83D\uDC55' },
-              { key: 'ductTapeSplint', label: 'Duct Tape Splints', icon: '\uD83E\uDE79' },
-              { key: 'garbageBags', label: 'Garbage Bags', icon: '\uD83D\uDDD1' },
-              { key: 'bottledWater', label: 'Bottled Water', icon: '\uD83D\uDCA7' },
-            ].map(item => (
-              <div
-                key={item.key}
-                style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,0.06)',
-                  fontFamily: FONT, fontSize: 11,
-                  opacity: hiddenInvItem === item.key ? 0 : 1,
-                  transition: 'opacity 0.15s',
-                }}
-              >
-                <span style={{ color: '#94a3b8' }}>{item.icon} {item.label}</span>
-                <span style={{ color: state.inventory[item.key] > 0 ? '#39ff14' : '#ff1744', fontWeight: 700 }}>
-                  x{state.inventory[item.key]}
-                </span>
+                <div style={{ fontSize: 28, fontWeight: 700, color: CAT_COLORS[cat] }}>
+                  {counts[cat]}
+                </div>
+                <div style={{ fontSize: 11, color: C.secondary }}>
+                  patient{counts[cat] !== 1 ? 's' : ''}
+                </div>
               </div>
             ))}
           </div>
 
-          <div style={styles.panelHeader}>ACTIONS</div>
-          {activePt === null ? (
-            <div style={{ fontFamily: FONT, fontSize: 11, color: '#555', padding: '12px 0', textAlign: 'center' }}>
-              Select a patient to see actions
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {/* PT-01: Apply Tourniquet */}
-              {activeIdx === 0 && !activePt.deceased && !activePt.treated && (
-                <button
-                  style={{
-                    ...styles.actionBtn,
-                    borderColor: 'rgba(255,23,68,0.4)',
-                    background: 'rgba(255,23,68,0.08)',
-                    opacity: state.inventory.tornShirts > 0 ? 1 : 0.35,
-                  }}
-                  disabled={state.inventory.tornShirts <= 0}
-                  onClick={() => dispatch({ type: 'APPLY_TOURNIQUET' })}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#ff1744' }}>Apply Tourniquet</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>Costs 1 Torn T-Shirt</div>
-                </button>
-              )}
-
-              {/* PT-02: Improvised Splint */}
-              {activeIdx === 1 && !activePt.deceased && !activePt.treated && (
-                <button
-                  style={{
-                    ...styles.actionBtn,
-                    borderColor: 'rgba(255,230,0,0.4)',
-                    background: 'rgba(255,230,0,0.08)',
-                    opacity: state.inventory.ductTapeSplint > 0 ? 1 : 0.35,
-                  }}
-                  disabled={state.inventory.ductTapeSplint <= 0}
-                  onClick={() => dispatch({ type: 'APPLY_SPLINT' })}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#ffe600' }}>Improvised Splint</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>Costs 1 Duct Tape Splint</div>
-                </button>
-              )}
-
-              {/* PT-03: Vapor Barrier */}
-              {activeIdx === 2 && !activePt.deceased && !activePt.treated && (
-                <button
-                  style={{
-                    ...styles.actionBtn,
-                    borderColor: 'rgba(57,255,20,0.4)',
-                    background: 'rgba(57,255,20,0.08)',
-                    opacity: state.inventory.garbageBags > 0 ? 1 : 0.35,
-                  }}
-                  disabled={state.inventory.garbageBags <= 0}
-                  onClick={() => dispatch({ type: 'APPLY_VAPOR_BARRIER' })}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#39ff14' }}>Vapor Barrier</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>Costs 1 Garbage Bag</div>
-                </button>
-              )}
-
-              {/* PT-05: Assign Task */}
-              {activeIdx === 4 && !activePt.taskAssigned && (
-                <button
-                  style={{
-                    ...styles.actionBtn,
-                    borderColor: 'rgba(57,255,20,0.4)',
-                    background: 'rgba(57,255,20,0.08)',
-                  }}
-                  onClick={() => dispatch({ type: 'ASSIGN_TASK' })}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#39ff14' }}>Assign Task</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>No cost. Redirect hysteria.</div>
-                </button>
-              )}
-
-              {/* Give Water — available for any selected patient */}
-              {state.inventory.bottledWater > 0 && (
-                <button
-                  style={{
-                    ...styles.actionBtn,
-                    borderColor: 'rgba(56,189,248,0.4)',
-                    background: 'rgba(56,189,248,0.08)',
-                  }}
-                  onClick={() => dispatch({ type: 'GIVE_WATER', payload: activeIdx })}
-                >
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8' }}>Give Water</div>
-                  <div style={{ fontSize: 10, color: '#94a3b8' }}>
-                    {activeIdx === 3 ? 'WARNING: Expectant patient' : activeIdx === 0 ? 'Small MAP boost (+5)' : 'Hydration support'}
-                  </div>
-                </button>
-              )}
-
-              {/* Show status if patient already treated */}
-              {activePt.treated && (
-                <div style={{
-                  padding: '10px 12px', borderRadius: 6,
-                  border: '1px solid rgba(56,189,248,0.3)',
-                  background: 'rgba(56,189,248,0.06)',
-                  textAlign: 'center',
+          {/* Patient grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
+            {PATIENTS.map(patient => {
+              const assigned = state.triageAssignments[patient.id]
+              return (
+                <div key={patient.id} style={{
+                  ...cardStyle,
+                  border: assigned ? `2px solid ${CAT_COLORS[assigned]}` : `1px solid ${C.border}`,
+                  transition: 'border-color 0.3s, box-shadow 0.3s',
+                  boxShadow: assigned ? `0 0 12px ${CAT_COLORS[assigned]}33` : 'none',
                 }}>
-                  <div style={{ fontFamily: FONT, fontSize: 11, color: '#38bdf8', fontWeight: 700 }}>
-                    TREATMENT APPLIED
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 10 }}>
+                    <BodyOutline zone={patient.injuryZone} size={70} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, color: C.secondary, marginBottom: 2 }}>{patient.id}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 6 }}>{patient.name}</div>
+                      {assigned && (
+                        <span style={{
+                          display: 'inline-block',
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          background: CAT_COLORS[assigned],
+                          color: assigned === 'YELLOW' ? '#1e1e2e' : '#fff',
+                        }}>
+                          {assigned}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#64748b', marginTop: 4 }}>
-                    {activeIdx === 0 && 'Tourniquet in place. Monitor tissue damage.'}
-                    {activeIdx === 1 && 'Splint secured. Pain managed.'}
-                    {activeIdx === 2 && 'Vapor barrier applied. Rewarming.'}
-                    {activeIdx === 4 && 'Task assigned. Hysteria subsiding.'}
+                  <ul style={{ margin: '0 0 12px 0', padding: '0 0 0 18px', listStyle: 'disc' }}>
+                    {patient.symptoms.map((s, i) => (
+                      <li key={i} style={{ fontSize: 13, color: C.secondary, lineHeight: 1.6, marginBottom: 2 }}>{s}</li>
+                    ))}
+                  </ul>
+                  {/* Triage buttons */}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {['RED', 'YELLOW', 'GREEN', 'BLACK'].map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => dispatch({ type: 'ASSIGN_TRIAGE', payload: { patientId: patient.id, category: cat } })}
+                        style={{
+                          ...btnBase,
+                          flex: 1,
+                          padding: '6px 0',
+                          fontSize: 12,
+                          background: assigned === cat ? CAT_COLORS[cat] : 'transparent',
+                          border: `2px solid ${CAT_COLORS[cat]}`,
+                          color: assigned === cat ? (cat === 'YELLOW' ? '#1e1e2e' : '#fff') : CAT_COLORS[cat],
+                          opacity: assigned && assigned !== cat ? 0.4 : 1,
+                        }}
+                      >
+                        {cat.charAt(0)}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              )}
+              )
+            })}
+          </div>
 
-              {/* If viewing deceased PT-04, show expectant info */}
-              {activeIdx === 3 && (
-                <div style={{
-                  padding: '10px 12px', borderRadius: 6,
-                  border: '1px solid rgba(66,66,66,0.5)',
-                  background: 'rgba(66,66,66,0.1)',
-                  textAlign: 'center', marginTop: 4,
+          {/* Lock In button */}
+          <div style={{ textAlign: 'center', marginTop: 28 }}>
+            {allAssigned ? (
+              <button
+                onClick={() => dispatch({ type: 'LOCK_TRIAGE' })}
+                style={{
+                  ...btnBase,
+                  background: 'linear-gradient(135deg, #ff4757, #ff6b81)',
+                  fontSize: 16,
+                  padding: '14px 48px',
+                  boxShadow: '0 4px 20px rgba(255,71,87,0.3)',
+                }}
+              >
+                {'\uD83D\uDD12'} LOCK IN TRIAGE
+              </button>
+            ) : (
+              <p style={{ color: C.secondary, fontSize: 14 }}>
+                Assign all 10 patients to a category to proceed.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     PHASE: TRIAGE REVIEW
+     ════════════════════════════════════════════════════════════════════════ */
+  if (state.phase === 'triageReview') {
+    const error = state.triageErrors[state.errorReviewIdx]
+    const totalErrors = state.triageErrors.length
+
+    /* Start auto-advance timer */
+    if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current)
+    autoAdvanceRef.current = setTimeout(() => {
+      dispatch({ type: 'NEXT_ERROR' })
+    }, 5000)
+
+    return (
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 700, margin: '0 auto', paddingTop: 40 }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 8, textAlign: 'center' }}>
+            Triage Review
+          </h2>
+          <p style={{ color: C.secondary, fontSize: 14, textAlign: 'center', marginBottom: 32 }}>
+            Score: {state.triageCorrectCount}/10 correct {'\u2014'} {totalErrors} error{totalErrors !== 1 ? 's' : ''} found
+          </p>
+
+          <div style={{
+            ...cardStyle,
+            border: `2px solid ${C.red}`,
+            padding: 24,
+            animation: 'm6fadeIn 0.3s ease-out',
+            minHeight: 120,
+          }} key={state.errorReviewIdx}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 24 }}>{'\u274C'}</span>
+              <span style={{ fontSize: 13, color: C.secondary }}>
+                Error {state.errorReviewIdx + 1} of {totalErrors}
+              </span>
+            </div>
+            <p style={{ fontSize: 15, lineHeight: 1.7, color: C.text, margin: 0 }}>
+              {error}
+            </p>
+          </div>
+
+          {/* Progress bar */}
+          <div style={{ marginTop: 20, background: 'rgba(255,255,255,0.05)', borderRadius: 4, height: 4, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%',
+              background: C.red,
+              width: `${((state.errorReviewIdx + 1) / totalErrors) * 100}%`,
+              transition: 'width 0.3s',
+              borderRadius: 4,
+            }} />
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}>
+            <span style={{ color: C.secondary, fontSize: 13 }}>
+              Auto-advancing in 5s...
+            </span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => {
+                  if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current)
+                  dispatch({ type: 'NEXT_ERROR' })
+                }}
+                style={{ ...btnBase, background: C.card, border: `1px solid ${C.border}`, fontSize: 13, padding: '8px 16px' }}
+              >
+                {state.errorReviewIdx < totalErrors - 1 ? 'Next Error' : 'Continue to Treatment'}
+              </button>
+              <button
+                onClick={() => {
+                  if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current)
+                  dispatch({ type: 'SKIP_TO_TREATMENT' })
+                }}
+                style={{ ...btnBase, background: 'transparent', border: `1px solid ${C.secondary}`, color: C.secondary, fontSize: 13, padding: '8px 16px' }}
+              >
+                Skip All
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     PHASE: TREATMENT
+     ════════════════════════════════════════════════════════════════════════ */
+  if (state.phase === 'treatment') {
+    const currentPid = state.treatmentOrder[state.currentPatientIdx]
+    const patient = PATIENTS.find(p => p.id === currentPid)
+
+    /* If we somehow have no patient, finish */
+    if (!patient) {
+      dispatch({ type: 'FINISH' })
+      return null
+    }
+
+    /* BLACK patient auto-skip */
+    if (patient.trueCategory === 'BLACK') {
+      /* Shouldn't happen since we filter out BLACK, but safety net */
+      dispatch({ type: 'NEXT_PATIENT' })
+      return null
+    }
+
+    const slotsArray = Array.from({ length: patient.treatmentSlotCount }, (_, i) => state.treatmentSlots[i] || null)
+    const allSlotsFilled = state.treatmentSlots.length === patient.treatmentSlotCount
+    const patientNumber = state.currentPatientIdx + 1
+    const totalTreatable = state.treatmentOrder.length
+    const medKitEntries = Object.entries(state.medKit)
+
+    return (
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 900, margin: '0 auto' }}>
+          {/* Header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+              Phase 2: Treatment
+            </h2>
+            <span style={{ color: C.secondary, fontSize: 14 }}>
+              Patient {patientNumber} of {totalTreatable}
+            </span>
+          </div>
+
+          {/* Exam Room */}
+          <div style={{
+            ...cardStyle,
+            padding: 24,
+            marginBottom: 20,
+            animation: 'm6fadeIn 0.3s ease-out',
+          }} key={currentPid}>
+            <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+              {/* Body outline */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 110 }}>
+                <BodyOutline zone={patient.injuryZone} size={110} />
+                <span style={{
+                  marginTop: 8,
+                  display: 'inline-block',
+                  padding: '3px 10px',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  background: CAT_COLORS[patient.trueCategory],
+                  color: patient.trueCategory === 'YELLOW' ? '#1e1e2e' : '#fff',
                 }}>
-                  <div style={{ fontFamily: FONT, fontSize: 11, color: '#666', fontWeight: 700 }}>
-                    EXPECTANT (BLACK TAG)
-                  </div>
-                  <div style={{ fontFamily: FONT, fontSize: 10, color: '#555', marginTop: 4 }}>
-                    No spontaneous respiration. No pulse. Fixed pupils. This patient cannot be saved. Move on.
-                  </div>
-                </div>
+                  {patient.trueCategory}
+                </span>
+              </div>
+
+              {/* Patient info */}
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontSize: 11, color: C.secondary, marginBottom: 2 }}>{patient.id}</div>
+                <h3 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 10px 0', color: C.text }}>
+                  {patient.name}
+                </h3>
+                <ul style={{ margin: 0, padding: '0 0 0 18px', listStyle: 'disc' }}>
+                  {patient.symptoms.map((s, i) => (
+                    <li key={i} style={{ fontSize: 14, color: C.secondary, lineHeight: 1.7, marginBottom: 2 }}>{s}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            {/* Treatment slots */}
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 13, color: C.secondary, marginBottom: 10, fontWeight: 600 }}>
+                Treatment Slots ({patient.treatmentSlotCount} required):
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {slotsArray.map((itemKey, idx) => {
+                  const item = itemKey ? state.medKit[itemKey] || INITIAL_MEDKIT[itemKey] : null
+                  return (
+                    <div
+                      key={idx}
+                      onClick={() => { if (itemKey) dispatch({ type: 'REMOVE_SLOT_ITEM', payload: { slotIdx: idx } }) }}
+                      style={{
+                        width: 140,
+                        height: 80,
+                        borderRadius: 10,
+                        border: itemKey
+                          ? `2px solid ${state.glowSlot ? C.green : 'rgba(255,255,255,0.2)'}`
+                          : `2px dashed rgba(255,255,255,0.15)`,
+                        background: itemKey ? 'rgba(255,255,255,0.05)' : 'transparent',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: itemKey ? 'pointer' : 'default',
+                        transition: 'all 0.3s',
+                        animation: state.shakeSlot ? 'm6shake 0.4s ease-in-out' : (state.glowSlot ? 'm6glow 1s ease-in-out infinite' : 'none'),
+                        position: 'relative',
+                      }}
+                    >
+                      {itemKey ? (
+                        <>
+                          <span style={{ fontSize: 24 }}>{item?.icon || '?'}</span>
+                          <span style={{ fontSize: 11, color: C.text, marginTop: 4, textAlign: 'center', padding: '0 4px' }}>
+                            {item?.name || itemKey}
+                          </span>
+                          <span style={{
+                            position: 'absolute', top: 4, right: 6,
+                            fontSize: 10, color: C.secondary, opacity: 0.6,
+                          }}>
+                            {'\u2715'}
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.2)' }}>
+                          Slot {idx + 1}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Treatment feedback */}
+            {state.treatmentFeedback && (
+              <div style={{
+                marginTop: 16,
+                padding: '12px 16px',
+                borderRadius: 8,
+                background: state.treatmentFeedback.correct
+                  ? 'rgba(46,213,115,0.12)'
+                  : 'rgba(255,71,87,0.12)',
+                border: `1px solid ${state.treatmentFeedback.correct ? C.green : C.red}40`,
+                animation: 'm6fadeIn 0.3s ease-out',
+              }}>
+                <p style={{
+                  margin: 0,
+                  fontSize: 14,
+                  lineHeight: 1.7,
+                  color: state.treatmentFeedback.correct ? C.green : C.red,
+                  fontWeight: state.treatmentFeedback.correct ? 400 : 600,
+                }}>
+                  {state.treatmentFeedback.correct ? '\u2705 ' : '\u274C '}{state.treatmentFeedback.text}
+                </p>
+              </div>
+            )}
+
+            {/* Confirm / Next buttons */}
+            <div style={{ marginTop: 16, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {!state.treatmentFeedback?.correct && (
+                <button
+                  onClick={() => {
+                    dispatch({ type: 'CONFIRM_TREATMENT' })
+                    clearShake()
+                  }}
+                  disabled={!allSlotsFilled}
+                  style={{
+                    ...btnBase,
+                    background: allSlotsFilled ? C.green : C.black,
+                    color: allSlotsFilled ? '#1e1e2e' : C.secondary,
+                    opacity: allSlotsFilled ? 1 : 0.5,
+                    cursor: allSlotsFilled ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  Confirm Treatment
+                </button>
+              )}
+              {state.treatmentFeedback?.correct && (
+                <button
+                  onClick={() => dispatch({ type: 'NEXT_PATIENT' })}
+                  style={{ ...btnBase, background: C.green, color: '#1e1e2e' }}
+                >
+                  {state.currentPatientIdx < state.treatmentOrder.length - 1
+                    ? 'Next Patient \u2192'
+                    : 'View Results'}
+                </button>
               )}
             </div>
-          )}
+          </div>
 
-          {/* Quick triage stats */}
-          <div style={{ marginTop: 'auto', paddingTop: 16 }}>
-            <div style={styles.panelHeader}>TRIAGE STATUS</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {state.patients.map((pt, idx) => {
-                const tag = state.triageTags[idx]
+          {/* BLACK patient notice (shown if the next sorted patient would be BLACK) */}
+          {/* Med Kit */}
+          <div style={{ ...cardStyle, padding: 20 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 14px 0', color: C.text }}>
+              {'\uD83C\uDFE5'} Med Kit
+            </h3>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))',
+              gap: 10,
+            }}>
+              {medKitEntries.map(([key, item]) => {
+                const disabled = item.qty <= 0 || allSlotsFilled || state.treatmentFeedback?.correct
                 return (
-                  <div
-                    key={pt.id}
+                  <button
+                    key={key}
+                    onClick={() => { if (!disabled) dispatch({ type: 'PLACE_ITEM', payload: { itemKey: key } }) }}
+                    onMouseEnter={() => { if (!disabled) setHoveredItem(key) }}
+                    onMouseLeave={() => setHoveredItem(null)}
+                    disabled={disabled}
                     style={{
-                      width: 42, height: 42, borderRadius: 4,
-                      border: `1px solid ${tag ? TAG_COLORS[tag] : 'rgba(255,255,255,0.12)'}`,
-                      background: tag ? `${TAG_COLORS[tag]}15` : 'transparent',
-                      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                      background: disabled
+                        ? 'rgba(255,255,255,0.02)'
+                        : hoveredItem === key
+                          ? 'rgba(255,255,255,0.12)'
+                          : 'rgba(255,255,255,0.06)',
+                      border: `1px solid ${disabled ? 'rgba(255,255,255,0.04)' : hoveredItem === key ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)'}`,
+                      borderRadius: 8,
+                      padding: '10px 8px',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      textAlign: 'center',
+                      opacity: disabled ? 0.35 : 1,
+                      transition: 'all 0.2s',
+                      fontFamily: C.font,
+                      transform: hoveredItem === key && !disabled ? 'translateY(-2px)' : 'none',
                     }}
                   >
-                    <span style={{ fontFamily: FONT, fontSize: 8, color: tag ? TAG_COLORS[tag] : '#555' }}>
-                      {pt.id.slice(-2)}
-                    </span>
-                    <span style={{ fontFamily: FONT, fontSize: 9, fontWeight: 700, color: tag ? TAG_COLORS[tag] : '#555' }}>
-                      {tag ? tag.charAt(0) : '?'}
-                    </span>
-                  </div>
+                    <div style={{ fontSize: 22 }}>{item.icon}</div>
+                    <div style={{ fontSize: 11, color: C.text, marginTop: 4, lineHeight: 1.3 }}>{item.name}</div>
+                    <div style={{ fontSize: 11, color: C.secondary, marginTop: 4 }}>
+                      Qty: {item.qty}
+                    </div>
+                  </button>
                 )
               })}
             </div>
           </div>
         </div>
       </div>
+    )
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     PHASE: RESULT
+     ════════════════════════════════════════════════════════════════════════ */
+  if (state.phase === 'result') {
+    const totalScore = state.score
+    const passed = totalScore >= 50
+
+    /* Record score on first render of result */
+    if (!hasRecordedScore.current) {
+      hasRecordedScore.current = true
+      recordScore(totalScore)
+    }
+
+    const treatmentCorrectCount = state.treatmentCorrectCount
+
+    /* Key lessons */
+    const keyLessons = [
+      'In START triage, the FIRST question is always: "Can they walk?" If yes, they are GREEN regardless of appearance.',
+      'Arterial bleeding (bright red, spurting) is always RED \u2014 Immediate. Minutes matter.',
+      'NEVER tourniquet a snakebite \u2014 it traps venom and causes tissue death. Immobilize with a splint instead.',
+      'Crush syndrome: apply tourniquet BEFORE freeing the trapped limb to prevent lethal "toxic wave" reperfusion.',
+      'BLACK (Expectant) is the hardest call \u2014 but using resources on unsalvageable patients means salvageable patients die.',
+      'Cholera kills through dehydration, not the disease itself. ORS + clean water reduces mortality from 50% to under 1%.',
+      'Hypothermia protocol: remove wet clothes FIRST, then insulate. Wet fabric causes 25x faster heat loss.',
+    ]
+
+    return (
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 800, margin: '0 auto', paddingTop: 20 }}>
+          {/* Score header */}
+          <div style={{ textAlign: 'center', marginBottom: 32, animation: 'm6fadeIn 0.5s ease-out' }}>
+            <div style={{ fontSize: 56, fontWeight: 800, color: passed ? C.green : C.red, marginBottom: 8 }}>
+              {totalScore}
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: passed ? C.green : C.red, marginBottom: 8 }}>
+              {passed ? 'PASSED' : 'FAILED'}
+            </div>
+            <div style={{ fontSize: 14, color: C.secondary }}>
+              {passed ? 'You demonstrated competent triage and treatment skills.' : 'Score 50 or higher to pass. Review the lessons below and try again.'}
+            </div>
+          </div>
+
+          {/* Score breakdown */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 28 }}>
+            <div style={{ ...cardStyle, textAlign: 'center', padding: 20 }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: C.text }}>{state.triageCorrectCount}/10</div>
+              <div style={{ fontSize: 13, color: C.secondary, marginTop: 4 }}>Triage Accuracy</div>
+              <div style={{ fontSize: 12, color: C.secondary, marginTop: 2 }}>({state.triageScore} pts)</div>
+            </div>
+            <div style={{ ...cardStyle, textAlign: 'center', padding: 20 }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: C.text }}>{treatmentCorrectCount}/9</div>
+              <div style={{ fontSize: 13, color: C.secondary, marginTop: 4 }}>Treatment Accuracy</div>
+              <div style={{ fontSize: 12, color: C.secondary, marginTop: 2 }}>({state.treatmentScore} pts)</div>
+            </div>
+            <div style={{ ...cardStyle, textAlign: 'center', padding: 20 }}>
+              <div style={{ fontSize: 28, fontWeight: 700, color: state.wastedOnBlack ? C.red : C.green }}>
+                {state.wastedOnBlack ? '-20' : '0'}
+              </div>
+              <div style={{ fontSize: 13, color: C.secondary, marginTop: 4 }}>Resource Waste Penalty</div>
+              <div style={{ fontSize: 12, color: C.secondary, marginTop: 2 }}>
+                {state.wastedOnBlack ? 'Wasted on expectant patient' : 'No waste'}
+              </div>
+            </div>
+          </div>
+
+          {/* Patient-by-patient review */}
+          <div style={{ ...cardStyle, padding: 20, marginBottom: 24 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 16px 0', color: C.text }}>
+              Patient Review
+            </h3>
+            {PATIENTS.map(patient => {
+              const assignedCat = state.triageAssignments[patient.id]
+              const triageCorrect = assignedCat === patient.trueCategory
+              const treated = state.treatedPatients[patient.id]
+              const treatmentCorrect = treated?.correct || false
+              const isBlack = patient.trueCategory === 'BLACK'
+
+              return (
+                <div key={patient.id} style={{
+                  padding: '14px 16px',
+                  borderRadius: 8,
+                  background: 'rgba(255,255,255,0.02)',
+                  border: `1px solid ${C.border}`,
+                  marginBottom: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{patient.id}</span>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{patient.name}</span>
+                    <span style={{
+                      display: 'inline-block', padding: '2px 8px', borderRadius: 4,
+                      fontSize: 11, fontWeight: 700,
+                      background: CAT_COLORS[patient.trueCategory],
+                      color: patient.trueCategory === 'YELLOW' ? '#1e1e2e' : '#fff',
+                    }}>
+                      {patient.trueCategory}
+                    </span>
+                    {/* Triage result */}
+                    <span style={{ fontSize: 12, color: triageCorrect ? C.green : C.red }}>
+                      {triageCorrect ? '\u2705 Triage correct' : `\u274C Triaged as ${assignedCat}`}
+                    </span>
+                    {/* Treatment result */}
+                    {!isBlack && (
+                      <span style={{ fontSize: 12, color: treatmentCorrect ? C.green : C.red }}>
+                        {treatmentCorrect ? '\u2705 Treated correctly' : '\u274C Treatment incorrect'}
+                      </span>
+                    )}
+                    {isBlack && (
+                      <span style={{ fontSize: 12, color: C.secondary }}>
+                        No treatment (expectant)
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    {!isBlack && (
+                      <div style={{ fontSize: 12, color: C.secondary }}>
+                        <strong style={{ color: C.text }}>Correct treatment:</strong>{' '}
+                        {patient.correctTreatment.map(k => INITIAL_MEDKIT[k]?.name || k).join(' + ')}
+                      </div>
+                    )}
+                  </div>
+                  <p style={{ fontSize: 13, color: C.secondary, lineHeight: 1.6, margin: '6px 0 0 0' }}>
+                    {patient.treatmentExplanation}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Key Lessons */}
+          <div style={{ ...cardStyle, padding: 20, marginBottom: 28 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 14px 0', color: C.text }}>
+              {'\uD83D\uDCA1'} Key Lessons
+            </h3>
+            <ul style={{ margin: 0, padding: '0 0 0 20px' }}>
+              {keyLessons.map((lesson, i) => (
+                <li key={i} style={{ fontSize: 14, color: C.secondary, lineHeight: 1.7, marginBottom: 8 }}>
+                  {lesson}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap', paddingBottom: 40 }}>
+            <button
+              onClick={() => { hasRecordedScore.current = false; dispatch({ type: 'START' }) }}
+              style={{ ...btnBase, background: passed ? C.card : C.red, border: `1px solid ${C.border}`, fontSize: 15, padding: '12px 32px' }}
+            >
+              {'\uD83D\uDD04'} Try Again
+            </button>
+            <button
+              onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })}
+              style={{ ...btnBase, background: passed ? C.green : C.card, color: passed ? '#1e1e2e' : C.text, fontSize: 15, padding: '12px 32px' }}
+            >
+              Back to Modules
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  /* Fallback */
+  return (
+    <div style={pageStyle}>
+      <p style={{ textAlign: 'center', color: C.secondary }}>Unknown phase. Please restart.</p>
+      <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <button
+          onClick={() => dispatch({ type: 'START' })}
+          style={{ ...btnBase, background: C.red }}
+        >
+          Restart
+        </button>
+      </div>
     </div>
   )
-}
-
-// ── Styles ───────────────────────────────────────────────────────────────────
-const styles = {
-  screen: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-    background: '#121212',
-    fontFamily: FONT,
-  },
-  introCard: {
-    maxWidth: 640,
-    padding: '36px 32px',
-    textAlign: 'center',
-    background: 'rgba(255,255,255,0.02)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    borderRadius: 8,
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 12,
-  },
-  briefingBox: {
-    background: 'rgba(255,230,0,0.04)',
-    border: '1px solid rgba(255,230,0,0.25)',
-    borderRadius: 6,
-    padding: '14px 18px',
-    width: '100%',
-    textAlign: 'left',
-  },
-  primaryBtn: {
-    padding: '12px 36px',
-    fontSize: 14,
-    fontWeight: 700,
-    fontFamily: FONT,
-    background: '#ff1744',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 6,
-    cursor: 'pointer',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  ghostBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#64748b',
-    cursor: 'pointer',
-    fontSize: 12,
-    fontFamily: FONT,
-    padding: '4px 8px',
-  },
-  activeContainer: {
-    height: '100vh',
-    width: '100vw',
-    background: '#121212',
-    fontFamily: FONT,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  headerBar: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 16px',
-    borderBottom: '1px solid rgba(255,255,255,0.12)',
-    background: '#0e0e0e',
-    flexShrink: 0,
-  },
-  threeCol: {
-    display: 'grid',
-    gridTemplateColumns: '250px 1fr 280px',
-    flex: 1,
-    overflow: 'hidden',
-  },
-  leftPanel: {
-    borderRight: '1px solid rgba(255,255,255,0.12)',
-    padding: '12px 10px',
-    overflowY: 'auto',
-    background: '#141414',
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  centerPanel: {
-    overflow: 'hidden',
-    background: '#121212',
-  },
-  rightPanel: {
-    borderLeft: '1px solid rgba(255,255,255,0.12)',
-    padding: '12px 10px',
-    overflowY: 'auto',
-    background: '#141414',
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  panelHeader: {
-    fontFamily: FONT,
-    fontSize: 10,
-    color: '#64748b',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-    marginBottom: 8,
-    paddingBottom: 4,
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-  },
-  vitalsGrid: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 1fr',
-    gap: 12,
-  },
-  vitalBox: {
-    padding: '12px 14px',
-    borderRadius: 6,
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: 'rgba(255,255,255,0.02)',
-    textAlign: 'center',
-  },
-  actionBtn: {
-    padding: '10px 12px',
-    borderRadius: 6,
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: 'rgba(255,255,255,0.02)',
-    cursor: 'pointer',
-    textAlign: 'left',
-    fontFamily: FONT,
-    display: 'block',
-    width: '100%',
-  },
-  scoreRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 12px',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
-  },
-  logScroll: {
-    maxHeight: 140,
-    overflowY: 'auto',
-  },
 }
