@@ -62,6 +62,13 @@ export default function MainMenu() {
         >
           🎞️ Project Presentation
         </button>
+
+        <button
+          style={styles.ironTideBtn}
+          onClick={() => dispatch({ type: 'NAVIGATE', payload: 'ironTide' })}
+        >
+          🩸 Operation: Iron Tide — Immersive Triage Sim
+        </button>
       </div>
     </div>
   )
@@ -125,6 +132,15 @@ const styles = {
     background: 'rgba(34,197,94,0.08)',
     color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',
     borderRadius: 12, cursor: 'pointer',
+    transition: 'all 0.15s', marginBottom: 10,
+  },
+  ironTideBtn: {
+    display: 'block', width: '100%',
+    padding: '14px 0', fontSize: 15, fontWeight: 700,
+    background: 'linear-gradient(135deg, rgba(220,38,38,0.15), rgba(220,38,38,0.08))',
+    color: '#f87171', border: '1px solid rgba(220,38,38,0.35)',
+    borderRadius: 12, cursor: 'pointer',
     transition: 'all 0.15s',
+    boxShadow: '0 0 20px rgba(220,38,38,0.15)',
   },
 }
