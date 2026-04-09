@@ -136,7 +136,7 @@ const ALL_TOOLS = [
   { id: 'fire', name: 'Signal Fire', emoji: '🔥', color: '#f59e0b' },
 ]
 
-const ROUND_TIME = 3
+const ROUND_TIME = 10
 const BASE_POINTS = 100
 const SPEED_BONUS_MAX = 50
 
