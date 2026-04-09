@@ -1,873 +1,716 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useReducer, useCallback, useRef } from 'react'
 import { useGame } from '../../context/GameContext'
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const SITES = [
-  {
-    id: 'ridge',
-    label: 'Ridge (Hilltop)',
-    desc: 'Exposed hilltop with panoramic views. Excellent drainage but fully exposed to wind.',
-    windLevel: 3,
-    drainageLevel: 3,
-    floodRisk: 0,
-    convectionLoss: -0.4,
-    emoji: '⛰️',
-    color: '#f59e0b',
-    terrainY: 28,
-  },
-  {
-    id: 'depression',
-    label: 'Depression (Valley)',
-    desc: 'Cozy sheltered valley. Wind-blocked but collects water when rain arrives.',
-    windLevel: 0,
-    drainageLevel: 0,
-    floodRisk: 3,
-    convectionLoss: -0.05,
-    emoji: '🏕️',
-    color: '#22d3ee',
-    terrainY: 72,
-  },
-  {
-    id: 'midslope',
-    label: 'Midslope (Slight Elevation)',
-    desc: 'Moderate elevation on the hillside. Balanced wind protection and good drainage.',
-    windLevel: 1,
-    drainageLevel: 2,
-    floodRisk: 0,
-    convectionLoss: -0.15,
-    emoji: '🏔️',
-    color: '#4ade80',
-    terrainY: 50,
-  },
-]
-
-const EQUIPMENT = [
-  { id: 'ground_pad', label: 'Ground Pad', desc: 'Insulation layer — blocks conductive heat loss from cold earth', emoji: '🟦', color: '#3b82f6' },
-  { id: 'tent', label: 'Tent Body', desc: 'Main shelter structure — provides enclosure', emoji: '⛺', color: '#f97316' },
-  { id: 'sleeping_bag', label: 'Sleeping Bag', desc: 'Thermal cocoon — traps body heat inside', emoji: '🛏️', color: '#a855f7' },
-  { id: 'rainfly', label: 'Rainfly', desc: 'Waterproof outer layer — prevents rain from soaking gear', emoji: '🛡️', color: '#eab308' },
-]
-
-const CORRECT_ORDER = ['ground_pad', 'tent', 'sleeping_bag', 'rainfly']
-
-const TICK_MS = 400
-const SIM_TICKS = 38 // ~15 seconds at 400ms per tick
-const RAIN_START_TICK = 10
-const HYPOTHERMIA_THRESHOLD = 95.0
-const STARTING_TEMP = 98.6
-
-// ── Helper: temperature color ────────────────────────────────────────────────
-
-function tempColor(temp) {
-  const t = Math.max(0, Math.min(1, (temp - 90) / (99 - 90)))
-  const r = Math.round(200 * (1 - t) + 60 * t)
-  const g = Math.round(60 * (1 - t) + 120 * t)
-  const b = Math.round(220 * (1 - t) + 60 * t)
-  return `rgb(${r},${g},${b})`
+// ─── Thermal Palette ────────────────────────────────────────────────────────
+const THERMAL = {
+  deepBlue:  '#1a237e',
+  purple:    '#6a1b9a',
+  orange:    '#ff6d00',
+  red:       '#ff1744',
+  white:     '#ffffff',
 }
 
-// ── CSS Keyframe injection (once) ────────────────────────────────────────────
+const FONT = "'JetBrains Mono', 'Courier New', monospace"
 
-const KEYFRAMES_ID = 'module7-keyframes'
-function injectKeyframes() {
-  if (document.getElementById(KEYFRAMES_ID)) return
-  const style = document.createElement('style')
-  style.id = KEYFRAMES_ID
-  style.textContent = `
-    @keyframes m7rain {
-      0% { transform: translateY(-20px); opacity: 0.7; }
-      100% { transform: translateY(340px); opacity: 0.2; }
-    }
-    @keyframes m7wind {
-      0% { transform: translateX(-40px); opacity: 0; }
-      30% { opacity: 0.8; }
-      100% { transform: translateX(120px); opacity: 0; }
-    }
-    @keyframes m7pulse {
-      0%, 100% { opacity: 0.6; }
-      50% { opacity: 1; }
-    }
-    @keyframes m7shake {
-      0%, 100% { transform: translateX(0); }
-      20% { transform: translateX(-6px); }
-      40% { transform: translateX(6px); }
-      60% { transform: translateX(-4px); }
-      80% { transform: translateX(4px); }
-    }
-    @keyframes m7flood {
-      0% { height: 0px; }
-      100% { height: 60px; }
-    }
-  `
-  document.head.appendChild(style)
+// Map core temp (28..37) to a FLIR color
+function tempToColor(t) {
+  const clamped = Math.max(28, Math.min(37, t))
+  const ratio = (clamped - 28) / (37 - 28) // 0 = cold, 1 = warm
+  if (ratio < 0.2) return THERMAL.deepBlue
+  if (ratio < 0.4) return THERMAL.purple
+  if (ratio < 0.6) return '#fdd835' // yellow
+  if (ratio < 0.75) return THERMAL.orange
+  if (ratio < 0.9) return THERMAL.red
+  return THERMAL.white
 }
 
-// ── Terrain SVG Cross-Section ────────────────────────────────────────────────
-
-function TerrainCrossSection({ selectedSite, phase, groundSaturation, showRain, showWind }) {
-  const siteObj = SITES.find(s => s.id === selectedSite)
-
-  return (
-    <div style={{ position: 'relative', width: '100%', height: 280, overflow: 'hidden', borderRadius: 12, background: '#0c1425' }}>
-      {/* Sky gradient */}
-      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, #0f172a 0%, #1a1a3e 40%, #1e293b 100%)' }} />
-
-      {/* Stars */}
-      {[...Array(20)].map((_, i) => (
-        <div key={i} style={{
-          position: 'absolute',
-          left: `${(i * 37 + 13) % 100}%`,
-          top: `${(i * 23 + 7) % 35}%`,
-          width: i % 3 === 0 ? 2 : 1,
-          height: i % 3 === 0 ? 2 : 1,
-          background: '#e2e8f0',
-          borderRadius: '50%',
-          opacity: 0.4 + (i % 5) * 0.12,
-          animation: 'm7pulse 2s ease-in-out infinite',
-          animationDelay: `${i * 0.3}s`,
-        }} />
-      ))}
-
-      {/* Rain overlay */}
-      {showRain && [...Array(40)].map((_, i) => (
-        <div key={`rain-${i}`} style={{
-          position: 'absolute',
-          left: `${(i * 2.5) % 100}%`,
-          top: -20,
-          width: 1,
-          height: 14,
-          background: 'rgba(96,165,250,0.5)',
-          animation: 'm7rain 0.7s linear infinite',
-          animationDelay: `${(i * 0.05) % 0.7}s`,
-        }} />
-      ))}
-
-      {/* Wind arrows */}
-      {showWind && [...Array(6)].map((_, i) => (
-        <div key={`wind-${i}`} style={{
-          position: 'absolute',
-          left: -40,
-          top: 60 + i * 28,
-          fontSize: 16,
-          color: 'rgba(148,163,184,0.6)',
-          animation: 'm7wind 1.5s linear infinite',
-          animationDelay: `${i * 0.25}s`,
-        }}>
-          {'>>>'}
-        </div>
-      ))}
-
-      {/* Terrain layers (SVG) */}
-      <svg viewBox="0 0 800 180" style={{ position: 'absolute', bottom: 0, width: '100%', height: 180 }} preserveAspectRatio="none">
-        {/* Deep earth */}
-        <path d="M0,180 L0,140 Q100,130 200,120 Q350,160 500,110 Q650,90 750,100 L800,95 L800,180 Z" fill="#3d2008" />
-        {/* Topsoil */}
-        <path d="M0,140 Q100,120 200,100 Q350,140 500,90 Q650,70 750,82 L800,75 L800,140 Q650,90 500,110 Q350,160 200,120 Q100,130 0,140 Z" fill="#5c3a1e" />
-        {/* Grass layer */}
-        <path d="M0,138 Q100,118 200,98 Q350,138 500,88 Q650,68 750,80 L800,73 L800,78 Q650,73 500,93 Q350,143 200,103 Q100,123 0,143 Z" fill="#2d5a27" />
-
-        {/* Elevation contour lines */}
-        <path d="M0,145 Q100,125 200,105 Q350,145 500,95 Q650,75 750,87 L800,80" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="1" strokeDasharray="6,4" />
-        <path d="M0,155 Q100,140 200,125 Q350,155 500,115 Q650,95 750,105 L800,98" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4,6" />
-
-        {/* Site markers */}
-        {phase !== 'intro' && SITES.map(site => {
-          const x = site.id === 'ridge' ? 700 : site.id === 'depression' ? 380 : 550
-          const y = site.id === 'ridge' ? 72 : site.id === 'depression' ? 135 : 92
-          const isSelected = selectedSite === site.id
-          return (
-            <g key={site.id}>
-              <circle cx={x} cy={y} r={isSelected ? 8 : 5} fill={isSelected ? site.color : 'rgba(255,255,255,0.3)'} stroke={site.color} strokeWidth={isSelected ? 2 : 1} />
-              {isSelected && <circle cx={x} cy={y} r={14} fill="none" stroke={site.color} strokeWidth={1} opacity={0.4} />}
-            </g>
-          )
-        })}
-      </svg>
-
-      {/* Temperature gradient overlay at bottom */}
-      <div style={{
-        position: 'absolute', bottom: 0, left: 0, right: 0, height: 6,
-        background: `linear-gradient(90deg, #3b82f6, #8b5cf6, #ef4444)`,
-        opacity: 0.5,
-      }} />
-
-      {/* Ground saturation water fill in depression */}
-      {selectedSite === 'depression' && groundSaturation > 0.1 && (
-        <div style={{
-          position: 'absolute', bottom: 10, left: '38%', width: '24%',
-          height: Math.min(60, groundSaturation * 60),
-          background: 'rgba(59,130,246,0.25)',
-          borderRadius: '0 0 8px 8px',
-          transition: 'height 0.5s ease',
-        }} />
-      )}
-
-      {/* Tent icon on selected site */}
-      {selectedSite && (phase === 'equip' || phase === 'simulate' || phase === 'result') && (
-        <div style={{
-          position: 'absolute',
-          left: selectedSite === 'ridge' ? '85%' : selectedSite === 'depression' ? '46%' : '66%',
-          bottom: selectedSite === 'ridge' ? 112 : selectedSite === 'depression' ? 52 : 92,
-          fontSize: 28,
-          transform: 'translateX(-50%)',
-          filter: groundSaturation > 0.7 ? 'hue-rotate(180deg) brightness(0.6)' : 'none',
-          transition: 'filter 0.5s',
-        }}>
-          ⛺
-        </div>
-      )}
-    </div>
-  )
+function tempToGradient(t) {
+  const core = tempToColor(t)
+  return `radial-gradient(ellipse at 50% 40%, ${core} 0%, ${THERMAL.purple} 50%, ${THERMAL.deepBlue} 100%)`
 }
 
-// ── Thermometer Gauge ────────────────────────────────────────────────────────
+// ─── Reducer ────────────────────────────────────────────────────────────────
+const initialState = {
+  phase: 'intro',
 
-function Thermometer({ temp, label }) {
-  const pct = Math.max(0, Math.min(100, ((temp - 90) / (99 - 90)) * 100))
-  const col = tempColor(temp)
-  const isHypo = temp < HYPOTHERMIA_THRESHOLD
+  // Daylight phase
+  daylightTime: 120,
+  exertionPace: 0.5,
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-      <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1 }}>{label}</span>
-      <div style={{
-        width: 32, height: 160, borderRadius: 16, position: 'relative',
-        background: 'linear-gradient(180deg, #1e40af 0%, #7c3aed 50%, #dc2626 100%)',
-        border: '2px solid rgba(255,255,255,0.1)',
-        overflow: 'hidden',
-      }}>
-        {/* Fill from bottom */}
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0,
-          height: `${pct}%`,
-          background: col,
-          transition: 'height 0.3s ease, background 0.3s ease',
-          borderRadius: '0 0 14px 14px',
-          boxShadow: isHypo ? '0 0 12px rgba(59,130,246,0.6)' : `0 0 8px ${col}66`,
-        }} />
-        {/* Tick marks */}
-        {[95, 96, 97, 98].map(t => (
-          <div key={t} style={{
-            position: 'absolute',
-            bottom: `${((t - 90) / 9) * 100}%`,
-            left: 0, right: 0, height: 1,
-            background: t === 95 ? 'rgba(239,68,68,0.6)' : 'rgba(255,255,255,0.15)',
-          }} />
-        ))}
-        {/* Bulb at bottom */}
-        <div style={{
-          position: 'absolute', bottom: -6, left: '50%', transform: 'translateX(-50%)',
-          width: 20, height: 20, borderRadius: '50%',
-          background: col, border: '2px solid rgba(255,255,255,0.15)',
-        }} />
-      </div>
-      <span style={{
-        fontSize: 18, fontWeight: 800,
-        color: isHypo ? '#60a5fa' : col,
-        fontFamily: 'monospace',
-      }}>
-        {temp.toFixed(1)}°F
-      </span>
-      {isHypo && (
-        <span style={{ fontSize: 10, color: '#f87171', fontWeight: 700, animation: 'm7pulse 1s infinite' }}>
-          HYPOTHERMIA
-        </span>
-      )}
-    </div>
-  )
+  // Structures
+  tentBuilt: false,
+  groundPadLaid: false,
+  reflectorBuilt: false,
+
+  // Building
+  buildingAction: null,
+  buildProgress: 0,
+  buildDuration: 0,
+
+  // Night phase
+  nightTime: 180,
+
+  // Vitals
+  coreTemp: 37.0,
+  moistureLevel: 0,
+  co_ppm: 0,
+  calorieReserve: 2000,
+
+  // Night controls
+  heatSourceOn: false,
+  ventsOpen: true,
+
+  // Environment
+  ambientTemp: -5,
+  windSpeed: 25,
+
+  // Outcome
+  causeOfDeath: null,
+  survived: false,
 }
 
-// ── Equipment Card ───────────────────────────────────────────────────────────
+function simReducer(state, action) {
+  switch (action.type) {
+    case 'SET_PHASE':
+      return { ...state, phase: action.payload }
 
-function EquipCard({ item, index, placed, isNext, isWrongPick, onClick }) {
-  const borderCol = placed ? '#22c55e' : isNext ? item.color : 'rgba(255,255,255,0.07)'
-  const bgCol = placed ? 'rgba(34,197,94,0.1)' : isNext ? `${item.color}1a` : 'rgba(255,255,255,0.03)'
+    case 'SET_EXERTION':
+      return { ...state, exertionPace: action.payload }
 
-  return (
-    <button
-      onClick={!placed && onClick ? onClick : undefined}
-      disabled={placed}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '12px 14px', borderRadius: 10, width: '100%', textAlign: 'left',
-        border: `2px solid ${isWrongPick ? '#ef4444' : borderCol}`,
-        background: isWrongPick ? 'rgba(239,68,68,0.15)' : bgCol,
-        cursor: placed ? 'default' : 'pointer',
-        opacity: placed ? 0.6 : 1,
-        transform: isNext ? 'scale(1.02)' : 'scale(1)',
-        boxShadow: isWrongPick ? '0 0 16px rgba(239,68,68,0.4)' : isNext ? `0 0 14px ${item.color}44` : 'none',
-        transition: 'all 0.2s',
-        animation: isWrongPick ? 'm7shake 0.4s ease' : 'none',
-        fontFamily: 'inherit',
-      }}
-    >
-      <span style={{
-        fontSize: 22, width: 36, height: 36, borderRadius: 8, flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: placed ? 'rgba(34,197,94,0.2)' : `${item.color}25`,
-      }}>
-        {placed ? '✅' : item.emoji}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 13, fontWeight: 700,
-          color: placed ? '#4ade80' : isWrongPick ? '#f87171' : '#f1f5f9',
-        }}>
-          {index + 1}. {item.label}
-        </div>
-        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2, lineHeight: 1.4 }}>
-          {item.desc}
-        </div>
-      </div>
-      {placed && <span style={{ fontSize: 10, color: '#4ade80', fontWeight: 700 }}>PLACED</span>}
-    </button>
-  )
+    case 'START_BUILD': {
+      const { target, duration } = action.payload
+      return { ...state, buildingAction: target, buildProgress: 0, buildDuration: duration }
+    }
+
+    case 'UPDATE_BUILD_PROGRESS':
+      return { ...state, buildProgress: Math.min(100, state.buildProgress + action.payload) }
+
+    case 'FINISH_BUILD': {
+      const built = state.buildingAction
+      const costs = { tent: 200, pad: 100, reflector: 150 }
+      const cost = costs[built] || 0
+      return {
+        ...state,
+        buildingAction: null,
+        buildProgress: 0,
+        buildDuration: 0,
+        calorieReserve: Math.max(0, state.calorieReserve - cost),
+        tentBuilt: built === 'tent' ? true : state.tentBuilt,
+        groundPadLaid: built === 'pad' ? true : state.groundPadLaid,
+        reflectorBuilt: built === 'reflector' ? true : state.reflectorBuilt,
+      }
+    }
+
+    case 'CANCEL_BUILD':
+      return { ...state, buildingAction: null, buildProgress: 0, buildDuration: 0 }
+
+    case 'DAYLIGHT_TICK': {
+      const dt = state.daylightTime - 0.1
+      const moistInc = state.buildingAction ? state.exertionPace * 0.3 : state.exertionPace * 0.05
+      const calDrain = 0.5 + (state.exertionPace * 1.5)
+      return {
+        ...state,
+        daylightTime: Math.max(0, dt),
+        moistureLevel: Math.min(100, state.moistureLevel + moistInc * 0.1),
+        calorieReserve: Math.max(0, state.calorieReserve - calDrain * 0.1),
+      }
+    }
+
+    case 'NIGHT_TICK': {
+      let { coreTemp, co_ppm, calorieReserve, moistureLevel,
+            groundPadLaid, tentBuilt, reflectorBuilt,
+            heatSourceOn, ventsOpen, nightTime } = state
+
+      // Base heat losses per tick
+      let conductiveLoss = groundPadLaid ? 0.002 : 0.02
+      let convectiveLoss = tentBuilt ? 0.005 : 0.018
+      const evaporativeLoss = moistureLevel > 10 ? 0.01 * (moistureLevel / 100) : 0
+
+      // Ventilation compromise
+      if (ventsOpen) {
+        convectiveLoss *= 1.15
+      }
+
+      // Evaporative penalty multiplier
+      const totalLoss = (conductiveLoss + convectiveLoss + evaporativeLoss) * (1 + (moistureLevel * 0.05))
+
+      // Radiant heat gain
+      let radiantGain = 0
+      if (heatSourceOn) {
+        radiantGain = 0.015
+        if (reflectorBuilt) radiantGain *= 2.0
+      }
+
+      // CO poisoning
+      if (heatSourceOn && !ventsOpen) {
+        co_ppm += 3.0
+      }
+      if (ventsOpen) {
+        co_ppm = Math.max(0, co_ppm - 5.0)
+      }
+
+      // Temperature update
+      coreTemp -= totalLoss
+      if (heatSourceOn) coreTemp += radiantGain
+
+      // Calorie drain at night
+      calorieReserve -= 0.3
+      if (calorieReserve <= 0) {
+        calorieReserve = 0
+        coreTemp -= 0.005
+      }
+
+      // Death checks
+      let causeOfDeath = null
+      if (co_ppm > 400) causeOfDeath = 'co'
+      if (coreTemp <= 28.0) causeOfDeath = 'hypothermia'
+
+      const newNightTime = Math.max(0, nightTime - 0.1)
+      const survived = newNightTime <= 0 && !causeOfDeath
+
+      return {
+        ...state,
+        coreTemp: Math.round(coreTemp * 100) / 100,
+        co_ppm: Math.round(co_ppm * 10) / 10,
+        calorieReserve: Math.max(0, Math.round(calorieReserve * 10) / 10),
+        nightTime: newNightTime,
+        causeOfDeath,
+        survived,
+        phase: causeOfDeath ? 'result' : (survived ? 'result' : state.phase),
+      }
+    }
+
+    case 'TOGGLE_HEAT':
+      return { ...state, heatSourceOn: !state.heatSourceOn }
+
+    case 'TOGGLE_VENTS':
+      return { ...state, ventsOpen: !state.ventsOpen }
+
+    case 'SET_SURVIVED':
+      return { ...state, survived: true, phase: 'result' }
+
+    case 'RESET':
+      return { ...initialState }
+
+    default:
+      return state
+  }
 }
 
-// ── Main Component ───────────────────────────────────────────────────────────
+// ─── Component ──────────────────────────────────────────────────────────────
+export default function Module7_Thermodynamics() {
+  const { dispatch: gameDispatch } = useGame()
+  const [sim, simDispatch] = useReducer(simReducer, initialState)
+  const tickRef = useRef(null)
+  const buildTickRef = useRef(null)
+  const [pulseAnim, setPulseAnim] = useState(0)
+  const animFrameRef = useRef(null)
 
-export default function Module7_CampSafeHaven() {
-  const { dispatch } = useGame()
-
-  const [phase, setPhase] = useState('intro') // intro | site_select | equip | simulate | result
-  const [selectedSite, setSelectedSite] = useState(null)
-  const [placedEquip, setPlacedEquip] = useState([])
-  const [wrongPick, setWrongPick] = useState(null)
-  const [wrongCount, setWrongCount] = useState(0)
-  const [equipFeedback, setEquipFeedback] = useState(null)
-
-  // Simulation state
-  const [coreBodyTemp, setCoreBodyTemp] = useState(STARTING_TEMP)
-  const [windChill, setWindChill] = useState(0)
-  const [groundSaturation, setGroundSaturation] = useState(0)
-  const [simTick, setSimTick] = useState(0)
-  const [simRunning, setSimRunning] = useState(false)
-  const [simLog, setSimLog] = useState([])
-  const [simDone, setSimDone] = useState(false)
-
-  const simRef = useRef(null)
-  const tempRef = useRef(STARTING_TEMP)
-  const satRef = useRef(0)
-
-  // Inject CSS keyframes on mount
-  useEffect(() => { injectKeyframes() }, [])
-
-  // ── Simulation Engine ────────────────────────────────────────────────────
-
-  const startSimulation = useCallback(() => {
-    const site = SITES.find(s => s.id === selectedSite)
-    if (!site) return
-
-    const hasGroundPad = placedEquip.includes('ground_pad')
-    const hasRainfly = placedEquip.includes('rainfly')
-    const hasTent = placedEquip.includes('tent')
-    const hasSleepingBag = placedEquip.includes('sleeping_bag')
-
-    tempRef.current = STARTING_TEMP
-    satRef.current = 0
-    setCoreBodyTemp(STARTING_TEMP)
-    setGroundSaturation(0)
-    setSimTick(0)
-    setSimLog([])
-    setSimDone(false)
-    setSimRunning(true)
-
-    let tick = 0
-    const logs = []
-
-    simRef.current = setInterval(() => {
-      tick++
-      const isRaining = tick >= RAIN_START_TICK
-      let tempDelta = 0
-      let logEntry = `Hour ${tick}: `
-
-      // Base ambient cooling
-      tempDelta -= 0.08
-
-      // Conductive loss (ground)
-      const conductionLoss = hasGroundPad ? -0.05 : -0.8
-      tempDelta += conductionLoss
-      if (!hasGroundPad && tick <= 3) {
-        logEntry += 'No ground pad! Cold earth drains heat rapidly. '
-      }
-
-      // Convection loss (wind)
-      const convectionLoss = site.convectionLoss * (hasTent ? 0.4 : 1.0)
-      tempDelta += convectionLoss
-      setWindChill(Math.abs(convectionLoss * 10).toFixed(1))
-
-      // Sleeping bag insulation bonus
-      if (hasSleepingBag) {
-        tempDelta += 0.15
-      }
-
-      // Rain effects
-      if (isRaining) {
-        satRef.current = Math.min(1, satRef.current + (site.floodRisk > 0 ? 0.12 : 0.02))
-        setGroundSaturation(satRef.current)
-
-        if (!hasRainfly) {
-          tempDelta -= 0.3
-          if (tick === RAIN_START_TICK) logEntry += 'Rain starts! No rainfly — gear getting soaked! '
-        }
-
-        // Depression flooding
-        if (site.id === 'depression' && satRef.current > 0.5) {
-          tempDelta -= 0.6
-          logEntry += 'FLOODING! Water fills the depression! '
-        }
-      }
-
-      tempRef.current = Math.max(88, tempRef.current + tempDelta)
-      setCoreBodyTemp(tempRef.current)
-      setSimTick(tick)
-
-      const tempStr = tempRef.current.toFixed(1)
-      if (tempRef.current < HYPOTHERMIA_THRESHOLD) {
-        logEntry += `Core temp ${tempStr}°F — HYPOTHERMIA! `
-      } else {
-        logEntry += `Core temp ${tempStr}°F`
-      }
-      logs.push(logEntry)
-      setSimLog([...logs])
-
-      if (tick >= SIM_TICKS) {
-        clearInterval(simRef.current)
-        simRef.current = null
-        setSimRunning(false)
-        setSimDone(true)
-      }
-    }, TICK_MS)
-  }, [selectedSite, placedEquip])
-
-  // Cleanup interval on unmount
+  // Pulse animation for moisture aura
   useEffect(() => {
-    return () => { if (simRef.current) clearInterval(simRef.current) }
+    let frame = 0
+    const animate = () => {
+      frame++
+      setPulseAnim(Math.sin(frame * 0.05) * 0.5 + 0.5)
+      animFrameRef.current = requestAnimationFrame(animate)
+    }
+    animFrameRef.current = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(animFrameRef.current)
   }, [])
 
-  // ── Handle site selection ────────────────────────────────────────────────
+  // ── Daylight timer ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (sim.phase !== 'daylight') return
+    tickRef.current = setInterval(() => {
+      simDispatch({ type: 'DAYLIGHT_TICK' })
+    }, 100)
+    return () => clearInterval(tickRef.current)
+  }, [sim.phase])
 
-  const handleSelectSite = (siteId) => {
-    setSelectedSite(siteId)
-    setPhase('equip')
-    setPlacedEquip([])
-    setWrongCount(0)
-    setWrongPick(null)
-    setEquipFeedback(null)
-  }
-
-  // ── Handle equipment placement ───────────────────────────────────────────
-
-  const handlePlaceEquip = (itemId) => {
-    if (equipFeedback) return
-    const expectedId = CORRECT_ORDER[placedEquip.length]
-
-    if (itemId === expectedId) {
-      const newPlaced = [...placedEquip, itemId]
-      setPlacedEquip(newPlaced)
-      setWrongPick(null)
-      const item = EQUIPMENT.find(e => e.id === itemId)
-      setEquipFeedback({ correct: true, text: `${item.label} placed correctly! ${item.desc}` })
-      setTimeout(() => setEquipFeedback(null), 1800)
-    } else {
-      setWrongCount(c => c + 1)
-      setWrongPick(itemId)
-      const expected = EQUIPMENT.find(e => e.id === expectedId)
-      setEquipFeedback({ correct: false, text: `Wrong order! "${expected.label}" must be placed first. ${expected.desc}` })
-      setTimeout(() => { setWrongPick(null); setEquipFeedback(null) }, 2200)
+  // Auto-transition daylight -> night
+  useEffect(() => {
+    if (sim.phase === 'daylight' && sim.daylightTime <= 0) {
+      if (sim.buildingAction) simDispatch({ type: 'CANCEL_BUILD' })
+      simDispatch({ type: 'SET_PHASE', payload: 'night' })
     }
+  }, [sim.phase, sim.daylightTime, sim.buildingAction])
+
+  // ── Night timer ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (sim.phase !== 'night') return
+    tickRef.current = setInterval(() => {
+      simDispatch({ type: 'NIGHT_TICK' })
+    }, 100)
+    return () => clearInterval(tickRef.current)
+  }, [sim.phase])
+
+  // ── Build progress ticker ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!sim.buildingAction || sim.phase !== 'daylight') {
+      clearInterval(buildTickRef.current)
+      return
+    }
+    const duration = sim.buildDuration
+    const incrementPer100ms = (100 / (duration * 10)) // % per 100ms
+    buildTickRef.current = setInterval(() => {
+      simDispatch({ type: 'UPDATE_BUILD_PROGRESS', payload: incrementPer100ms })
+    }, 100)
+    return () => clearInterval(buildTickRef.current)
+  }, [sim.buildingAction, sim.buildDuration, sim.phase])
+
+  // Finish build when progress hits 100
+  useEffect(() => {
+    if (sim.buildProgress >= 100 && sim.buildingAction) {
+      simDispatch({ type: 'FINISH_BUILD' })
+    }
+  }, [sim.buildProgress, sim.buildingAction])
+
+  // ── Scoring ─────────────────────────────────────────────────────────────
+  const computeScore = useCallback(() => {
+    const survivalBonus = sim.survived ? 40 : 0
+    const tempScore = Math.max(0, (sim.coreTemp - 28) / (37 - 28)) * 30
+    const buildScore = (sim.tentBuilt ? 10 : 0) + (sim.groundPadLaid ? 10 : 0) + (sim.reflectorBuilt ? 10 : 0)
+    const moisturePenalty = sim.moistureLevel > 50 ? -10 : 0
+    const coPenalty = sim.causeOfDeath === 'co' ? -30 : 0
+    const total = Math.round(survivalBonus + tempScore + buildScore + moisturePenalty + coPenalty)
+    return Math.max(0, Math.min(100, total))
+  }, [sim.survived, sim.coreTemp, sim.tentBuilt, sim.groundPadLaid, sim.reflectorBuilt, sim.moistureLevel, sim.causeOfDeath])
+
+  // Record score on result phase
+  useEffect(() => {
+    if (sim.phase === 'result') {
+      const score = computeScore()
+      const passed = score >= 50
+      gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-7', result: { score, passed } } })
+    }
+  }, [sim.phase, computeScore, gameDispatch])
+
+  // ── Handlers ────────────────────────────────────────────────────────────
+  const handleStartBuild = useCallback((target) => {
+    if (sim.buildingAction) return
+    if (sim.calorieReserve <= 0) return
+    if (target === 'tent' && sim.tentBuilt) return
+    if (target === 'pad' && sim.groundPadLaid) return
+    if (target === 'reflector' && sim.reflectorBuilt) return
+
+    const baseDurations = { tent: 30, pad: 15, reflector: 25 }
+    const duration = baseDurations[target] / (0.5 + sim.exertionPace)
+    simDispatch({ type: 'START_BUILD', payload: { target, duration } })
+  }, [sim.buildingAction, sim.calorieReserve, sim.tentBuilt, sim.groundPadLaid, sim.reflectorBuilt, sim.exertionPace])
+
+  const handleBack = useCallback(() => {
+    gameDispatch({ type: 'BACK_TO_MODULES' })
+  }, [gameDispatch])
+
+  const handleRestart = useCallback(() => {
+    simDispatch({ type: 'RESET' })
+  }, [])
+
+  // ── Computed values for rendering ───────────────────────────────────────
+  const coBlur = sim.co_ppm > 100 ? sim.co_ppm / 200 : 0
+  const coGray = sim.co_ppm > 100 ? Math.min(1, sim.co_ppm / 500) : 0
+  const showMoistureAura = sim.moistureLevel > 20
+  const humanColor = tempToColor(sim.coreTemp)
+  const humanGradient = tempToGradient(sim.coreTemp)
+  const finalScore = sim.phase === 'result' ? computeScore() : 0
+  const finalPassed = finalScore >= 50
+
+  // ─── STYLES ─────────────────────────────────────────────────────────────
+  const styles = {
+    container: {
+      width: '100%',
+      minHeight: '100vh',
+      background: '#121212',
+      color: '#e0e0e0',
+      fontFamily: FONT,
+      fontSize: '13px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      position: 'relative',
+      overflow: 'hidden',
+      filter: (sim.phase === 'night' && sim.co_ppm > 100)
+        ? `blur(${coBlur}px) grayscale(${coGray})`
+        : 'none',
+      transition: 'filter 0.3s ease',
+    },
+    header: {
+      width: '100%',
+      padding: '12px 20px',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      borderBottom: '1px solid rgba(255,255,255,0.1)',
+      background: 'rgba(0,0,0,0.4)',
+      boxSizing: 'border-box',
+    },
+    headerTitle: {
+      fontSize: '16px',
+      fontWeight: 700,
+      color: THERMAL.orange,
+      letterSpacing: '2px',
+      textTransform: 'uppercase',
+    },
+    backBtn: {
+      background: 'transparent',
+      border: '1px solid rgba(255,255,255,0.2)',
+      color: '#aaa',
+      padding: '6px 14px',
+      cursor: 'pointer',
+      fontFamily: FONT,
+      fontSize: '12px',
+      borderRadius: '4px',
+    },
+    mainArea: {
+      display: 'flex',
+      width: '100%',
+      maxWidth: '1200px',
+      flex: 1,
+      padding: '16px',
+      gap: '16px',
+      boxSizing: 'border-box',
+    },
+    leftPanel: {
+      width: '220px',
+      flexShrink: 0,
+      border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: '8px',
+      padding: '16px',
+      background: 'rgba(0,0,0,0.3)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '14px',
+    },
+    rightPanel: {
+      width: '220px',
+      flexShrink: 0,
+      border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: '8px',
+      padding: '16px',
+      background: 'rgba(0,0,0,0.3)',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '14px',
+    },
+    centerView: {
+      flex: 1,
+      border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: '8px',
+      background: `linear-gradient(180deg, #0a0a2e 0%, ${THERMAL.deepBlue} 60%, #0d0d0d 100%)`,
+      position: 'relative',
+      overflow: 'hidden',
+      minHeight: '400px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    bottomDeck: {
+      width: '100%',
+      maxWidth: '1200px',
+      padding: '16px',
+      boxSizing: 'border-box',
+    },
+    telemetryLabel: {
+      fontSize: '10px',
+      color: '#888',
+      textTransform: 'uppercase',
+      letterSpacing: '1.5px',
+      marginBottom: '4px',
+    },
+    telemetryValue: {
+      fontSize: '20px',
+      fontWeight: 700,
+      letterSpacing: '1px',
+    },
+    telemetryUnit: {
+      fontSize: '11px',
+      color: '#666',
+      marginLeft: '4px',
+    },
+    telemetryRow: {
+      borderBottom: '1px solid rgba(255,255,255,0.05)',
+      paddingBottom: '10px',
+    },
   }
 
-  // ── Start simulation when all equipment placed ───────────────────────────
-
-  const handleStartSim = () => {
-    setPhase('simulate')
-    startSimulation()
-  }
-
-  // ── Finish: calculate score ──────────────────────────────────────────────
-
-  const handleFinish = () => {
-    const site = SITES.find(s => s.id === selectedSite)
-    let score = 0
-
-    // Site choice: midslope = 30pts, ridge = 15pts, depression = 5pts
-    if (selectedSite === 'midslope') score += 30
-    else if (selectedSite === 'ridge') score += 15
-    else score += 5
-
-    // Equipment order: 30pts minus penalties
-    score += Math.max(0, 30 - wrongCount * 8)
-
-    // Final temp score: 0-40 based on how warm they stayed
-    const tempScore = Math.max(0, Math.min(40, ((tempRef.current - 90) / (98.6 - 90)) * 40))
-    score += Math.round(tempScore)
-
-    score = Math.max(0, Math.min(100, Math.round(score)))
-    const passed = tempRef.current >= HYPOTHERMIA_THRESHOLD
-
-    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-7', result: { score, passed } } })
-    setPhase('result')
-  }
-
-  // ── Derived state ────────────────────────────────────────────────────────
-
-  const allEquipPlaced = placedEquip.length === EQUIPMENT.length
-  const isRaining = simTick >= RAIN_START_TICK
-  const site = SITES.find(s => s.id === selectedSite)
-  const showWind = site && site.windLevel >= 2 && (phase === 'simulate' || phase === 'equip')
-
-  // ── INTRO PHASE ──────────────────────────────────────────────────────────
-
-  if (phase === 'intro') {
+  // ─── RENDER: INTRO ────────────────────────────────────────────────────
+  if (sim.phase === 'intro') {
     return (
-      <div style={styles.screen}>
-        <div style={styles.card}>
-          <div style={{ fontSize: 56 }}>⛺</div>
-          <h1 style={styles.title}>Module 7: Camp Safe Haven</h1>
-          <p style={styles.subtitle}>Topography and Heat Loss</p>
-          <p style={styles.body}>
-            A flash flood has forced your group to camp overnight in the wilderness.
-            You must choose the right campsite and assemble your shelter correctly, or
-            <strong style={{ color: '#f87171' }}> hypothermia will set in before dawn</strong>.
-          </p>
-          <div style={styles.warnBox}>
-            <p style={{ color: '#fbbf24', fontWeight: 700, margin: '0 0 6px', fontSize: 14 }}>
-              The Professor's Hook
-            </p>
-            <p style={{ color: '#cbd5e1', fontSize: 13, margin: 0, lineHeight: 1.65 }}>
-              That cozy depression blocks the wind (convection) — but becomes a puddle when it rains.
-              And if you skip the Ground Pad, the cold wet earth pulls heat from your body via
-              <strong style={{ color: '#60a5fa' }}> conduction</strong> — 25x faster than air.
-              You can have a sleeping bag and still freeze.
-            </p>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-            <p style={{ color: '#94a3b8', fontSize: 12, margin: 0, textAlign: 'left' }}>
-              <strong style={{ color: '#f1f5f9' }}>Conduction:</strong> Heat transfer through direct contact (ground → body)
-            </p>
-            <p style={{ color: '#94a3b8', fontSize: 12, margin: 0, textAlign: 'left' }}>
-              <strong style={{ color: '#f1f5f9' }}>Convection:</strong> Heat carried away by moving air (wind chill)
-            </p>
-          </div>
-          <button style={styles.primaryBtn} onClick={() => setPhase('site_select')}>
-            Scout the Terrain
-          </button>
-          <button style={styles.ghost} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-            ← Back to Modules
-          </button>
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <span style={styles.headerTitle}>FLIR Thermal Telemetry // Camp SafeHaven</span>
+          <button style={styles.backBtn} onClick={handleBack}>[ ESC ] ABORT</button>
         </div>
-      </div>
-    )
-  }
-
-  // ── SITE SELECTION PHASE ─────────────────────────────────────────────────
-
-  if (phase === 'site_select') {
-    return (
-      <div style={styles.screen}>
-        <div style={{ ...styles.card, maxWidth: 700 }}>
-          <h2 style={{ ...styles.title, fontSize: 22 }}>Choose Your Campsite</h2>
-          <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
-            Study the terrain cross-section. Where you pitch matters as much as how you build.
-          </p>
-
-          <TerrainCrossSection selectedSite={null} phase={phase} groundSaturation={0} showRain={false} showWind={false} />
-
-          <div style={{ display: 'flex', gap: 12, width: '100%', flexWrap: 'wrap' }}>
-            {SITES.map(s => (
-              <button key={s.id} onClick={() => handleSelectSite(s.id)} style={{
-                flex: '1 1 180px', padding: '16px 14px', borderRadius: 12, textAlign: 'left',
-                background: 'rgba(255,255,255,0.04)', border: `2px solid ${s.color}44`,
-                cursor: 'pointer', transition: 'all 0.2s',
-                fontFamily: 'inherit',
-              }}>
-                <div style={{ fontSize: 28, marginBottom: 6 }}>{s.emoji}</div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: s.color, marginBottom: 4 }}>{s.label}</div>
-                <p style={{ fontSize: 12, color: '#cbd5e1', margin: '0 0 8px', lineHeight: 1.5 }}>{s.desc}</p>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={tagStyle(s.windLevel >= 2 ? '#f87171' : '#4ade80')}>
-                    Wind: {['None', 'Low', 'Med', 'High'][s.windLevel]}
-                  </span>
-                  <span style={tagStyle(s.drainageLevel >= 2 ? '#4ade80' : '#f87171')}>
-                    Drain: {['Poor', 'Fair', 'Good', 'Great'][s.drainageLevel]}
-                  </span>
-                  {s.floodRisk > 0 && (
-                    <span style={tagStyle('#f87171')}>Flood Risk!</span>
-                  )}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <button style={styles.ghost} onClick={() => setPhase('intro')}>← Back</button>
-        </div>
-      </div>
-    )
-  }
-
-  // ── EQUIP PHASE ──────────────────────────────────────────────────────────
-
-  if (phase === 'equip') {
-    return (
-      <div style={{ ...styles.screenFull, flexDirection: 'column' }}>
-        {/* Top terrain view */}
-        <div style={{ padding: '16px 20px 0', width: '100%', maxWidth: 900, margin: '0 auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <div>
-              <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 800, margin: 0 }}>
-                Assemble Shelter — {site.label}
-              </h2>
-              <p style={{ color: '#94a3b8', fontSize: 12, margin: '2px 0 0' }}>
-                Place equipment in the correct order. Ground insulation first!
-              </p>
-            </div>
-            <button style={styles.ghost} onClick={() => { setPhase('site_select'); setSelectedSite(null) }}>
-              ← Change Site
-            </button>
-          </div>
-          <TerrainCrossSection selectedSite={selectedSite} phase={phase} groundSaturation={0} showRain={false} showWind={showWind} />
-        </div>
-
-        {/* Equipment cards */}
-        <div style={{ padding: '16px 20px', width: '100%', maxWidth: 900, margin: '0 auto', flex: 1, overflow: 'auto' }}>
-          {/* Progress */}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', marginBottom: 4 }}>
-              <span>Equipment Placed</span>
-              <span style={{ color: '#60a5fa', fontWeight: 700 }}>{placedEquip.length} / {EQUIPMENT.length}</span>
-            </div>
-            <div style={{ height: 5, background: 'rgba(255,255,255,0.07)', borderRadius: 5, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: 5, transition: 'width 0.4s',
-                width: `${(placedEquip.length / EQUIPMENT.length) * 100}%`,
-                background: 'linear-gradient(90deg,#3b82f6,#22c55e)',
-              }} />
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {EQUIPMENT.map((item, idx) => {
-              const isPlaced = placedEquip.includes(item.id)
-              const isNext = !isPlaced && idx === CORRECT_ORDER.indexOf(CORRECT_ORDER[placedEquip.length])
-              return (
-                <EquipCard
-                  key={item.id}
-                  item={item}
-                  index={idx}
-                  placed={isPlaced}
-                  isNext={!isPlaced}
-                  isWrongPick={wrongPick === item.id}
-                  onClick={() => handlePlaceEquip(item.id)}
-                />
-              )
-            })}
-          </div>
-
-          {/* Feedback toast */}
-          {equipFeedback && (
-            <div style={{
-              marginTop: 12, padding: '12px 16px', borderRadius: 10,
-              background: equipFeedback.correct ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
-              border: `1px solid ${equipFeedback.correct ? '#22c55e' : '#ef4444'}`,
-            }}>
-              <p style={{ color: equipFeedback.correct ? '#4ade80' : '#f87171', fontSize: 13, margin: 0, lineHeight: 1.5 }}>
-                {equipFeedback.correct ? '✅' : '❌'} {equipFeedback.text}
-              </p>
-            </div>
-          )}
-
-          {wrongCount > 0 && (
-            <p style={{ color: '#f87171', fontSize: 11, marginTop: 8 }}>
-              {wrongCount} wrong-order attempt{wrongCount > 1 ? 's' : ''} (score penalty: -{wrongCount * 8} pts)
-            </p>
-          )}
-
-          {allEquipPlaced && (
-            <div style={{ textAlign: 'center', marginTop: 16 }}>
-              <p style={{ color: '#4ade80', fontSize: 14, fontWeight: 700, marginBottom: 10 }}>
-                All equipment placed! Ready to survive the night.
-              </p>
-              <button style={styles.primaryBtn} onClick={handleStartSim}>
-                Begin Overnight Simulation
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  // ── SIMULATE PHASE ───────────────────────────────────────────────────────
-
-  if (phase === 'simulate') {
-    const nightProgress = Math.min(100, (simTick / SIM_TICKS) * 100)
-    const isHypo = coreBodyTemp < HYPOTHERMIA_THRESHOLD
-
-    return (
-      <div style={{ ...styles.screenFull, flexDirection: 'row', gap: 0 }}>
-        {/* Left panel: terrain + info */}
-        <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto' }}>
-          <h2 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 800, margin: 0 }}>
-            Overnight Simulation — {site.label}
+        <div style={{
+          maxWidth: '750px',
+          padding: '40px 24px',
+          lineHeight: '1.8',
+          color: '#ccc',
+        }}>
+          <h2 style={{ color: THERMAL.orange, fontSize: '22px', marginBottom: '20px', letterSpacing: '2px' }}>
+            MISSION BRIEFING: OVERNIGHT SURVIVAL THERMODYNAMICS
           </h2>
 
-          <TerrainCrossSection
-            selectedSite={selectedSite}
-            phase={phase}
-            groundSaturation={groundSaturation}
-            showRain={isRaining && simRunning}
-            showWind={showWind && simRunning}
-          />
-
-          {/* Night progress bar */}
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', marginBottom: 4 }}>
-              <span>{isRaining ? '🌧️ Raining' : '🌙 Clear skies'}</span>
-              <span>Night progress: {nightProgress.toFixed(0)}%</span>
-            </div>
-            <div style={{ height: 6, background: 'rgba(255,255,255,0.07)', borderRadius: 5, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: 5, transition: 'width 0.3s',
-                width: `${nightProgress}%`,
-                background: isHypo
-                  ? 'linear-gradient(90deg,#1e40af,#60a5fa)'
-                  : 'linear-gradient(90deg,#1e293b,#475569)',
-              }} />
-            </div>
-          </div>
-
-          {/* Stats row */}
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <StatBox label="Wind Chill" value={`${windChill}°F`} color={parseFloat(windChill) > 2 ? '#f87171' : '#4ade80'} />
-            <StatBox label="Ground Sat." value={`${(groundSaturation * 100).toFixed(0)}%`} color={groundSaturation > 0.5 ? '#f87171' : '#4ade80'} />
-            <StatBox label="Site" value={site.label.split('(')[0].trim()} color={site.color} />
-            <StatBox
-              label="Ground Pad"
-              value={placedEquip.includes('ground_pad') ? 'YES' : 'NO'}
-              color={placedEquip.includes('ground_pad') ? '#4ade80' : '#f87171'}
-            />
-          </div>
-
-          {/* Sim log */}
           <div style={{
-            flex: 1, minHeight: 100, maxHeight: 160, overflow: 'auto',
-            background: 'rgba(0,0,0,0.3)', borderRadius: 8, padding: '8px 12px',
-            fontFamily: 'monospace', fontSize: 11, color: '#94a3b8', lineHeight: 1.6,
+            background: 'rgba(255,109,0,0.08)',
+            border: '1px solid rgba(255,109,0,0.25)',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '24px',
           }}>
-            {simLog.length === 0 && <span style={{ color: '#475569' }}>Simulation starting...</span>}
-            {simLog.map((log, i) => (
-              <div key={i} style={{
-                color: log.includes('HYPOTHERMIA') ? '#f87171' :
-                  log.includes('FLOODING') ? '#60a5fa' :
-                  log.includes('No ground pad') ? '#fbbf24' : '#94a3b8',
+            <p style={{ margin: '0 0 12px 0', color: '#ff6d00', fontWeight: 700, fontSize: '14px' }}>
+              SCENARIO
+            </p>
+            <p style={{ margin: 0, fontSize: '13px' }}>
+              You are stranded in sub-zero wilderness (-5 C ambient, 25 km/h wind). You have 120 seconds
+              of daylight to prepare camp, then 180 seconds of night to survive. Your body must maintain
+              core temperature above 28 C or you die of hypothermia.
+            </p>
+          </div>
+
+          <h3 style={{ color: '#aaa', fontSize: '14px', marginBottom: '12px', letterSpacing: '1px' }}>
+            FOUR MODES OF HEAT TRANSFER
+          </h3>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
+            {[
+              { name: 'CONDUCTION', color: '#42a5f5', desc: 'Heat flows through direct contact. The frozen ground leaches warmth from your body. A ground pad insulates against this.' },
+              { name: 'CONVECTION', color: '#ab47bc', desc: 'Moving air carries heat away. Wind is lethal. A tent blocks convective currents and traps a warm air pocket.' },
+              { name: 'RADIATION', color: '#ff7043', desc: 'All bodies emit infrared heat. A fire radiates warmth. A reflector wall bounces thermal radiation back to you.' },
+              { name: 'EVAPORATION', color: '#26c6da', desc: 'Moisture evaporating from skin or clothing pulls enormous energy. Sweat from exertion becomes a deadly liability at night.' },
+            ].map(m => (
+              <div key={m.name} style={{
+                background: 'rgba(0,0,0,0.3)',
+                border: `1px solid ${m.color}40`,
+                borderRadius: '6px',
+                padding: '14px',
               }}>
-                {log}
+                <div style={{ color: m.color, fontWeight: 700, fontSize: '12px', marginBottom: '6px' }}>{m.name}</div>
+                <div style={{ fontSize: '11px', color: '#aaa', lineHeight: '1.6' }}>{m.desc}</div>
               </div>
             ))}
           </div>
 
-          {simDone && (
-            <div style={{ textAlign: 'center' }}>
-              <button style={styles.primaryBtn} onClick={handleFinish}>
-                {isHypo ? 'View Results (Hypothermia!)' : 'View Results'}
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Right panel: thermometer */}
-        <div style={{
-          width: 120, padding: '30px 20px', display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: 20,
-          background: 'rgba(0,0,0,0.2)', borderLeft: '1px solid rgba(255,255,255,0.06)',
-        }}>
-          <Thermometer temp={coreBodyTemp} label="Core Temp" />
           <div style={{
-            width: 60, height: 60, borderRadius: '50%',
-            background: tempColor(coreBodyTemp),
-            opacity: 0.3,
-            transition: 'background 0.3s',
-            boxShadow: `0 0 30px ${tempColor(coreBodyTemp)}44`,
-          }} />
-          {isHypo && (
-            <div style={{
-              padding: '6px 12px', borderRadius: 6,
-              background: 'rgba(239,68,68,0.2)', border: '1px solid #ef4444',
-              color: '#f87171', fontSize: 11, fontWeight: 700, textAlign: 'center',
-            }}>
-              DANGER<br />Hypothermia
-            </div>
-          )}
+            background: 'rgba(255,23,68,0.08)',
+            border: '1px solid rgba(255,23,68,0.3)',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '28px',
+          }}>
+            <p style={{ margin: '0 0 8px 0', color: THERMAL.red, fontWeight: 700, fontSize: '13px' }}>
+              THE MOISTURE TRAP
+            </p>
+            <p style={{ margin: 0, fontSize: '12px', color: '#ccc', lineHeight: '1.7' }}>
+              Building fast (high exertion) means sweating. Wet clothing at night massively amplifies
+              ALL heat loss. A frantic builder may finish every structure but freeze faster than someone
+              who paced themselves. Every decision is a trade-off.
+            </p>
+          </div>
+
+          <div style={{
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '8px',
+            padding: '16px',
+            marginBottom: '28px',
+          }}>
+            <p style={{ margin: '0 0 8px 0', color: '#fff', fontWeight: 700, fontSize: '13px' }}>
+              CO POISONING RISK
+            </p>
+            <p style={{ margin: 0, fontSize: '12px', color: '#ccc', lineHeight: '1.7' }}>
+              At night you can ignite a fire for warmth. But if your shelter vents are sealed,
+              carbon monoxide accumulates. Above 400 PPM = asphyxiation. Open vents clear CO
+              but let cold air in. You must manage the balance.
+            </p>
+          </div>
+
+          <button
+            onClick={() => simDispatch({ type: 'SET_PHASE', payload: 'daylight' })}
+            style={{
+              background: `linear-gradient(135deg, ${THERMAL.orange}, ${THERMAL.red})`,
+              border: 'none',
+              color: '#fff',
+              padding: '14px 40px',
+              fontSize: '15px',
+              fontFamily: FONT,
+              fontWeight: 700,
+              borderRadius: '6px',
+              cursor: 'pointer',
+              letterSpacing: '2px',
+              display: 'block',
+              margin: '0 auto',
+            }}
+          >
+            BEGIN DAYLIGHT PHASE
+          </button>
         </div>
       </div>
     )
   }
 
-  // ── RESULT PHASE ─────────────────────────────────────────────────────────
+  // ─── RENDER: RESULT ───────────────────────────────────────────────────
+  if (sim.phase === 'result') {
+    const survivalBonus = sim.survived ? 40 : 0
+    const tempScore = Math.max(0, (sim.coreTemp - 28) / (37 - 28)) * 30
+    const buildScore = (sim.tentBuilt ? 10 : 0) + (sim.groundPadLaid ? 10 : 0) + (sim.reflectorBuilt ? 10 : 0)
+    const moisturePenalty = sim.moistureLevel > 50 ? -10 : 0
+    const coPenalty = sim.causeOfDeath === 'co' ? -30 : 0
 
-  if (phase === 'result') {
-    const finalTemp = tempRef.current
-    const passed = finalTemp >= HYPOTHERMIA_THRESHOLD
-    const siteScore = selectedSite === 'midslope' ? 30 : selectedSite === 'ridge' ? 15 : 5
-    const orderScore = Math.max(0, 30 - wrongCount * 8)
-    const tempScore = Math.round(Math.max(0, Math.min(40, ((finalTemp - 90) / (98.6 - 90)) * 40)))
-    const totalScore = Math.min(100, siteScore + orderScore + tempScore)
+    const breakdownItems = [
+      { label: 'Survival Bonus', value: survivalBonus, max: 40 },
+      { label: 'Core Temperature Retention', value: Math.round(tempScore * 10) / 10, max: 30 },
+      { label: 'Structures Built', value: buildScore, max: 30 },
+      { label: 'Moisture Penalty', value: moisturePenalty, max: 0 },
+      { label: 'CO Asphyxiation Penalty', value: coPenalty, max: 0 },
+    ]
 
     return (
-      <div style={styles.screen}>
-        <div style={{ ...styles.card, maxWidth: 620 }}>
-          <div style={{ fontSize: 52 }}>{passed ? '⛺✅' : '🥶❌'}</div>
-          <h1 style={{ ...styles.title, color: passed ? '#22c55e' : '#f87171' }}>
-            {passed ? 'You Survived the Night!' : 'Hypothermia — Mission Failed'}
-          </h1>
-          <p style={{
-            fontSize: 32, fontWeight: 800, margin: '4px 0 8px',
-            color: passed ? '#60a5fa' : '#f87171',
+      <div style={styles.container}>
+        <div style={styles.header}>
+          <span style={styles.headerTitle}>FLIR // MISSION DEBRIEF</span>
+          <button style={styles.backBtn} onClick={handleBack}>[ ESC ] EXIT</button>
+        </div>
+        <div style={{ maxWidth: '700px', padding: '40px 24px', width: '100%', boxSizing: 'border-box' }}>
+          {/* Outcome banner */}
+          <div style={{
+            textAlign: 'center',
+            padding: '24px',
+            borderRadius: '8px',
+            marginBottom: '24px',
+            background: sim.survived
+              ? 'rgba(76,175,80,0.1)'
+              : 'rgba(255,23,68,0.1)',
+            border: `1px solid ${sim.survived ? 'rgba(76,175,80,0.4)' : 'rgba(255,23,68,0.4)'}`,
           }}>
-            {totalScore}%
-          </p>
-          <p style={{ color: '#94a3b8', fontSize: 13, margin: 0 }}>
-            Final core temperature: <strong style={{ color: tempColor(finalTemp) }}>{finalTemp.toFixed(1)}°F</strong>
-          </p>
+            <div style={{
+              fontSize: '28px',
+              fontWeight: 700,
+              color: sim.survived ? '#4caf50' : THERMAL.red,
+              marginBottom: '8px',
+            }}>
+              {sim.survived ? 'SURVIVED' : sim.causeOfDeath === 'co' ? 'CO ASPHYXIATION' : 'FATAL HYPOTHERMIA'}
+            </div>
+            <div style={{ fontSize: '48px', fontWeight: 700, color: finalPassed ? '#4caf50' : THERMAL.red }}>
+              {finalScore}
+              <span style={{ fontSize: '18px', color: '#888' }}>/100</span>
+            </div>
+            <div style={{ fontSize: '14px', color: finalPassed ? '#4caf50' : THERMAL.red, marginTop: '4px' }}>
+              {finalPassed ? 'PASSED' : 'FAILED'} (50 required)
+            </div>
+          </div>
 
           {/* Score breakdown */}
-          <div style={{ ...styles.warnBox, background: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.25)', textAlign: 'left', width: '100%' }}>
-            <p style={{ color: '#60a5fa', fontWeight: 700, margin: '0 0 10px', fontSize: 14 }}>Score Breakdown</p>
-            <ScoreRow label={`Site Choice: ${site.label}`} pts={siteScore} max={30} good={selectedSite === 'midslope'} />
-            <ScoreRow label={`Equipment Order (${wrongCount} errors)`} pts={orderScore} max={30} good={wrongCount === 0} />
-            <ScoreRow label={`Temperature Survival`} pts={tempScore} max={40} good={finalTemp >= HYPOTHERMIA_THRESHOLD} />
+          <div style={{
+            background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '24px',
+          }}>
+            <div style={{ fontSize: '12px', color: '#888', letterSpacing: '1.5px', marginBottom: '14px', textTransform: 'uppercase' }}>
+              Score Breakdown
+            </div>
+            {breakdownItems.map(item => (
+              <div key={item.label} style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '8px 0',
+                borderBottom: '1px solid rgba(255,255,255,0.05)',
+              }}>
+                <span style={{ color: '#aaa', fontSize: '12px' }}>{item.label}</span>
+                <span style={{
+                  color: item.value < 0 ? THERMAL.red : item.value > 0 ? '#4caf50' : '#666',
+                  fontWeight: 700,
+                  fontSize: '14px',
+                }}>
+                  {item.value > 0 ? '+' : ''}{typeof item.value === 'number' ? Math.round(item.value) : item.value}
+                </span>
+              </div>
+            ))}
           </div>
 
-          {/* Lessons */}
-          <div style={{ ...styles.warnBox, textAlign: 'left', width: '100%' }}>
-            <p style={{ color: '#fbbf24', fontWeight: 700, margin: '0 0 8px', fontSize: 14 }}>Key Lessons</p>
-            <Lesson text="The Ground Pad is the most critical piece. Cold ground conducts heat away 25x faster than cold air. Always insulate from below FIRST." />
-            <Lesson text="Midslope sites balance wind protection and drainage. Ridges are too exposed; depressions flood." />
-            <Lesson text="The Rainfly goes on LAST but is essential. Without it, rain soaks everything and accelerates heat loss." />
-            <Lesson text="Conduction (ground contact) kills faster than convection (wind). Prioritize insulation over windbreaks." />
+          {/* Science debrief */}
+          <div style={{
+            background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '8px',
+            padding: '20px',
+            marginBottom: '24px',
+          }}>
+            <div style={{ fontSize: '12px', color: '#888', letterSpacing: '1.5px', marginBottom: '14px', textTransform: 'uppercase' }}>
+              Thermodynamic Analysis
+            </div>
+
+            <div style={{ fontSize: '12px', color: '#bbb', lineHeight: '1.8', marginBottom: '12px' }}>
+              <strong style={{ color: THERMAL.orange }}>Final Core Temp:</strong> {sim.coreTemp.toFixed(1)} C
+              {sim.coreTemp < 33 && <span style={{ color: THERMAL.red }}> -- Severe hypothermia zone (below 33 C)</span>}
+            </div>
+
+            <div style={{ fontSize: '12px', color: '#bbb', lineHeight: '1.8', marginBottom: '12px' }}>
+              <strong style={{ color: '#26c6da' }}>Moisture Level:</strong> {sim.moistureLevel.toFixed(0)}%
+              {sim.moistureLevel > 50 && (
+                <span style={{ color: THERMAL.red }}>
+                  {' '}-- Excessive moisture amplified heat loss by {(sim.moistureLevel * 5).toFixed(0)}%.
+                  Pacing exertion would have kept clothing drier.
+                </span>
+              )}
+              {sim.moistureLevel <= 20 && (
+                <span style={{ color: '#4caf50' }}> -- Dry clothing maintained. Excellent pacing.</span>
+              )}
+            </div>
+
+            <div style={{ fontSize: '12px', color: '#bbb', lineHeight: '1.8', marginBottom: '12px' }}>
+              <strong style={{ color: '#ab47bc' }}>Shelter:</strong>{' '}
+              {sim.tentBuilt ? 'Tent blocked 70% convective loss. ' : 'No tent -- full wind exposure. '}
+              {sim.groundPadLaid ? 'Ground pad blocked 90% conductive loss. ' : 'No ground pad -- ground sapped heat. '}
+              {sim.reflectorBuilt ? 'Reflector doubled radiant heat from fire.' : 'No reflector -- fire heat dispersed.'}
+            </div>
+
+            {sim.causeOfDeath === 'co' && (
+              <div style={{ fontSize: '12px', color: THERMAL.red, lineHeight: '1.8' }}>
+                <strong>CO Poisoning:</strong> Sealing vents with an active fire caused carbon monoxide
+                to accumulate past 400 PPM, resulting in loss of consciousness and death.
+                Periodically opening vents flushes CO while accepting moderate heat loss.
+              </div>
+            )}
           </div>
 
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button style={styles.primaryBtn} onClick={() => {
-              setPhase('site_select')
-              setSelectedSite(null)
-              setPlacedEquip([])
-              setWrongCount(0)
-              setWrongPick(null)
-              setEquipFeedback(null)
-              setCoreBodyTemp(STARTING_TEMP)
-              setGroundSaturation(0)
-              setWindChill(0)
-              setSimTick(0)
-              setSimLog([])
-              setSimDone(false)
-            }}>
-              Try Again
+          {/* Action buttons */}
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+            <button
+              onClick={handleRestart}
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                border: '1px solid rgba(255,255,255,0.2)',
+                color: '#e0e0e0',
+                padding: '12px 28px',
+                fontFamily: FONT,
+                fontSize: '13px',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                letterSpacing: '1px',
+              }}
+            >
+              RETRY MISSION
             </button>
-            <button style={styles.secondaryBtn} onClick={() => dispatch({ type: 'BACK_TO_MODULES' })}>
-              Back to Modules
+            <button
+              onClick={handleBack}
+              style={{
+                background: `linear-gradient(135deg, ${THERMAL.orange}, ${THERMAL.red})`,
+                border: 'none',
+                color: '#fff',
+                padding: '12px 28px',
+                fontFamily: FONT,
+                fontSize: '13px',
+                fontWeight: 700,
+                borderRadius: '6px',
+                cursor: 'pointer',
+                letterSpacing: '1px',
+              }}
+            >
+              RETURN TO MODULES
             </button>
           </div>
         </div>
@@ -875,97 +718,769 @@ export default function Module7_CampSafeHaven() {
     )
   }
 
-  return null
-}
+  // ─── RENDER: DAYLIGHT / NIGHT ─────────────────────────────────────────
+  const isDaylight = sim.phase === 'daylight'
+  const isNight = sim.phase === 'night'
 
-// ── Small helper components ──────────────────────────────────────────────────
-
-function StatBox({ label, value, color }) {
-  return (
-    <div style={{
-      flex: '1 1 100px', padding: '8px 12px', borderRadius: 8,
-      background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)',
-      textAlign: 'center',
-    }}>
-      <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 800, color, marginTop: 2 }}>{value}</div>
-    </div>
-  )
-}
-
-function ScoreRow({ label, pts, max, good }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-      <span style={{ color: '#cbd5e1', fontSize: 13 }}>{label}</span>
-      <span style={{
-        fontSize: 13, fontWeight: 700,
-        color: good ? '#4ade80' : '#f87171',
-      }}>
-        {pts}/{max}
-      </span>
-    </div>
-  )
-}
-
-function Lesson({ text }) {
-  return (
-    <p style={{ color: '#cbd5e1', fontSize: 12, margin: '0 0 8px', lineHeight: 1.55, paddingLeft: 16, position: 'relative' }}>
-      <span style={{ position: 'absolute', left: 0, color: '#fbbf24' }}>•</span>
-      {text}
-    </p>
-  )
-}
-
-function tagStyle(color) {
-  return {
-    fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
-    background: `${color}20`, color, border: `1px solid ${color}44`,
+  // Format time
+  const formatTime = (s) => {
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
   }
-}
 
-// ── Shared UI styles ─────────────────────────────────────────────────────────
+  // Temp danger color
+  const tempColor = sim.coreTemp >= 36 ? '#4caf50'
+    : sim.coreTemp >= 34 ? '#fdd835'
+    : sim.coreTemp >= 31 ? THERMAL.orange
+    : THERMAL.red
 
-const styles = {
-  screen: {
-    minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 24, background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 60%, #0f172a 100%)',
-    fontFamily: 'system-ui, sans-serif',
-  },
-  screenFull: {
-    minHeight: '100vh', display: 'flex',
-    background: '#0f172a',
-    fontFamily: 'system-ui, sans-serif',
-    overflow: 'hidden',
-  },
-  card: {
-    maxWidth: 560, padding: '40px 36px', textAlign: 'center',
-    background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)',
-    borderRadius: 20, backdropFilter: 'blur(10px)',
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
-  },
-  title: { color: '#f1f5f9', fontSize: 26, fontWeight: 800, margin: 0 },
-  subtitle: { color: '#94a3b8', fontSize: 14, margin: '-6px 0 0', fontWeight: 500, letterSpacing: 1 },
-  body: { color: '#cbd5e1', fontSize: 15, lineHeight: 1.7, margin: 0 },
-  warnBox: {
-    background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)',
-    borderRadius: 12, padding: '14px 18px', width: '100%',
-  },
-  primaryBtn: {
-    padding: '13px 36px', fontSize: 15, fontWeight: 700,
-    background: 'linear-gradient(135deg, #ea580c, #f97316)',
-    color: '#fff', border: 'none', borderRadius: 12, cursor: 'pointer',
-    boxShadow: '0 4px 20px rgba(234,88,12,0.4)',
-    fontFamily: 'inherit',
-  },
-  secondaryBtn: {
-    padding: '13px 28px', fontSize: 15, fontWeight: 600,
-    background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.35)',
-    color: '#a5b4fc', borderRadius: 12, cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-  ghost: {
-    background: 'none', border: 'none', color: '#64748b',
-    cursor: 'pointer', fontSize: 13, padding: 0,
-    fontFamily: 'inherit',
-  },
+  // CO danger color
+  const coColor = sim.co_ppm < 100 ? '#4caf50'
+    : sim.co_ppm < 250 ? '#fdd835'
+    : sim.co_ppm < 400 ? THERMAL.orange
+    : THERMAL.red
+
+  return (
+    <div style={styles.container}>
+      {/* Header */}
+      <div style={styles.header}>
+        <span style={styles.headerTitle}>
+          FLIR // {isDaylight ? 'DAYLIGHT SETUP' : 'NIGHT SURVIVAL'}
+          <span style={{
+            marginLeft: '16px',
+            color: isDaylight ? '#fdd835' : '#5c6bc0',
+            fontSize: '14px',
+          }}>
+            T-{formatTime(isDaylight ? sim.daylightTime : sim.nightTime)}
+          </span>
+        </span>
+        <button style={styles.backBtn} onClick={handleBack}>[ ESC ] ABORT</button>
+      </div>
+
+      {/* Main 3-column area */}
+      <div style={styles.mainArea}>
+
+        {/* ── LEFT TELEMETRY ──────────────────────────────────────────── */}
+        <div style={styles.leftPanel}>
+          <div style={{ fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
+            VITAL TELEMETRY
+          </div>
+
+          {/* Core Temp */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Core Body Temp</div>
+            <div style={{ ...styles.telemetryValue, color: tempColor }}>
+              {sim.coreTemp.toFixed(1)}
+              <span style={styles.telemetryUnit}>C</span>
+            </div>
+            <div style={{
+              height: '3px',
+              background: '#333',
+              borderRadius: '2px',
+              marginTop: '6px',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${Math.max(0, ((sim.coreTemp - 28) / 9) * 100)}%`,
+                background: tempColor,
+                borderRadius: '2px',
+                transition: 'width 0.2s',
+              }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: '#555', marginTop: '2px' }}>
+              <span>28 FATAL</span><span>37 NORMAL</span>
+            </div>
+          </div>
+
+          {/* Moisture */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Base Layer Moisture</div>
+            <div style={{ ...styles.telemetryValue, color: sim.moistureLevel > 50 ? '#26c6da' : sim.moistureLevel > 20 ? '#66bb6a' : '#4caf50' }}>
+              {sim.moistureLevel.toFixed(0)}
+              <span style={styles.telemetryUnit}>%</span>
+            </div>
+            <div style={{
+              height: '3px',
+              background: '#333',
+              borderRadius: '2px',
+              marginTop: '6px',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${sim.moistureLevel}%`,
+                background: sim.moistureLevel > 50 ? '#26c6da' : '#4caf50',
+                borderRadius: '2px',
+                transition: 'width 0.2s',
+              }} />
+            </div>
+          </div>
+
+          {/* CO PPM */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Ambient CO</div>
+            <div style={{ ...styles.telemetryValue, color: coColor }}>
+              {sim.co_ppm.toFixed(0)}
+              <span style={styles.telemetryUnit}>PPM</span>
+            </div>
+            {sim.co_ppm > 200 && (
+              <div style={{
+                fontSize: '10px',
+                color: THERMAL.red,
+                marginTop: '4px',
+                animation: 'none',
+              }}>
+                WARNING: CO CRITICAL
+              </div>
+            )}
+          </div>
+
+          {/* Calories */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Calorie Reserve</div>
+            <div style={{ ...styles.telemetryValue, color: sim.calorieReserve < 300 ? THERMAL.red : sim.calorieReserve < 800 ? THERMAL.orange : '#e0e0e0' }}>
+              {Math.round(sim.calorieReserve)}
+              <span style={styles.telemetryUnit}>kcal</span>
+            </div>
+            <div style={{
+              height: '3px',
+              background: '#333',
+              borderRadius: '2px',
+              marginTop: '6px',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${(sim.calorieReserve / 2000) * 100}%`,
+                background: sim.calorieReserve < 300 ? THERMAL.red : THERMAL.orange,
+                borderRadius: '2px',
+                transition: 'width 0.2s',
+              }} />
+            </div>
+          </div>
+        </div>
+
+        {/* ── CENTER: FLIR CROSS SECTION ──────────────────────────────── */}
+        <div style={styles.centerView}>
+          {/* Ground line */}
+          <div style={{
+            position: 'absolute',
+            bottom: '60px',
+            left: 0,
+            right: 0,
+            height: '3px',
+            background: sim.groundPadLaid
+              ? 'linear-gradient(90deg, #333 20%, #3b82f6 30%, #3b82f6 70%, #333 80%)'
+              : '#333',
+          }} />
+          {/* Ground pad label */}
+          {sim.groundPadLaid && (
+            <div style={{
+              position: 'absolute',
+              bottom: '42px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '9px',
+              color: '#3b82f6',
+              letterSpacing: '1px',
+            }}>
+              GROUND PAD
+            </div>
+          )}
+
+          {/* Tent structure */}
+          {sim.tentBuilt && (
+            <div style={{
+              position: 'absolute',
+              bottom: '63px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              width: '180px',
+              height: '120px',
+              borderLeft: '2px solid rgba(255,152,0,0.5)',
+              borderRight: '2px solid rgba(255,152,0,0.5)',
+              borderTop: '2px solid rgba(255,152,0,0.5)',
+              borderRadius: '60px 60px 0 0',
+              background: 'rgba(255,152,0,0.05)',
+            }}>
+              <div style={{
+                position: 'absolute',
+                top: '-16px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                fontSize: '9px',
+                color: '#ff9800',
+                letterSpacing: '1px',
+              }}>
+                TENT
+              </div>
+            </div>
+          )}
+
+          {/* Fire reflector */}
+          {sim.reflectorBuilt && (
+            <div style={{
+              position: 'absolute',
+              bottom: '63px',
+              right: 'calc(50% - 130px)',
+              width: '6px',
+              height: '90px',
+              background: 'linear-gradient(180deg, #ff6d00 0%, #bf360c 100%)',
+              borderRadius: '3px',
+              boxShadow: '-4px 0 12px rgba(255,109,0,0.3)',
+            }}>
+              <div style={{
+                position: 'absolute',
+                top: '-14px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                fontSize: '8px',
+                color: '#ff6d00',
+                letterSpacing: '1px',
+                whiteSpace: 'nowrap',
+              }}>
+                REFLECTOR
+              </div>
+            </div>
+          )}
+
+          {/* Fire source at night */}
+          {isNight && sim.heatSourceOn && (
+            <div style={{
+              position: 'absolute',
+              bottom: '63px',
+              left: 'calc(50% + 50px)',
+              width: '24px',
+              height: '30px',
+              background: 'radial-gradient(ellipse at bottom, #ff6d00 0%, #ff1744 40%, transparent 70%)',
+              borderRadius: '50% 50% 20% 20%',
+              animation: `flicker 0.3s infinite alternate`,
+              boxShadow: '0 0 20px rgba(255,109,0,0.6), 0 0 40px rgba(255,109,0,0.3)',
+            }} />
+          )}
+
+          {/* Wind arrows (when no tent) */}
+          {!sim.tentBuilt && (isDaylight || isNight) && (
+            <>
+              {[0, 1, 2, 3, 4].map(i => (
+                <div key={`wind-${i}`} style={{
+                  position: 'absolute',
+                  top: `${80 + i * 40}px`,
+                  left: `${-20 + (((Date.now() / (300 + i * 50)) + i * 60) % 100)}%`,
+                  color: 'rgba(100,180,255,0.3)',
+                  fontSize: '18px',
+                  fontWeight: 700,
+                  pointerEvents: 'none',
+                  transition: 'left 0.1s linear',
+                }}>
+                  {'>'}{'>'}{'>'}
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Human thermal figure */}
+          <div style={{
+            position: 'relative',
+            width: '60px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            zIndex: 2,
+            marginBottom: '-20px',
+          }}>
+            {/* Moisture aura */}
+            {showMoistureAura && (
+              <div style={{
+                position: 'absolute',
+                top: '-10px',
+                left: '-20px',
+                right: '-20px',
+                bottom: '-10px',
+                borderRadius: '50%',
+                boxShadow: `0 0 ${20 + pulseAnim * 20}px ${8 + pulseAnim * 10}px rgba(38,198,218,${0.15 + pulseAnim * 0.2})`,
+                pointerEvents: 'none',
+              }} />
+            )}
+
+            {/* Head */}
+            <div style={{
+              width: '28px',
+              height: '28px',
+              borderRadius: '50%',
+              background: humanGradient,
+              marginBottom: '2px',
+              boxShadow: `0 0 8px ${humanColor}66`,
+            }} />
+
+            {/* Torso */}
+            <div style={{
+              width: '36px',
+              height: '50px',
+              borderRadius: '8px 8px 4px 4px',
+              background: humanGradient,
+              marginBottom: '2px',
+              boxShadow: `0 0 12px ${humanColor}44`,
+            }} />
+
+            {/* Legs */}
+            <div style={{ display: 'flex', gap: '4px' }}>
+              <div style={{
+                width: '14px',
+                height: '40px',
+                borderRadius: '4px',
+                background: humanGradient,
+                boxShadow: `0 0 6px ${humanColor}33`,
+              }} />
+              <div style={{
+                width: '14px',
+                height: '40px',
+                borderRadius: '4px',
+                background: humanGradient,
+                boxShadow: `0 0 6px ${humanColor}33`,
+              }} />
+            </div>
+
+            {/* Temp readout on figure */}
+            <div style={{
+              position: 'absolute',
+              top: '20px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#fff',
+              textShadow: '0 0 4px #000, 0 0 8px #000',
+              whiteSpace: 'nowrap',
+            }}>
+              {sim.coreTemp.toFixed(1)} C
+            </div>
+          </div>
+
+          {/* Phase overlay info */}
+          <div style={{
+            position: 'absolute',
+            top: '12px',
+            left: '12px',
+            fontSize: '10px',
+            color: 'rgba(255,255,255,0.3)',
+            letterSpacing: '1px',
+          }}>
+            FLIR CROSS-SECTION
+          </div>
+          <div style={{
+            position: 'absolute',
+            top: '12px',
+            right: '12px',
+            fontSize: '10px',
+            color: isDaylight ? '#fdd835' : '#5c6bc0',
+            letterSpacing: '1px',
+          }}>
+            {isDaylight ? 'DAYLIGHT' : 'NIGHT'} // T-{formatTime(isDaylight ? sim.daylightTime : sim.nightTime)}
+          </div>
+
+          {/* Environment temp label */}
+          <div style={{
+            position: 'absolute',
+            bottom: '12px',
+            left: '12px',
+            fontSize: '10px',
+            color: 'rgba(100,150,255,0.5)',
+          }}>
+            AMBIENT: {sim.ambientTemp} C // WIND: {sim.windSpeed} km/h
+          </div>
+
+          {/* Vent status during night */}
+          {isNight && (
+            <div style={{
+              position: 'absolute',
+              bottom: '12px',
+              right: '12px',
+              fontSize: '10px',
+              color: sim.ventsOpen ? '#4caf50' : THERMAL.red,
+              letterSpacing: '1px',
+            }}>
+              VENTS: {sim.ventsOpen ? 'OPEN' : 'SEALED'}
+            </div>
+          )}
+        </div>
+
+        {/* ── RIGHT TELEMETRY ─────────────────────────────────────────── */}
+        <div style={styles.rightPanel}>
+          <div style={{ fontSize: '11px', color: '#666', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
+            STATUS
+          </div>
+
+          {/* Current phase info */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Phase</div>
+            <div style={{
+              fontSize: '16px',
+              fontWeight: 700,
+              color: isDaylight ? '#fdd835' : '#5c6bc0',
+            }}>
+              {isDaylight ? 'DAYLIGHT' : 'NIGHT'}
+            </div>
+            <div style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
+              {isDaylight ? 'Build shelter before dark' : 'Survive until dawn'}
+            </div>
+          </div>
+
+          {/* Wind */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Wind Speed</div>
+            <div style={{
+              ...styles.telemetryValue,
+              color: sim.tentBuilt ? '#4caf50' : '#ef5350',
+            }}>
+              {sim.windSpeed}
+              <span style={styles.telemetryUnit}>km/h</span>
+            </div>
+            <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+              {sim.tentBuilt ? 'Blocked by tent' : 'Direct exposure'}
+            </div>
+          </div>
+
+          {/* Shelter status */}
+          <div style={styles.telemetryRow}>
+            <div style={styles.telemetryLabel}>Shelter Status</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+              {[
+                { label: 'Tent', built: sim.tentBuilt, effect: '-70% convection' },
+                { label: 'Ground Pad', built: sim.groundPadLaid, effect: '-90% conduction' },
+                { label: 'Reflector', built: sim.reflectorBuilt, effect: '2x radiant heat' },
+              ].map(s => (
+                <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{
+                    width: '8px',
+                    height: '8px',
+                    borderRadius: '50%',
+                    background: s.built ? '#4caf50' : '#333',
+                    border: `1px solid ${s.built ? '#4caf50' : '#555'}`,
+                    flexShrink: 0,
+                  }} />
+                  <span style={{ fontSize: '11px', color: s.built ? '#ccc' : '#555' }}>
+                    {s.label}
+                  </span>
+                  {s.built && (
+                    <span style={{ fontSize: '9px', color: '#4caf50', marginLeft: 'auto' }}>
+                      {s.effect}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Heat source (night) */}
+          {isNight && (
+            <div style={styles.telemetryRow}>
+              <div style={styles.telemetryLabel}>Heat Source</div>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: sim.heatSourceOn ? THERMAL.orange : '#555',
+              }}>
+                {sim.heatSourceOn ? 'ACTIVE' : 'OFF'}
+              </div>
+              {sim.heatSourceOn && (
+                <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+                  +{sim.reflectorBuilt ? '0.030' : '0.015'} C/tick
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Exertion during daylight */}
+          {isDaylight && (
+            <div style={styles.telemetryRow}>
+              <div style={styles.telemetryLabel}>Exertion Level</div>
+              <div style={{
+                fontSize: '14px',
+                fontWeight: 700,
+                color: sim.exertionPace > 0.7 ? THERMAL.red : sim.exertionPace > 0.4 ? THERMAL.orange : '#4caf50',
+              }}>
+                {sim.exertionPace < 0.3 ? 'CAUTIOUS' : sim.exertionPace < 0.6 ? 'MODERATE' : 'FRANTIC'}
+              </div>
+              <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+                Speed vs moisture trade-off
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── BOTTOM ACTION DECK ──────────────────────────────────────── */}
+      <div style={styles.bottomDeck}>
+        <div style={{
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '8px',
+          padding: '16px 20px',
+          background: 'rgba(0,0,0,0.3)',
+        }}>
+          {/* DAYLIGHT CONTROLS */}
+          {isDaylight && (
+            <>
+              {/* Exertion slider */}
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: '8px',
+                }}>
+                  <span style={{ fontSize: '11px', color: '#888', letterSpacing: '1px', textTransform: 'uppercase' }}>
+                    Exertion Pace
+                  </span>
+                  <span style={{ fontSize: '13px', color: THERMAL.orange, fontWeight: 700 }}>
+                    {(sim.exertionPace * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '10px', color: '#4caf50' }}>CAUTIOUS</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={sim.exertionPace}
+                    onChange={(e) => simDispatch({ type: 'SET_EXERTION', payload: parseFloat(e.target.value) })}
+                    style={{
+                      flex: 1,
+                      height: '4px',
+                      appearance: 'auto',
+                      accentColor: THERMAL.orange,
+                      cursor: 'pointer',
+                    }}
+                  />
+                  <span style={{ fontSize: '10px', color: THERMAL.red }}>FRANTIC</span>
+                </div>
+                <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>
+                  Higher exertion = faster builds + more sweat accumulation
+                </div>
+              </div>
+
+              {/* Build buttons */}
+              <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                {[
+                  { key: 'tent', label: 'Build Tent', cost: 200, time: 30, built: sim.tentBuilt, effect: 'Blocks 70% convective loss' },
+                  { key: 'pad', label: 'Lay Ground Pad', cost: 100, time: 15, built: sim.groundPadLaid, effect: 'Blocks 90% conductive loss' },
+                  { key: 'reflector', label: 'Build Fire Reflector', cost: 150, time: 25, built: sim.reflectorBuilt, effect: 'Doubles radiant heat gain' },
+                ].map(item => {
+                  const isActive = sim.buildingAction === item.key
+                  const effectiveTime = (item.time / (0.5 + sim.exertionPace)).toFixed(0)
+                  const disabled = item.built || (sim.buildingAction && !isActive) || sim.calorieReserve <= 0
+
+                  return (
+                    <button
+                      key={item.key}
+                      disabled={disabled}
+                      onClick={() => handleStartBuild(item.key)}
+                      style={{
+                        flex: '1 1 200px',
+                        background: item.built
+                          ? 'rgba(76,175,80,0.1)'
+                          : isActive
+                            ? 'rgba(255,109,0,0.15)'
+                            : 'rgba(255,255,255,0.04)',
+                        border: `1px solid ${item.built ? 'rgba(76,175,80,0.3)' : isActive ? 'rgba(255,109,0,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                        borderRadius: '6px',
+                        padding: '12px 16px',
+                        cursor: disabled ? 'not-allowed' : 'pointer',
+                        opacity: disabled && !item.built ? 0.4 : 1,
+                        fontFamily: FONT,
+                        textAlign: 'left',
+                        position: 'relative',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {/* Progress bar overlay */}
+                      {isActive && (
+                        <div style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          height: '100%',
+                          width: `${sim.buildProgress}%`,
+                          background: 'rgba(255,109,0,0.12)',
+                          transition: 'width 0.1s linear',
+                        }} />
+                      )}
+
+                      <div style={{ position: 'relative', zIndex: 1 }}>
+                        <div style={{
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          color: item.built ? '#4caf50' : isActive ? THERMAL.orange : '#ccc',
+                          marginBottom: '4px',
+                        }}>
+                          {item.built ? `[BUILT] ${item.label}` : isActive ? `BUILDING... ${sim.buildProgress.toFixed(0)}%` : item.label}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#777' }}>
+                          {item.effect}
+                        </div>
+                        {!item.built && (
+                          <div style={{ fontSize: '10px', color: '#555', marginTop: '4px' }}>
+                            {effectiveTime}s // {item.cost} kcal
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </>
+          )}
+
+          {/* NIGHT CONTROLS */}
+          {isNight && (
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'stretch' }}>
+              {/* Fire toggle */}
+              <button
+                onClick={() => simDispatch({ type: 'TOGGLE_HEAT' })}
+                style={{
+                  flex: 1,
+                  background: sim.heatSourceOn
+                    ? 'rgba(255,109,0,0.15)'
+                    : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${sim.heatSourceOn ? 'rgba(255,109,0,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                  borderRadius: '6px',
+                  padding: '16px 20px',
+                  cursor: 'pointer',
+                  fontFamily: FONT,
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  color: sim.heatSourceOn ? THERMAL.orange : '#666',
+                  marginBottom: '4px',
+                }}>
+                  IGNITE HEAT SOURCE
+                </div>
+                <div style={{
+                  display: 'inline-block',
+                  padding: '4px 16px',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  background: sim.heatSourceOn ? 'rgba(255,109,0,0.2)' : 'rgba(255,255,255,0.05)',
+                  color: sim.heatSourceOn ? THERMAL.orange : '#555',
+                  border: `1px solid ${sim.heatSourceOn ? THERMAL.orange : '#333'}`,
+                  marginTop: '6px',
+                }}>
+                  {sim.heatSourceOn ? 'ON' : 'OFF'}
+                </div>
+                <div style={{ fontSize: '10px', color: '#555', marginTop: '8px' }}>
+                  Provides radiant warmth. Produces CO in sealed space.
+                </div>
+              </button>
+
+              {/* Vent toggle */}
+              <button
+                onClick={() => simDispatch({ type: 'TOGGLE_VENTS' })}
+                style={{
+                  flex: 1,
+                  background: sim.ventsOpen
+                    ? 'rgba(76,175,80,0.08)'
+                    : 'rgba(255,23,68,0.08)',
+                  border: `1px solid ${sim.ventsOpen ? 'rgba(76,175,80,0.3)' : 'rgba(255,23,68,0.3)'}`,
+                  borderRadius: '6px',
+                  padding: '16px 20px',
+                  cursor: 'pointer',
+                  fontFamily: FONT,
+                  textAlign: 'center',
+                }}
+              >
+                <div style={{
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  color: sim.ventsOpen ? '#4caf50' : THERMAL.red,
+                  marginBottom: '4px',
+                }}>
+                  SHELTER VENTS
+                </div>
+                <div style={{
+                  display: 'inline-block',
+                  padding: '4px 16px',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                  fontWeight: 700,
+                  background: sim.ventsOpen ? 'rgba(76,175,80,0.15)' : 'rgba(255,23,68,0.15)',
+                  color: sim.ventsOpen ? '#4caf50' : THERMAL.red,
+                  border: `1px solid ${sim.ventsOpen ? '#4caf50' : THERMAL.red}`,
+                  marginTop: '6px',
+                }}>
+                  {sim.ventsOpen ? 'OPEN' : 'SEALED'}
+                </div>
+                <div style={{ fontSize: '10px', color: '#555', marginTop: '8px' }}>
+                  {sim.ventsOpen
+                    ? 'CO venting active. +15% convective loss from cold air.'
+                    : 'CO accumulating! Warmer but dangerous.'}
+                </div>
+              </button>
+
+              {/* CO warning display */}
+              {sim.co_ppm > 100 && (
+                <div style={{
+                  flex: '0 0 160px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: `rgba(255,23,68,${Math.min(0.2, sim.co_ppm / 2000)})`,
+                  border: '1px solid rgba(255,23,68,0.4)',
+                  borderRadius: '6px',
+                  padding: '12px',
+                }}>
+                  <div style={{ fontSize: '10px', color: THERMAL.red, letterSpacing: '1.5px', marginBottom: '6px' }}>
+                    CO ALERT
+                  </div>
+                  <div style={{
+                    fontSize: '28px',
+                    fontWeight: 700,
+                    color: coColor,
+                  }}>
+                    {sim.co_ppm.toFixed(0)}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#888' }}>PPM</div>
+                  <div style={{
+                    height: '4px',
+                    width: '100%',
+                    background: '#333',
+                    borderRadius: '2px',
+                    marginTop: '8px',
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(100, (sim.co_ppm / 400) * 100)}%`,
+                      background: `linear-gradient(90deg, #fdd835, ${THERMAL.red})`,
+                      borderRadius: '2px',
+                      transition: 'width 0.2s',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: '9px', color: '#666', marginTop: '4px' }}>
+                    LETHAL: 400 PPM
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Injected keyframes for fire flicker */}
+      <style>{`
+        @keyframes flicker {
+          0% { opacity: 0.8; transform: scaleY(1); }
+          50% { opacity: 1; transform: scaleY(1.1) scaleX(0.95); }
+          100% { opacity: 0.9; transform: scaleY(0.95) scaleX(1.05); }
+        }
+      `}</style>
+    </div>
+  )
 }
