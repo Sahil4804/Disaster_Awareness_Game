@@ -1,1353 +1,1026 @@
 import { useReducer, useCallback, useEffect, useRef, useState } from 'react'
 import { useGame } from '../context/GameContext'
+import HumanBody3D from './HumanBody3D'
 
-/* ──────────────────────────────────────────────
+/* ══════════════════════════════════════════════
    CONSTANTS
-   ────────────────────────────────────────────── */
-const TOTAL_TIME = 360 // 6 minutes
-const SEARCH_DURATION = 3000 // ms per hotspot search
-const DEGRADE_INTERVAL = 1000 // ms tick for patient degradation
+   ══════════════════════════════════════════════ */
+const TOTAL_TIME = 420 // 7 minutes (more patients need more time)
+const SEARCH_DURATION = 3000
+const DEGRADE_INTERVAL = 1000
 
 const COLORS = {
-  bg: '#0a0a12',
-  red: '#dc2626',
-  green: '#22c55e',
-  amber: '#f59e0b',
-  blue: '#3b82f6',
-  darkGrey: '#1a1a2e',
-  panel: '#111122',
-  text: '#e2e8f0',
-  muted: '#64748b',
-  black: '#000000',
+  bg: '#0a0a12', red: '#dc2626', green: '#22c55e', amber: '#f59e0b',
+  blue: '#3b82f6', darkGrey: '#1a1a2e', panel: '#111827',
+  text: '#e2e8f0', muted: '#64748b', black: '#000000',
 }
 
-/* ──────────────────────────────────────────────
-   CASUALTY DATA
-   ────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════
+   REAL IMAGES (Pexels — free, no attribution required)
+   ══════════════════════════════════════════════ */
+const IMG = (id, w = 800) =>
+  `https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&w=${w}&h=500&fit=crop`
+
+const SCENE_IMAGES = {
+  stormBg:          IMG(8956453, 1920),
+  floodedStreet:    IMG(8568719),
+  collapsedBldg:    IMG(15533288),
+  vehicle:          IMG(8568719, 600),
+  debris:           IMG(9809),
+  intactBldg:       IMG(6471927),
+  bridge:           IMG(2328714),
+  playground:       IMG(14823609),
+  powerLine:        IMG(16114057),
+  evacuationPt:     IMG(15533273),
+  floodedHome:      IMG(6471927, 600),
+  gasStation:       IMG(16689670),
+}
+
+/* ══════════════════════════════════════════════
+   OFFICIAL SOURCE CITATIONS
+   ══════════════════════════════════════════════ */
+const SOURCES = {
+  triage: {
+    org: 'NAEMT — PHTLS',
+    title: 'Prehospital Trauma Life Support, 10th Ed.',
+    excerpt: 'START triage: Can they walk → GREEN. Breathing? → Open airway. RR >30 or <10 → RED. No radial pulse or cap refill >2s → RED. Can\'t follow commands → RED. All others → YELLOW.',
+    url: 'https://www.naemt.org/education/naemt-education-programs/phtls',
+  },
+  fema: {
+    org: 'FEMA / NIMS',
+    title: 'IS-100: Introduction to the Incident Command System',
+    excerpt: 'Mass casualty incidents require systematic triage to allocate limited resources. "Do the most good for the most people."',
+    url: 'https://training.fema.gov/is/courseoverview.aspx?code=IS-100.c',
+  },
+  redcross: {
+    org: 'American Red Cross',
+    title: 'First Aid / CPR / AED Participant Manual',
+    excerpt: 'In mass casualty events, prioritize patients with life-threatening but survivable injuries. Uncontrolled bleeding, obstructed airway, and signs of shock take priority.',
+    url: 'https://www.redcross.org/take-a-class/first-aid',
+  },
+  drowning: {
+    org: 'American Heart Association',
+    title: 'AHA Guidelines — Drowning Resuscitation',
+    excerpt: 'The primary cause of arrest in drowning is hypoxia; therefore oxygenation and ventilation are the priority. Initiate rescue breathing as soon as possible. Recovery position maintains airway.',
+    url: 'https://cpr.heart.org/en/resuscitation-science/cpr-and-ecc-guidelines',
+  },
+  drowning2: {
+    org: 'World Health Organization',
+    title: 'Global Report on Drowning: Preventing a Leading Killer',
+    excerpt: 'Immediate provision of rescue breathing at the scene of drowning significantly improves survival outcomes.',
+    url: 'https://www.who.int/publications/i/item/global-report-on-drowning',
+  },
+  hemorrhage: {
+    org: 'CoTCCC — Tactical Combat Casualty Care',
+    title: 'TCCC Guidelines for Medical Personnel',
+    excerpt: 'Massive hemorrhage is the #1 cause of preventable death. Apply tourniquet high and tight proximal to wound. Do NOT remove — only a surgeon removes tourniquets.',
+    url: 'https://deployedmedicine.com/market/11/content/40',
+  },
+  stopbleed: {
+    org: 'American College of Surgeons',
+    title: 'Stop the Bleed® Campaign',
+    excerpt: 'A person can bleed to death in as little as 5 minutes. Apply direct pressure. If bleeding does not stop, apply a tourniquet 2–3 inches above the wound.',
+    url: 'https://www.stopthebleed.org/',
+  },
+  hypothermia: {
+    org: 'Wilderness Medical Society',
+    title: 'Clinical Practice Guidelines — Accidental Hypothermia',
+    excerpt: 'Remove wet clothing immediately. Apply passive external rewarming. In severe hypothermia (<30°C), handle gently — rough handling can trigger ventricular fibrillation. "You\'re not dead until you\'re warm and dead."',
+    url: 'https://wms.org/magazine/1264/Clinical-Practice-Guidelines-for-the-Out-of-Hospital-Evaluation-and-Treatment-of-Accidental-Hypothermia',
+  },
+  burns: {
+    org: 'American Burn Association',
+    title: 'Advanced Burn Life Support (ABLS)',
+    excerpt: 'Electrical burns cause deep tissue injury disproportionate to surface appearance. Current follows the path of least resistance through nerves, blood vessels, and muscles. Cover with DRY sterile dressing. Do NOT apply water.',
+    url: 'https://ameriburn.org/education/abls/',
+  },
+  elderly: {
+    org: 'CDC — Emergency Preparedness',
+    title: 'Older Adults and Disasters',
+    excerpt: 'Older adults are more vulnerable due to physical limitations, chronic conditions, and medication dependencies. Dehydration occurs faster. Thin skin tears easily and wounds bleed persistently.',
+    url: 'https://www.cdc.gov/aging/emergency-preparedness/index.html',
+  },
+  expectant: {
+    org: 'NAEMT — PHTLS',
+    title: 'Mass Casualty Triage — BLACK Tag (Expectant)',
+    excerpt: 'Expectant patients have injuries incompatible with survival given available resources. Utilitarian triage — spending resources on salvageable patients — saves the most lives overall.',
+    url: 'https://www.naemt.org/education/naemt-education-programs/phtls',
+  },
+}
+
+// Which sources apply to each patient
+const PATIENT_SOURCES = {
+  'CAS-1': ['triage', 'drowning', 'drowning2', 'redcross'],
+  'CAS-2': ['triage', 'hemorrhage', 'stopbleed', 'redcross'],
+  'CAS-3': ['triage', 'redcross'],
+  'CAS-4': ['triage', 'hypothermia', 'redcross'],
+  'CAS-5': ['triage', 'expectant', 'fema'],
+  'CAS-6': ['triage', 'burns', 'redcross'],
+  'CAS-7': ['triage', 'elderly', 'hemorrhage', 'redcross'],
+  'CAS-8': ['triage', 'redcross', 'fema'],
+}
+
+/* ══════════════════════════════════════════════
+   CASUALTY DATA — 8 PATIENTS
+   ══════════════════════════════════════════════ */
 const CASUALTIES = [
   {
-    id: 'CAS-1',
-    name: 'Drowning Victim',
-    location: 'Near Overturned Vehicle',
-    hotspotIdx: 2,
+    id: 'CAS-1', name: 'Drowning Victim', location: 'Near Overturned Vehicle', hotspotIdx: 2,
     correctTag: 'RED',
     breathingResult: 'Agonal respirations — NOT effective breathing. Very faint, irregular chest rise.',
     pulseResult: 'Weak carotid pulse detected. Rate ~40 BPM.',
     woundsResult: 'No visible external trauma. Skin pale, lips cyanotic.',
+    pupilResult: 'Sluggish bilateral response to light. Fixed gaze present.',
+    temperatureResult: '35.2°C (95.4°F) — Mild hypothermia from water exposure.',
+    bpResult: '78/52 mmHg — Hypotension. Consistent with near-drowning shock.',
     correctTreatment: ['Rescue Breathing Mask', 'Recovery Position'],
-    treatmentZone: 'chest',
-    degradeRate: 1.5,
-    degradeMax: 60,
+    treatmentZone: 'chest', degradeRate: 1.5, degradeMax: 60,
     startVitals: { hr: 40, rr: 6, spo2: 82, skin: 'Pale / Cyanotic', status: 'CRITICAL' },
     educational: 'Drowning victims with agonal respirations need immediate airway management. Rescue breathing is the priority — without oxygenation, cardiac arrest follows within minutes. The recovery position helps drain water from the airway.',
   },
   {
-    id: 'CAS-2',
-    name: 'Crush Injury',
-    location: 'Under Collapsed Building',
-    hotspotIdx: 1,
+    id: 'CAS-2', name: 'Crush Injury', location: 'Under Collapsed Building', hotspotIdx: 1,
     correctTag: 'RED',
     breathingResult: 'Normal rate, 22/min.',
     pulseResult: 'Strong radial pulse, 110 BPM — tachycardic.',
     woundsResult: 'Right leg pinned under concrete. Visible bone fragment. Arterial bleeding from thigh.',
+    pupilResult: 'Equal and reactive. Alert but confused, GCS 13.',
+    temperatureResult: '37.1°C (98.8°F) — Normal core temperature.',
+    bpResult: '92/58 mmHg — Hypotension. Class III hemorrhagic shock.',
     correctTreatment: ['Tourniquet', 'Pressure Bandage'],
-    treatmentZone: 'rightLeg',
-    degradeRate: 1.2,
-    degradeMax: 90,
+    treatmentZone: 'rightLeg', degradeRate: 1.2, degradeMax: 90,
     startVitals: { hr: 110, rr: 22, spo2: 95, skin: 'Flushed / Diaphoretic', status: 'CRITICAL' },
-    educational: 'Crush injuries with arterial bleeding require immediate hemorrhage control. The tourniquet must be applied PROXIMAL to the wound BEFORE any fluid resuscitation. Giving IV fluids before stopping the bleed increases blood pressure and worsens hemorrhage — "you can\'t fill a bathtub with the drain open."',
+    educational: 'Crush injuries with arterial bleeding require immediate hemorrhage control. Tourniquet PROXIMAL to wound BEFORE fluid resuscitation. "You can\'t fill a bathtub with the drain open."',
   },
   {
-    id: 'CAS-3',
-    name: 'Walking Wounded',
-    location: 'Near Intact Building',
-    hotspotIdx: 4,
+    id: 'CAS-3', name: 'Walking Wounded', location: 'Near Intact Building', hotspotIdx: 4,
     correctTag: 'GREEN',
     breathingResult: 'Normal, 18/min.',
     pulseResult: 'Strong, 88 BPM.',
     woundsResult: 'Laceration on left forearm, moderate bleeding. Patient ambulatory, oriented.',
+    pupilResult: 'Equal and reactive. Alert and oriented x4. GCS 15.',
+    temperatureResult: '36.8°C (98.2°F) — Normal.',
+    bpResult: '128/82 mmHg — Normal. Slightly elevated from stress.',
     correctTreatment: ['Gauze Pads'],
-    treatmentZone: 'leftArm',
-    degradeRate: 0,
-    degradeMax: 999,
+    treatmentZone: 'leftArm', degradeRate: 0, degradeMax: 999,
     startVitals: { hr: 88, rr: 18, spo2: 98, skin: 'Normal', status: 'STABLE' },
-    educational: 'GREEN-tagged patients can walk and have minor injuries. While they need treatment, they should be triaged LAST. Spending excessive time on GREEN patients while RED patients deteriorate is a common and deadly mistake in mass casualty incidents.',
+    educational: 'GREEN patients can walk and have minor injuries. They should be triaged LAST. Spending time on GREEN while RED patients deteriorate is a common and deadly mass casualty mistake.',
   },
   {
-    id: 'CAS-4',
-    name: 'Hypothermic Child',
-    location: 'Submerged Playground',
-    hotspotIdx: 6,
+    id: 'CAS-4', name: 'Hypothermic Child', location: 'Submerged Playground', hotspotIdx: 6,
     correctTag: 'RED',
     breathingResult: 'Shallow, 8/min.',
     pulseResult: 'Weak, thready, 50 BPM.',
     woundsResult: 'No external trauma. Core temp critically low. Violent shivering. Wet clothing.',
+    pupilResult: 'Sluggish bilateral. Altered consciousness, GCS 10.',
+    temperatureResult: '32.1°C (89.8°F) — SEVERE HYPOTHERMIA. Immediate passive rewarming needed.',
+    bpResult: '74/48 mmHg — Significant hypotension from hypothermic vasoconstriction.',
     correctTreatment: ['Remove Wet Clothes', 'Mylar Blanket'],
-    treatmentZone: 'torso',
-    degradeRate: 1.0,
-    degradeMax: 75,
+    treatmentZone: 'torso', degradeRate: 1.0, degradeMax: 75,
     startVitals: { hr: 50, rr: 8, spo2: 88, skin: 'Pale / Cold', status: 'CRITICAL' },
-    educational: 'Hypothermia in children is life-threatening. Wet clothing accelerates heat loss through evaporation. The first step is ALWAYS removing wet clothes before applying insulation. "You\'re not dead until you\'re warm and dead" — hypothermic patients can sometimes be resuscitated even after prolonged arrest.',
+    educational: 'Hypothermia in children is life-threatening. Wet clothing accelerates heat loss via evaporation. ALWAYS remove wet clothes first. "You\'re not dead until you\'re warm and dead."',
   },
   {
-    id: 'CAS-5',
-    name: 'Massive Trauma',
-    location: 'Floating Debris',
-    hotspotIdx: 3,
+    id: 'CAS-5', name: 'Massive Trauma', location: 'Floating Debris', hotspotIdx: 3,
     correctTag: 'BLACK',
     breathingResult: 'No chest rise. No breath sounds.',
     pulseResult: 'No carotid pulse detected.',
     woundsResult: 'Massive cranial injury. Brain matter visible. Fixed dilated pupils.',
+    pupilResult: 'Fixed and dilated bilaterally. No response to light. No corneal reflex.',
+    temperatureResult: 'Ambient temperature. No body heat detected.',
+    bpResult: 'Undetectable. No palpable pulse at any site.',
     correctTreatment: [],
-    treatmentZone: null,
-    degradeRate: 0,
-    degradeMax: 999,
+    treatmentZone: null, degradeRate: 0, degradeMax: 999,
     startVitals: { hr: 0, rr: 0, spo2: 0, skin: 'Grey / Mottled', status: 'DECEASED' },
-    educational: 'BLACK-tagged patients have injuries incompatible with life. In a mass casualty incident, spending resources on expectant patients directly reduces survival chances for salvageable patients. This is the hardest but most important triage decision — accepting that you cannot save everyone.',
+    educational: 'BLACK-tagged patients have injuries incompatible with life. Spending resources on expectant patients directly reduces survival for salvageable patients. This is the hardest but most critical triage decision.',
+  },
+  {
+    id: 'CAS-6', name: 'Electrical Burn', location: 'Near Downed Power Line', hotspotIdx: 7,
+    correctTag: 'YELLOW',
+    breathingResult: 'Normal, 20/min. Occasional cough.',
+    pulseResult: 'Regular, 105 BPM — mildly tachycardic. Irregular rhythm noted.',
+    woundsResult: 'Entry wound right hand — charred, painless center. Exit wound left foot. Burns on right forearm.',
+    pupilResult: 'Equal and reactive. Alert but anxious, GCS 15.',
+    temperatureResult: '37.3°C (99.1°F) — Mildly elevated from tissue damage response.',
+    bpResult: '138/88 mmHg — Mildly hypertensive from pain/stress response.',
+    correctTreatment: ['Burn Dressing'],
+    treatmentZone: 'rightArm', degradeRate: 0.3, degradeMax: 200,
+    startVitals: { hr: 105, rr: 20, spo2: 96, skin: 'Reddened / Blistered', status: 'GUARDED' },
+    educational: 'Electrical burns cause internal tissue damage far beyond visible surface injury. Current travels between entry/exit points, damaging muscles, nerves, and potentially causing cardiac arrhythmia. NEVER apply water to electrical burns — cover with DRY sterile dressing. Monitor cardiac rhythm.',
+  },
+  {
+    id: 'CAS-7', name: 'Elderly Wound', location: 'Near Evacuation Point', hotspotIdx: 8,
+    correctTag: 'YELLOW',
+    breathingResult: 'Normal, 20/min. Slightly labored.',
+    pulseResult: 'Weak but regular, 95 BPM.',
+    woundsResult: 'Deep laceration on left leg from debris during evacuation. Steady venous bleeding. Signs of dehydration — dry mucous membranes, sunken eyes.',
+    pupilResult: 'Equal and reactive. Alert but fatigued, GCS 14.',
+    temperatureResult: '36.2°C (97.2°F) — Mildly hypothermic. Core temp dropping from exposure.',
+    bpResult: '105/68 mmHg — Borderline hypotension. Consistent with dehydration + blood loss.',
+    correctTreatment: ['Pressure Bandage', 'IV Fluid Bag'],
+    treatmentZone: 'leftLeg', degradeRate: 0.5, degradeMax: 150,
+    startVitals: { hr: 95, rr: 20, spo2: 95, skin: 'Pale / Dry', status: 'GUARDED' },
+    educational: 'Elderly disaster victims are highly vulnerable to dehydration and hypothermia. Their thin skin tears easily. Hemorrhage control PLUS fluid replacement is essential. Monitor for rapid decompensation — elderly patients can crash suddenly.',
+  },
+  {
+    id: 'CAS-8', name: 'Panicking Survivor', location: 'Flooded Residential Home', hotspotIdx: 9,
+    correctTag: 'GREEN',
+    breathingResult: 'Rapid, 28/min — hyperventilating. No signs of respiratory distress.',
+    pulseResult: 'Strong, 112 BPM — sinus tachycardia from anxiety.',
+    woundsResult: 'Minor scratches on both arms from broken glass. Fully ambulatory. Oriented but severely anxious.',
+    pupilResult: 'Equal and reactive. Dilated from sympathetic response. GCS 15.',
+    temperatureResult: '37.0°C (98.6°F) — Normal.',
+    bpResult: '142/90 mmHg — Elevated from anxiety. No underlying hypertensive emergency.',
+    correctTreatment: ['Gauze Pads'],
+    treatmentZone: 'leftArm', degradeRate: 0, degradeMax: 999,
+    startVitals: { hr: 112, rr: 28, spo2: 99, skin: 'Normal / Flushed', status: 'STABLE' },
+    educational: 'Panicking survivors can appear critically ill (tachycardia, tachypnea) but are GREEN-tagged. Their distress is real but injuries are minor and they are ambulatory. Psychological first aid matters, but must NOT delay treatment of RED patients. Diverting resources to GREEN patients while RED patients die is the #1 triage error.',
   },
 ]
 
+/* ══════════════════════════════════════════════
+   HOTSPOTS — 11 locations (8 with casualties)
+   ══════════════════════════════════════════════ */
+// casualtyZone: { x%, y% } — where in each scene the survivor is hidden (for flashlight discovery)
 const HOTSPOTS = [
-  { id: 0, x: 95, y: 210, label: 'Flooded Street', hasCasualty: false },
-  { id: 1, x: 185, y: 100, label: 'Collapsed Building', hasCasualty: true },
-  { id: 2, x: 390, y: 250, label: 'Overturned Vehicle', hasCasualty: true },
-  { id: 3, x: 500, y: 370, label: 'Floating Debris', hasCasualty: true },
-  { id: 4, x: 130, y: 380, label: 'Intact Building', hasCasualty: true },
-  { id: 5, x: 310, y: 130, label: 'Under Bridge', hasCasualty: false },
-  { id: 6, x: 470, y: 100, label: 'Submerged Playground', hasCasualty: true },
+  { id: 0, label: 'Flooded Street',        img: SCENE_IMAGES.floodedStreet,  hasCasualty: false, casualtyZone: null, desc: 'A main road submerged under 2 feet of murky floodwater. Vehicles partially submerged.' },
+  { id: 1, label: 'Collapsed Building',     img: SCENE_IMAGES.collapsedBldg,  hasCasualty: true,  casualtyZone: { x: 35, y: 60 }, desc: 'A partially collapsed structure with rubble and concrete blocks. Rescue teams could be needed.' },
+  { id: 2, label: 'Overturned Vehicle',     img: SCENE_IMAGES.vehicle,        hasCasualty: true,  casualtyZone: { x: 55, y: 45 }, desc: 'A car pushed sideways by floodwaters, partially submerged. Someone could be trapped inside.' },
+  { id: 3, label: 'Floating Debris',        img: SCENE_IMAGES.debris,         hasCasualty: true,  casualtyZone: { x: 65, y: 55 }, desc: 'A field of broken wood, metal, and wreckage carried downstream by the flood current.' },
+  { id: 4, label: 'Intact Building',        img: SCENE_IMAGES.intactBldg,     hasCasualty: true,  casualtyZone: { x: 40, y: 50 }, desc: 'A residential building still standing but surrounded by floodwater on all sides.' },
+  { id: 5, label: 'Under Bridge',           img: SCENE_IMAGES.bridge,         hasCasualty: false, casualtyZone: null, desc: 'A bridge over a swollen river. Water level dangerously close to the deck. Strong current visible.' },
+  { id: 6, label: 'Submerged Playground',   img: SCENE_IMAGES.playground,     hasCasualty: true,  casualtyZone: { x: 50, y: 40 }, desc: 'A children\'s playground completely flooded. Swings and slides barely visible above waterline.' },
+  { id: 7, label: 'Downed Power Line',      img: SCENE_IMAGES.powerLine,      hasCasualty: true,  casualtyZone: { x: 30, y: 65 }, desc: 'Utility poles snapped by the storm. Live wires hanging near standing water. Extreme danger.' },
+  { id: 8, label: 'Evacuation Point',       img: SCENE_IMAGES.evacuationPt,   hasCasualty: true,  casualtyZone: { x: 60, y: 50 }, desc: 'A designated rally point where displaced residents have gathered. Chaos and confusion visible.' },
+  { id: 9, label: 'Flooded Home',           img: SCENE_IMAGES.floodedHome,    hasCasualty: true,  casualtyZone: { x: 45, y: 55 }, desc: 'A residential house with water up to the first floor windows. Cries for help reported.' },
+  { id: 10, label: 'Submerged Gas Station', img: SCENE_IMAGES.gasStation,     hasCasualty: false, casualtyZone: null, desc: 'A gas station destroyed by the flood. Fuel contamination possible. Area evacuated.' },
 ]
 
 const INITIAL_SUPPLIES = {
   'Rescue Breathing Mask': 1,
   'Tourniquet': 2,
-  'Pressure Bandage': 3,
-  'Gauze Pads': 4,
-  'Mylar Blanket': 1,
-  'IV Fluid Bag': 1,
+  'Pressure Bandage': 4,
+  'Gauze Pads': 6,
+  'Mylar Blanket': 2,
+  'IV Fluid Bag': 2,
+  'Burn Dressing': 2,
 }
 
 const TRIAGE_TAGS = ['RED', 'YELLOW', 'GREEN', 'BLACK']
+const NUM_PATIENTS = CASUALTIES.length
 
-/* ──────────────────────────────────────────────
+/* ══════════════════════════════════════════════
    GAME STATE REDUCER
-   ────────────────────────────────────────────── */
+   ══════════════════════════════════════════════ */
 const initialGameState = {
-  phase: 'start', // start | explore | triage | report
-  timer: TOTAL_TIME,
-  searchingHotspot: null,
-  searchProgress: 0,
-  searchedHotspots: [],
-  foundCasualties: [],
+  phase: 'start', timer: TOTAL_TIME,
+  searchingHotspot: null, searchProgress: 0,
+  searchedHotspots: [], foundCasualties: [],
   currentCasualty: null,
-  // per-casualty state: { [casId]: { tag, treatments: [], checks: [], degradeTime, vitals, dead } }
-  casualtyState: {},
-  supplies: { ...INITIAL_SUPPLIES },
-  selectedItem: null,
-  errorMsg: null,
-  errorTimer: null,
-  shakeScreen: false,
-  typewriterDone: false,
-  triageStarted: false,
+  casualtyState: {}, supplies: { ...INITIAL_SUPPLIES },
+  selectedItem: null, errorMsg: null, shakeScreen: false, typewriterDone: false, triageStarted: false,
 }
 
 function gameStateReducer(state, action) {
   switch (action.type) {
     case 'START_GAME':
       return {
-        ...initialGameState,
-        phase: 'explore',
-        timer: TOTAL_TIME,
+        ...initialGameState, phase: 'explore', timer: TOTAL_TIME,
         casualtyState: CASUALTIES.reduce((acc, c) => {
-          acc[c.id] = {
-            tag: null,
-            treatments: [],
-            checks: [],
-            degradeTime: 0,
-            vitals: { ...c.startVitals },
-            dead: c.id === 'CAS-5',
-            treated: false,
-          }
+          acc[c.id] = { tag: null, treatments: [], checks: [], degradeTime: 0, vitals: { ...c.startVitals }, dead: c.id === 'CAS-5', treated: false }
           return acc
         }, {}),
       }
-
-    case 'TICK':
+    case 'TICK': {
       if (state.phase !== 'explore' && state.phase !== 'triage') return state
-      const newTimer = Math.max(0, state.timer - 1)
-      if (newTimer <= 0) return { ...state, timer: 0, phase: 'report' }
-      return { ...state, timer: newTimer }
-
+      const t = Math.max(0, state.timer - 1)
+      if (t <= 0) return { ...state, timer: 0, phase: 'report' }
+      return { ...state, timer: t }
+    }
     case 'BEGIN_SEARCH':
       return { ...state, searchingHotspot: action.payload, searchProgress: 0 }
-
     case 'SEARCH_PROGRESS':
       return { ...state, searchProgress: Math.min(100, state.searchProgress + action.payload) }
-
     case 'FINISH_SEARCH': {
       const hsId = action.payload
-      const hs = HOTSPOTS[hsId]
       const newSearched = [...state.searchedHotspots, hsId]
-      const casualty = CASUALTIES.find(c => c.hotspotIdx === hsId)
-      const newFound = casualty ? [...state.foundCasualties, casualty.id] : state.foundCasualties
-      return {
-        ...state,
-        searchingHotspot: null,
-        searchProgress: 0,
-        searchedHotspots: newSearched,
-        foundCasualties: newFound,
-      }
+      const cas = CASUALTIES.find(c => c.hotspotIdx === hsId)
+      const newFound = cas ? [...state.foundCasualties, cas.id] : state.foundCasualties
+      return { ...state, searchingHotspot: null, searchProgress: 0, searchedHotspots: newSearched, foundCasualties: newFound }
     }
-
     case 'CANCEL_SEARCH':
       return { ...state, searchingHotspot: null, searchProgress: 0 }
-
     case 'BEGIN_TRIAGE':
       return { ...state, phase: 'triage', triageStarted: true }
-
     case 'SELECT_CASUALTY':
       return { ...state, currentCasualty: action.payload, selectedItem: null, errorMsg: null }
-
     case 'BACK_TO_LIST':
       return { ...state, currentCasualty: null, selectedItem: null, errorMsg: null }
-
     case 'CHECK_VITALS': {
       const { casId, checkType } = action.payload
       const cs = state.casualtyState[casId]
       if (cs.checks.includes(checkType)) return state
-      return {
-        ...state,
-        casualtyState: {
-          ...state.casualtyState,
-          [casId]: { ...cs, checks: [...cs.checks, checkType] },
-        },
-      }
+      return { ...state, casualtyState: { ...state.casualtyState, [casId]: { ...cs, checks: [...cs.checks, checkType] } } }
     }
-
     case 'SET_TAG': {
       const { casId, tag } = action.payload
       const cs = state.casualtyState[casId]
-      return {
-        ...state,
-        casualtyState: {
-          ...state.casualtyState,
-          [casId]: { ...cs, tag },
-        },
-      }
+      return { ...state, casualtyState: { ...state.casualtyState, [casId]: { ...cs, tag } } }
     }
-
     case 'SELECT_ITEM':
       return { ...state, selectedItem: action.payload }
-
     case 'DESELECT_ITEM':
       return { ...state, selectedItem: null }
-
     case 'APPLY_TREATMENT': {
       const { casId, item } = action.payload
       const cs = state.casualtyState[casId]
       const cas = CASUALTIES.find(c => c.id === casId)
-
-      // Check for BLACK patient waste
       if (cas.correctTag === 'BLACK') {
-        return {
-          ...state,
-          selectedItem: null,
-          errorMsg: `RESOURCE MISALLOCATION: This patient has injuries incompatible with life. Every bandage used here is one that CAS-1 or CAS-2 won't have.`,
-          shakeScreen: true,
+        return { ...state, selectedItem: null, errorMsg: 'RESOURCE MISALLOCATION: This patient has injuries incompatible with life.', shakeScreen: true,
           supplies: { ...state.supplies, [item]: state.supplies[item] - 1 },
-          casualtyState: {
-            ...state.casualtyState,
-            [casId]: { ...cs, treatments: [...cs.treatments, item] },
-          },
-        }
+          casualtyState: { ...state.casualtyState, [casId]: { ...cs, treatments: [...cs.treatments, item] } } }
       }
-
-      // Check for IV before Tourniquet on CAS-2
       if (casId === 'CAS-2' && item === 'IV Fluid Bag' && !cs.treatments.includes('Tourniquet')) {
-        return {
-          ...state,
-          selectedItem: null,
-          errorMsg: 'Error: Fluid resuscitation without hemorrhage control increases bleeding. STOP THE BLEED FIRST.',
-          shakeScreen: true,
-        }
+        return { ...state, selectedItem: null, errorMsg: 'Fluid resuscitation without hemorrhage control increases bleeding. STOP THE BLEED FIRST.', shakeScreen: true }
       }
-
-      // Check if treatment is valid for this patient
       const validItems = [...cas.correctTreatment]
       if (casId === 'CAS-2') validItems.push('IV Fluid Bag')
-      const isRecovery = item === 'Recovery Position'
-
-      if (!validItems.includes(item) && !isRecovery) {
-        const feedbackMap = {
-          'Rescue Breathing Mask': `This patient does not need rescue breathing. ${cas.id === 'CAS-3' ? 'They are breathing normally at 18/min.' : 'Assess breathing status first.'}`,
-          'Tourniquet': `No arterial hemorrhage present on this patient. Tourniquets are for life-threatening limb bleeding only.`,
-          'Pressure Bandage': casId === 'CAS-4' ? 'No external wounds detected. This patient needs warming, not wound care.' : 'This is not the right treatment for this patient\'s condition.',
-          'Gauze Pads': casId === 'CAS-1' ? 'No external bleeding. This patient needs airway management.' : 'Gauze is not the priority treatment here.',
-          'Mylar Blanket': casId !== 'CAS-4' ? 'This patient is not hypothermic. Save thermal blankets for those who need them.' : '',
-          'IV Fluid Bag': 'IV fluids are not indicated for this patient at this time.',
-        }
-        return {
-          ...state,
-          selectedItem: null,
-          errorMsg: feedbackMap[item] || 'Wrong treatment for this patient.',
-          shakeScreen: true,
-        }
+      const isSpecial = item === 'Recovery Position' || item === 'Remove Wet Clothes'
+      if (!validItems.includes(item) && !isSpecial) {
+        return { ...state, selectedItem: null, errorMsg: 'Wrong treatment for this patient. Assess their condition and choose appropriately.', shakeScreen: true }
       }
-
-      // Successful treatment
       const newSupplies = { ...state.supplies }
-      if (item !== 'Recovery Position' && item !== 'Remove Wet Clothes') {
-        newSupplies[item] = newSupplies[item] - 1
-      }
-
+      if (!isSpecial) newSupplies[item] = newSupplies[item] - 1
       const newTreatments = [...cs.treatments, item]
       const allTreated = cas.correctTreatment.every(t => newTreatments.includes(t))
-
-      // Improve vitals on correct treatment
-      const newVitals = { ...cs.vitals }
+      const nv = { ...cs.vitals }
       if (casId === 'CAS-1') {
-        if (item === 'Rescue Breathing Mask') { newVitals.rr = 14; newVitals.spo2 = Math.min(95, newVitals.spo2 + 10) }
-        if (item === 'Recovery Position') { newVitals.spo2 = 96; newVitals.status = 'STABLE'; newVitals.skin = 'Improving' }
+        if (item === 'Rescue Breathing Mask') { nv.rr = 14; nv.spo2 = Math.min(95, nv.spo2 + 10) }
+        if (item === 'Recovery Position') { nv.spo2 = 96; nv.status = 'STABLE'; nv.skin = 'Improving' }
       }
       if (casId === 'CAS-2') {
-        if (item === 'Tourniquet') { newVitals.hr = 100; newVitals.status = 'GUARDED' }
-        if (item === 'Pressure Bandage') { newVitals.hr = 95; newVitals.status = 'STABLE'; newVitals.skin = 'Improving' }
+        if (item === 'Tourniquet') { nv.hr = 100; nv.status = 'GUARDED' }
+        if (item === 'Pressure Bandage') { nv.hr = 95; nv.status = 'STABLE'; nv.skin = 'Improving' }
       }
-      if (casId === 'CAS-3') {
-        if (item === 'Gauze Pads') { newVitals.status = 'STABLE'; newVitals.skin = 'Normal' }
-      }
+      if (casId === 'CAS-3') { if (item === 'Gauze Pads') { nv.status = 'STABLE'; nv.skin = 'Normal' } }
       if (casId === 'CAS-4') {
-        if (item === 'Remove Wet Clothes') { newVitals.rr = 10; newVitals.skin = 'Less Cold' }
-        if (item === 'Mylar Blanket') { newVitals.hr = 60; newVitals.rr = 14; newVitals.spo2 = 94; newVitals.status = 'STABLE'; newVitals.skin = 'Warming' }
+        if (item === 'Remove Wet Clothes') { nv.rr = 10; nv.skin = 'Less Cold' }
+        if (item === 'Mylar Blanket') { nv.hr = 60; nv.rr = 14; nv.spo2 = 94; nv.status = 'STABLE'; nv.skin = 'Warming' }
       }
-
-      return {
-        ...state,
-        selectedItem: null,
-        errorMsg: null,
-        supplies: newSupplies,
-        casualtyState: {
-          ...state.casualtyState,
-          [casId]: { ...cs, treatments: newTreatments, vitals: newVitals, treated: allTreated },
-        },
+      if (casId === 'CAS-6') { if (item === 'Burn Dressing') { nv.hr = 95; nv.status = 'STABLE'; nv.skin = 'Dressed / Protected' } }
+      if (casId === 'CAS-7') {
+        if (item === 'Pressure Bandage') { nv.hr = 88; nv.status = 'GUARDED'; nv.skin = 'Pale but Stable' }
+        if (item === 'IV Fluid Bag') { nv.spo2 = 97; nv.status = 'STABLE'; nv.skin = 'Improving' }
       }
+      if (casId === 'CAS-8') { if (item === 'Gauze Pads') { nv.status = 'STABLE'; nv.skin = 'Normal' } }
+      return { ...state, selectedItem: null, errorMsg: null, supplies: newSupplies,
+        casualtyState: { ...state.casualtyState, [casId]: { ...cs, treatments: newTreatments, vitals: nv, treated: allTreated } } }
     }
-
     case 'DEGRADE_CASUALTY': {
       const { casId } = action.payload
       const cs = state.casualtyState[casId]
       const cas = CASUALTIES.find(c => c.id === casId)
       if (cs.dead || cs.treated || cas.degradeRate === 0) return state
-
-      const newDegradeTime = cs.degradeTime + 1
-      const newVitals = { ...cs.vitals }
+      const dt = cs.degradeTime + 1
+      const nv = { ...cs.vitals }
       let dead = false
-
       if (casId === 'CAS-1') {
-        newVitals.spo2 = Math.max(0, cs.vitals.spo2 - 0.4)
-        newVitals.hr = Math.max(0, cs.vitals.hr - 0.15)
-        newVitals.skin = newVitals.spo2 < 70 ? 'Deeply Cyanotic' : newVitals.spo2 < 80 ? 'Cyanotic' : 'Pale / Cyanotic'
-        if (newDegradeTime >= cas.degradeMax) { dead = true; newVitals.hr = 0; newVitals.rr = 0; newVitals.spo2 = 0; newVitals.status = 'DECEASED'; newVitals.skin = 'Grey' }
-        else if (newVitals.spo2 < 70) newVitals.status = 'CRITICAL'
+        nv.spo2 = Math.max(0, cs.vitals.spo2 - 0.4); nv.hr = Math.max(0, cs.vitals.hr - 0.15)
+        nv.skin = nv.spo2 < 70 ? 'Deeply Cyanotic' : nv.spo2 < 80 ? 'Cyanotic' : 'Pale / Cyanotic'
+        if (dt >= cas.degradeMax) { dead = true; nv.hr = 0; nv.rr = 0; nv.spo2 = 0; nv.status = 'DECEASED'; nv.skin = 'Grey' }
+        else if (nv.spo2 < 70) nv.status = 'CRITICAL'
       }
       if (casId === 'CAS-2') {
-        newVitals.hr = Math.min(160, cs.vitals.hr + 0.3)
-        newVitals.spo2 = Math.max(0, cs.vitals.spo2 - 0.15)
-        if (newDegradeTime > 60) { newVitals.hr = Math.max(0, cs.vitals.hr - 0.5) }
-        if (newDegradeTime >= cas.degradeMax) { dead = true; newVitals.hr = 0; newVitals.rr = 0; newVitals.spo2 = 0; newVitals.status = 'DECEASED'; newVitals.skin = 'Grey / Mottled' }
-        else newVitals.status = newVitals.hr > 130 ? 'CRITICAL' : 'GUARDED'
+        nv.hr = Math.min(160, cs.vitals.hr + 0.3); nv.spo2 = Math.max(0, cs.vitals.spo2 - 0.15)
+        if (dt > 60) nv.hr = Math.max(0, cs.vitals.hr - 0.5)
+        if (dt >= cas.degradeMax) { dead = true; nv.hr = 0; nv.rr = 0; nv.spo2 = 0; nv.status = 'DECEASED'; nv.skin = 'Grey / Mottled' }
+        else nv.status = nv.hr > 130 ? 'CRITICAL' : 'GUARDED'
       }
       if (casId === 'CAS-4') {
-        newVitals.hr = Math.max(0, cs.vitals.hr - 0.2)
-        newVitals.rr = Math.max(0, cs.vitals.rr - 0.05)
-        newVitals.spo2 = Math.max(0, cs.vitals.spo2 - 0.2)
-        if (newDegradeTime >= cas.degradeMax) { dead = true; newVitals.hr = 0; newVitals.rr = 0; newVitals.spo2 = 0; newVitals.status = 'DECEASED'; newVitals.skin = 'Grey / Cold' }
-        else newVitals.status = newVitals.hr < 35 ? 'CRITICAL' : 'GUARDED'
+        nv.hr = Math.max(0, cs.vitals.hr - 0.2); nv.rr = Math.max(0, cs.vitals.rr - 0.05); nv.spo2 = Math.max(0, cs.vitals.spo2 - 0.2)
+        if (dt >= cas.degradeMax) { dead = true; nv.hr = 0; nv.rr = 0; nv.spo2 = 0; nv.status = 'DECEASED'; nv.skin = 'Grey / Cold' }
+        else nv.status = nv.hr < 35 ? 'CRITICAL' : 'GUARDED'
       }
-
-      return {
-        ...state,
-        casualtyState: {
-          ...state.casualtyState,
-          [casId]: { ...cs, degradeTime: newDegradeTime, vitals: newVitals, dead },
-        },
+      if (casId === 'CAS-6') {
+        nv.hr = Math.min(130, cs.vitals.hr + 0.08)
+        if (dt >= cas.degradeMax) { nv.status = 'CRITICAL' } else nv.status = nv.hr > 120 ? 'CRITICAL' : 'GUARDED'
       }
+      if (casId === 'CAS-7') {
+        nv.hr = Math.max(0, cs.vitals.hr + 0.1); nv.spo2 = Math.max(0, cs.vitals.spo2 - 0.08)
+        if (dt >= cas.degradeMax) { dead = true; nv.hr = 0; nv.rr = 0; nv.spo2 = 0; nv.status = 'DECEASED'; nv.skin = 'Grey' }
+        else nv.status = nv.spo2 < 90 ? 'CRITICAL' : 'GUARDED'
+      }
+      return { ...state, casualtyState: { ...state.casualtyState, [casId]: { ...cs, degradeTime: dt, vitals: nv, dead } } }
     }
-
-    case 'CLEAR_ERROR':
-      return { ...state, errorMsg: null, shakeScreen: false }
-
-    case 'FINISH_GAME':
-      return { ...state, phase: 'report' }
-
-    case 'SET_TYPEWRITER_DONE':
-      return { ...state, typewriterDone: true }
-
-    default:
-      return state
+    case 'CLEAR_ERROR': return { ...state, errorMsg: null, shakeScreen: false }
+    case 'FINISH_GAME': return { ...state, phase: 'report' }
+    case 'SET_TYPEWRITER_DONE': return { ...state, typewriterDone: true }
+    default: return state
   }
 }
 
-/* ──────────────────────────────────────────────
-   WEB AUDIO HELPERS
-   ────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════
+   AUDIO
+   ══════════════════════════════════════════════ */
 function getAudioCtx() {
-  if (!getAudioCtx._ctx) {
-    try { getAudioCtx._ctx = new (window.AudioContext || window.webkitAudioContext)() } catch { return null }
-  }
+  if (!getAudioCtx._ctx) { try { getAudioCtx._ctx = new (window.AudioContext || window.webkitAudioContext)() } catch { return null } }
   return getAudioCtx._ctx
 }
-
-function playTone(freq, duration, type = 'sine', volume = 0.15) {
-  const ctx = getAudioCtx()
-  if (!ctx) return
-  try {
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = type
-    osc.frequency.value = freq
-    gain.gain.value = volume
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration)
-    osc.stop(ctx.currentTime + duration)
-  } catch {}
+function playTone(f, d, t = 'sine', v = 0.15) {
+  const ctx = getAudioCtx(); if (!ctx) return
+  try { const o = ctx.createOscillator(), g = ctx.createGain(); o.type = t; o.frequency.value = f; g.gain.value = v; o.connect(g); g.connect(ctx.destination); o.start(ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + d); o.stop(ctx.currentTime + d) } catch {}
 }
-
 function playHeartbeat() { playTone(440, 0.1, 'sine', 0.12) }
-function playFlatline() { playTone(440, 2.0, 'sine', 0.1) }
-function playSuccess() {
-  playTone(523, 0.12, 'sine', 0.1)
-  setTimeout(() => playTone(659, 0.12, 'sine', 0.1), 130)
-  setTimeout(() => playTone(784, 0.18, 'sine', 0.1), 260)
-}
+function playSuccess() { playTone(523, 0.12, 'sine', 0.1); setTimeout(() => playTone(659, 0.12, 'sine', 0.1), 130); setTimeout(() => playTone(784, 0.18, 'sine', 0.1), 260) }
 function playError() { playTone(150, 0.25, 'square', 0.1) }
+function playXray() { playTone(800, 0.08, 'sine', 0.08); setTimeout(() => playTone(1200, 0.15, 'sine', 0.06), 100) }
+function playScan() { playTone(600, 0.3, 'sine', 0.06); setTimeout(() => playTone(900, 0.2, 'sine', 0.05), 200) }
 
-/* ──────────────────────────────────────────────
-   CSS KEYFRAMES (injected once)
-   ────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════
+   CSS KEYFRAMES
+   ══════════════════════════════════════════════ */
 const STYLE_ID = 'iron-tide-styles'
-
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return
-  const style = document.createElement('style')
-  style.id = STYLE_ID
-  style.textContent = `
-    @keyframes it-rain {
-      0% { transform: translateY(-100vh); opacity: 0.7; }
-      100% { transform: translateY(100vh); opacity: 0; }
-    }
-    @keyframes it-pulse-red {
-      0%, 100% { box-shadow: inset 0 0 80px rgba(220,38,38,0.15); }
-      50% { box-shadow: inset 0 0 120px rgba(220,38,38,0.4); }
-    }
-    @keyframes it-pulse-red-fast {
-      0%, 100% { box-shadow: inset 0 0 100px rgba(220,38,38,0.25); }
-      50% { box-shadow: inset 0 0 160px rgba(220,38,38,0.6); }
-    }
-    @keyframes it-pulse-glow {
-      0%, 100% { box-shadow: 0 0 8px rgba(220,38,38,0.4), 0 0 16px rgba(220,38,38,0.2); transform: scale(1); }
-      50% { box-shadow: 0 0 16px rgba(220,38,38,0.7), 0 0 32px rgba(220,38,38,0.4); transform: scale(1.15); }
-    }
-    @keyframes it-pulse-glow-green {
-      0%, 100% { box-shadow: 0 0 8px rgba(34,197,94,0.4); }
-      50% { box-shadow: 0 0 20px rgba(34,197,94,0.8); }
-    }
-    @keyframes it-heartbeat {
-      0%, 100% { transform: scale(1); }
-      15% { transform: scale(1.2); }
-      30% { transform: scale(1); }
-      45% { transform: scale(1.15); }
-      60% { transform: scale(1); }
-    }
-    @keyframes it-shake {
-      0%, 100% { transform: translate(0, 0); }
-      10% { transform: translate(-4px, 2px); }
-      20% { transform: translate(4px, -2px); }
-      30% { transform: translate(-3px, -1px); }
-      40% { transform: translate(3px, 1px); }
-      50% { transform: translate(-2px, 2px); }
-      60% { transform: translate(2px, -1px); }
-      70% { transform: translate(-1px, 1px); }
-      80% { transform: translate(1px, -1px); }
-      90% { transform: translate(-1px, 0); }
-    }
-    @keyframes it-blood-pool {
-      0% { width: 10px; height: 6px; opacity: 0.6; }
-      100% { width: 60px; height: 30px; opacity: 0.9; }
-    }
-    @keyframes it-shiver {
-      0%, 100% { transform: translateX(0); }
-      25% { transform: translateX(-2px) translateY(1px); }
-      50% { transform: translateX(2px) translateY(-1px); }
-      75% { transform: translateX(-1px) translateY(1px); }
-    }
-    @keyframes it-deploy-pulse {
-      0%, 100% { box-shadow: 0 0 10px rgba(220,38,38,0.3), 0 0 20px rgba(220,38,38,0.1); }
-      50% { box-shadow: 0 0 20px rgba(220,38,38,0.6), 0 0 40px rgba(220,38,38,0.3), 0 0 60px rgba(220,38,38,0.1); }
-    }
-    @keyframes it-searchbar {
-      0% { width: 0%; }
-      100% { width: 100%; }
-    }
-    @keyframes it-typewriter-cursor {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-    @keyframes it-vignette-breathe {
-      0%, 100% { opacity: 0.6; }
-      50% { opacity: 0.9; }
-    }
-    @keyframes it-scan-line {
-      0% { top: -2px; }
-      100% { top: 100%; }
-    }
-    @keyframes it-fade-in {
-      0% { opacity: 0; transform: translateY(10px); }
-      100% { opacity: 1; transform: translateY(0); }
-    }
-    @keyframes it-green-flash {
-      0% { background: rgba(34,197,94,0.4); }
-      100% { background: rgba(34,197,94,0); }
-    }
+  const s = document.createElement('style'); s.id = STYLE_ID
+  s.textContent = `
+    @keyframes it-rain{0%{transform:translateY(-100vh);opacity:.7}100%{transform:translateY(100vh);opacity:0}}
+    @keyframes it-pulse-red{0%,100%{box-shadow:inset 0 0 80px rgba(220,38,38,.15)}50%{box-shadow:inset 0 0 120px rgba(220,38,38,.4)}}
+    @keyframes it-pulse-red-fast{0%,100%{box-shadow:inset 0 0 100px rgba(220,38,38,.25)}50%{box-shadow:inset 0 0 160px rgba(220,38,38,.6)}}
+    @keyframes it-pulse-glow{0%,100%{box-shadow:0 0 8px rgba(220,38,38,.4);transform:scale(1)}50%{box-shadow:0 0 16px rgba(220,38,38,.7),0 0 32px rgba(220,38,38,.4);transform:scale(1.05)}}
+    @keyframes it-pulse-glow-green{0%,100%{box-shadow:0 0 8px rgba(34,197,94,.4)}50%{box-shadow:0 0 20px rgba(34,197,94,.8)}}
+    @keyframes it-pulse-glow-blue{0%,100%{box-shadow:0 0 8px rgba(59,130,246,.3)}50%{box-shadow:0 0 20px rgba(59,130,246,.7)}}
+    @keyframes it-heartbeat{0%,100%{transform:scale(1)}15%{transform:scale(1.2)}30%{transform:scale(1)}45%{transform:scale(1.15)}60%{transform:scale(1)}}
+    @keyframes it-shake{0%,100%{transform:translate(0,0)}10%{transform:translate(-4px,2px)}30%{transform:translate(-3px,-1px)}50%{transform:translate(-2px,2px)}70%{transform:translate(-1px,1px)}90%{transform:translate(-1px,0)}}
+    @keyframes it-deploy-pulse{0%,100%{box-shadow:0 0 15px rgba(220,38,38,.3),0 0 30px rgba(220,38,38,.1)}50%{box-shadow:0 0 30px rgba(220,38,38,.6),0 0 60px rgba(220,38,38,.3)}}
+    @keyframes it-typewriter-cursor{0%,100%{opacity:1}50%{opacity:0}}
+    @keyframes it-scan-line{0%{top:-2px}100%{top:100%}}
+    @keyframes it-fade-in{0%{opacity:0;transform:translateY(10px)}100%{opacity:1;transform:translateY(0)}}
+    @keyframes it-lightning{0%,95%,100%{opacity:0}96%{opacity:.8}97%{opacity:.1}98%{opacity:.6}}
+    @keyframes it-scan-sweep{0%{top:0;opacity:.8}100%{top:100%;opacity:.2}}
+    @keyframes it-equipment-glow{0%,100%{box-shadow:0 0 5px rgba(59,130,246,.2)}50%{box-shadow:0 0 15px rgba(59,130,246,.5)}}
   `
-  document.head.appendChild(style)
+  document.head.appendChild(s)
 }
 
-/* ──────────────────────────────────────────────
+/* ══════════════════════════════════════════════
    HELPER COMPONENTS
-   ────────────────────────────────────────────── */
-
+   ══════════════════════════════════════════════ */
 function RainEffect() {
-  const drops = Array.from({ length: 60 }, (_, i) => ({
-    left: `${(i / 60) * 100 + Math.random() * 2}%`,
-    delay: `${Math.random() * 2}s`,
-    duration: `${0.6 + Math.random() * 0.6}s`,
-    opacity: 0.15 + Math.random() * 0.25,
-  }))
-  return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 0 }}>
-      {drops.map((d, i) => (
-        <div key={i} style={{
-          position: 'absolute',
-          left: d.left,
-          top: 0,
-          width: '1px',
-          height: '18px',
-          background: `rgba(150,180,220,${d.opacity})`,
-          animation: `it-rain ${d.duration} ${d.delay} linear infinite`,
-        }} />
-      ))}
-    </div>
-  )
+  const drops = Array.from({ length: 80 }, (_, i) => ({ left: `${(i / 80) * 100 + Math.random() * 2}%`, delay: `${Math.random() * 2}s`, dur: `${0.4 + Math.random() * 0.5}s`, op: 0.15 + Math.random() * 0.3 }))
+  return <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 0 }}>
+    {drops.map((d, i) => <div key={i} style={{ position: 'absolute', left: d.left, top: 0, width: 1.5, height: 22, background: `rgba(150,180,220,${d.op})`, animation: `it-rain ${d.dur} ${d.delay} linear infinite` }} />)}
+  </div>
 }
-
 function Vignette({ intensity = 'normal' }) {
-  const anim = intensity === 'fast' ? 'it-pulse-red-fast 1s ease-in-out infinite'
-    : intensity === 'normal' ? 'it-pulse-red 2.5s ease-in-out infinite'
-    : 'none'
-  return (
-    <div style={{
-      position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
-      background: 'radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%)',
-      animation: anim,
-    }} />
-  )
+  const a = intensity === 'fast' ? 'it-pulse-red-fast 1s ease-in-out infinite' : intensity === 'normal' ? 'it-pulse-red 2.5s ease-in-out infinite' : 'none'
+  return <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1, background: 'radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.7) 100%)', animation: a }} />
 }
-
 function ScanLine() {
-  return (
-    <div style={{
-      position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 2, opacity: 0.03,
-    }}>
-      <div style={{
-        position: 'absolute', left: 0, width: '100%', height: '2px',
-        background: 'rgba(255,255,255,0.5)',
-        animation: 'it-scan-line 4s linear infinite',
-      }} />
-    </div>
-  )
+  return <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', zIndex: 2, opacity: 0.03 }}>
+    <div style={{ position: 'absolute', left: 0, width: '100%', height: 2, background: 'rgba(255,255,255,.5)', animation: 'it-scan-line 4s linear infinite' }} />
+  </div>
 }
-
 function Typewriter({ text, speed = 35, onDone }) {
   const [displayed, setDisplayed] = useState('')
-  const idx = useRef(0)
-  const doneRef = useRef(false)
-
+  const idx = useRef(0), doneRef = useRef(false)
   useEffect(() => {
-    idx.current = 0
-    doneRef.current = false
-    setDisplayed('')
-    const iv = setInterval(() => {
-      idx.current++
-      if (idx.current >= text.length) {
-        setDisplayed(text)
-        clearInterval(iv)
-        if (!doneRef.current) { doneRef.current = true; onDone && onDone() }
-        return
-      }
-      setDisplayed(text.slice(0, idx.current))
-    }, speed)
+    idx.current = 0; doneRef.current = false; setDisplayed('')
+    const iv = setInterval(() => { idx.current++; if (idx.current >= text.length) { setDisplayed(text); clearInterval(iv); if (!doneRef.current) { doneRef.current = true; onDone?.() }; return }; setDisplayed(text.slice(0, idx.current)) }, speed)
     return () => clearInterval(iv)
   }, [text, speed])
+  return <span>{displayed}<span style={{ animation: 'it-typewriter-cursor .7s step-end infinite', fontWeight: 'bold' }}>|</span></span>
+}
+function formatTime(s) { return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` }
+function tagColor(t) { return t === 'RED' ? COLORS.red : t === 'YELLOW' ? COLORS.amber : t === 'GREEN' ? COLORS.green : t === 'BLACK' ? '#333' : COLORS.muted }
 
+/* ──────────── SOURCES PANEL ──────────── */
+function SourcesPanel({ casId, onClose }) {
+  const keys = PATIENT_SOURCES[casId] || ['triage', 'redcross']
+  const cas = CASUALTIES.find(c => c.id === casId)
   return (
-    <span>
-      {displayed}
-      <span style={{ animation: 'it-typewriter-cursor 0.7s step-end infinite', fontWeight: 'bold' }}>|</span>
-    </span>
+    <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, background: 'rgba(10,15,30,0.97)', backdropFilter: 'blur(16px)', zIndex: 50, display: 'flex', flexDirection: 'column', borderLeft: `2px solid ${COLORS.blue}33`, animation: 'it-fade-in .3s ease', boxShadow: '-4px 0 30px rgba(0,0,0,.5)' }}>
+      <div style={{ padding: '16px 18px', borderBottom: `1px solid ${COLORS.muted}22`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: '.8rem', color: COLORS.blue, letterSpacing: '.1em', fontWeight: 'bold' }}>OFFICIAL SOURCES</div>
+          <div style={{ fontSize: '1rem', color: COLORS.text, marginTop: 4 }}>{cas?.id}: {cas?.name}</div>
+        </div>
+        <button onClick={onClose} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${COLORS.muted}44`, color: COLORS.text, padding: '4px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: '"Courier New",monospace', fontSize: '.85rem' }}>CLOSE</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {keys.map((k, i) => {
+          const src = SOURCES[k]
+          if (!src) return null
+          return (
+            <div key={i} style={{ background: 'rgba(59,130,246,.04)', border: `1px solid ${COLORS.blue}22`, borderRadius: 6, padding: 14, borderLeft: `3px solid ${COLORS.blue}` }}>
+              <div style={{ fontSize: '.75rem', color: COLORS.blue, fontWeight: 'bold', letterSpacing: '.08em', marginBottom: 4 }}>{src.org}</div>
+              <div style={{ fontSize: '.9rem', color: COLORS.text, fontWeight: 'bold', marginBottom: 8 }}>{src.title}</div>
+              <div style={{ fontSize: '.85rem', color: COLORS.muted, lineHeight: 1.6, fontStyle: 'italic', borderLeft: `2px solid ${COLORS.muted}33`, paddingLeft: 10, marginBottom: 8 }}>
+                "{src.excerpt}"
+              </div>
+              <a href={src.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '.8rem', color: COLORS.blue, textDecoration: 'none' }}
+                onMouseEnter={e => e.target.style.textDecoration = 'underline'}
+                onMouseLeave={e => e.target.style.textDecoration = 'none'}
+              >View Source ↗</a>
+            </div>
+          )
+        })}
+        <div style={{ background: 'rgba(59,130,246,.06)', borderRadius: 4, padding: 10, fontSize: '.75rem', color: COLORS.blue, lineHeight: 1.5, marginTop: 8 }}>
+          All sources are from official government agencies, medical associations, or internationally recognized humanitarian organizations.
+        </div>
+      </div>
+    </div>
   )
 }
 
-function formatTime(s) {
-  const m = Math.floor(s / 60)
-  const sec = s % 60
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+/* ──────────── IMMERSIVE SCENE INVESTIGATION (Explore Phase) ──────────── */
+function SceneInvestigation({ hotspot, onBack, onStartSearch, searching, progress, done, found }) {
+  const containerRef = useRef(null)
+  const [mouse, setMouse] = useState({ x: 50, y: 50 })
+  const [nearZone, setNearZone] = useState(false)
+  const [revealPct, setRevealPct] = useState(0) // 0-100: how much of the scene has been "revealed" by flashlight near the zone
+
+  const handleMouseMove = useCallback((e) => {
+    if (!containerRef.current) return
+    const rect = containerRef.current.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * 100
+    const y = ((e.clientY - rect.top) / rect.height) * 100
+    setMouse({ x, y })
+
+    // Check if flashlight is near the casualty zone
+    if (hotspot.casualtyZone && !done) {
+      const dx = x - hotspot.casualtyZone.x, dy = y - hotspot.casualtyZone.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      const isNear = dist < 12
+      setNearZone(isNear)
+      if (isNear) setRevealPct(p => Math.min(100, p + 1.5))
+    }
+  }, [hotspot, done])
+
+  return (
+    <div ref={containerRef} onMouseMove={handleMouseMove} style={{
+      position: 'relative', flex: 1, overflow: 'hidden', borderRadius: 8, cursor: 'none',
+      userSelect: 'none',
+    }}>
+      {/* Full-screen scene photograph */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `url(${hotspot.img})`,
+        backgroundSize: 'cover', backgroundPosition: 'center',
+        filter: done ? (found ? 'brightness(0.6)' : 'grayscale(0.8) brightness(0.3)') : 'brightness(0.9)',
+        transition: 'filter 1s',
+      }} />
+
+      {/* Darkness overlay with flashlight cutout */}
+      {!done && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: `radial-gradient(circle 100px at ${mouse.x}% ${mouse.y}%, transparent 0%, rgba(0,0,0,0.35) 40%, rgba(0,0,0,0.88) 100%)`,
+          transition: 'background 0.05s',
+          pointerEvents: 'none',
+        }} />
+      )}
+
+      {/* Flashlight beam glow */}
+      {!done && (
+        <div style={{
+          position: 'absolute',
+          left: `${mouse.x}%`, top: `${mouse.y}%`,
+          width: 200, height: 200,
+          transform: 'translate(-50%, -50%)',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(255,255,200,0.06) 0%, transparent 70%)',
+          pointerEvents: 'none',
+        }} />
+      )}
+
+      {/* Custom flashlight cursor */}
+      {!done && (
+        <div style={{
+          position: 'absolute',
+          left: `${mouse.x}%`, top: `${mouse.y}%`,
+          width: 20, height: 20,
+          transform: 'translate(-50%, -50%)',
+          borderRadius: '50%',
+          border: '2px solid rgba(255,255,200,0.6)',
+          pointerEvents: 'none',
+          boxShadow: '0 0 10px rgba(255,255,200,0.3)',
+          zIndex: 20,
+        }} />
+      )}
+
+      {/* Casualty zone glow — becomes visible when flashlight is near */}
+      {hotspot.casualtyZone && !done && (
+        <div style={{
+          position: 'absolute',
+          left: `${hotspot.casualtyZone.x}%`, top: `${hotspot.casualtyZone.y}%`,
+          transform: 'translate(-50%, -50%)',
+          width: 70, height: 70, borderRadius: '50%',
+          border: nearZone ? `2px solid ${COLORS.red}` : revealPct > 30 ? `1px solid ${COLORS.red}44` : 'none',
+          background: nearZone ? 'rgba(220,38,38,0.2)' : revealPct > 50 ? 'rgba(220,38,38,0.08)' : 'transparent',
+          boxShadow: nearZone ? `0 0 30px rgba(220,38,38,0.5), inset 0 0 20px rgba(220,38,38,0.2)` : 'none',
+          animation: nearZone ? 'it-pulse-glow 1.5s ease-in-out infinite' : 'none',
+          cursor: nearZone && !searching ? 'pointer' : 'none',
+          pointerEvents: nearZone ? 'auto' : 'none',
+          transition: 'border 0.3s, background 0.3s',
+        }}
+          onClick={() => nearZone && !searching && !done && onStartSearch()}
+        >
+          {nearZone && !searching && (
+            <div style={{
+              position: 'absolute', bottom: -28, left: '50%', transform: 'translateX(-50%)',
+              fontSize: '.85rem', color: COLORS.red, fontWeight: 'bold', whiteSpace: 'nowrap',
+              textShadow: '0 0 10px rgba(0,0,0,0.8)',
+              animation: 'it-fade-in .3s ease',
+            }}>
+              CLICK TO INVESTIGATE
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* No-casualty zone — need to search around, then click anywhere after enough scanning */}
+      {!hotspot.casualtyZone && !done && revealPct < 100 && (
+        <div style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none',
+        }} />
+      )}
+
+      {/* For empty locations: auto-search trigger after mouse covers enough area */}
+      {!hotspot.hasCasualty && !done && !searching && (
+        <div style={{
+          position: 'absolute', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          cursor: 'pointer', pointerEvents: 'auto',
+        }}
+          onClick={onStartSearch}
+        >
+          <div style={{
+            background: 'rgba(0,0,0,0.7)', border: `1px solid ${COLORS.amber}66`,
+            padding: '10px 24px', borderRadius: 6, fontSize: '.95rem', color: COLORS.amber,
+            fontWeight: 'bold', letterSpacing: '.1em', backdropFilter: 'blur(4px)',
+            textShadow: '0 0 8px rgba(0,0,0,0.8)',
+          }}>
+            SCAN AREA FOR SURVIVORS
+          </div>
+        </div>
+      )}
+
+      {/* Searching progress overlay */}
+      {searching && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 15 }}>
+          <div style={{ background: 'rgba(0,0,0,0.7)', padding: '20px 40px', borderRadius: 8, textAlign: 'center', backdropFilter: 'blur(4px)' }}>
+            <div style={{ fontSize: '1.1rem', color: COLORS.amber, fontWeight: 'bold', letterSpacing: '.15em', marginBottom: 12 }}>INVESTIGATING...</div>
+            <div style={{ width: 200, height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', background: `linear-gradient(90deg, ${COLORS.amber}, ${COLORS.green})`, width: `${progress}%`, transition: 'width .05s linear', borderRadius: 3 }} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Result overlays */}
+      {done && found && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 15, animation: 'it-fade-in .5s ease' }}>
+          <div style={{ background: 'rgba(220,38,38,0.15)', border: `2px solid ${COLORS.red}`, padding: '24px 48px', borderRadius: 8, textAlign: 'center', backdropFilter: 'blur(8px)', boxShadow: '0 0 40px rgba(220,38,38,0.3)' }}>
+            <div style={{ fontSize: '1.8rem', color: COLORS.red, fontWeight: 900, letterSpacing: '.2em', marginBottom: 8 }}>CASUALTY FOUND</div>
+            <div style={{ fontSize: '1rem', color: COLORS.text }}>{CASUALTIES.find(c => c.hotspotIdx === hotspot.id)?.name || 'Unknown'}</div>
+          </div>
+        </div>
+      )}
+      {done && !found && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', zIndex: 15, animation: 'it-fade-in .5s ease' }}>
+          <div style={{ background: 'rgba(0,0,0,0.6)', border: `1px solid ${COLORS.muted}66`, padding: '24px 48px', borderRadius: 8, backdropFilter: 'blur(8px)' }}>
+            <div style={{ fontSize: '1.5rem', color: COLORS.green, fontWeight: 'bold', letterSpacing: '.15em' }}>ALL CLEAR</div>
+          </div>
+        </div>
+      )}
+
+      {/* Scene info overlay — top */}
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '12px 18px', background: 'linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%)', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: COLORS.text, textShadow: '0 2px 8px rgba(0,0,0,0.8)' }}>{hotspot.label}</div>
+          <div style={{ fontSize: '.85rem', color: COLORS.muted, marginTop: 4, maxWidth: 500, lineHeight: 1.4, textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>{hotspot.desc}</div>
+        </div>
+        <button onClick={onBack} style={{
+          background: 'rgba(0,0,0,0.6)', border: `1px solid ${COLORS.muted}66`, color: COLORS.text,
+          padding: '8px 20px', borderRadius: 5, cursor: 'pointer', fontSize: '.9rem',
+          fontFamily: '"Courier New",monospace', backdropFilter: 'blur(4px)',
+          pointerEvents: 'auto', zIndex: 20,
+        }}>&lt; BACK TO MAP</button>
+      </div>
+
+      {/* Bottom hint */}
+      {!done && !searching && hotspot.hasCasualty && (
+        <div style={{ position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 10, pointerEvents: 'none' }}>
+          <div style={{ background: 'rgba(0,0,0,0.6)', padding: '8px 20px', borderRadius: 4, fontSize: '.85rem', color: COLORS.muted, backdropFilter: 'blur(4px)', textShadow: '0 1px 4px rgba(0,0,0,0.8)', textAlign: 'center' }}>
+            Move your flashlight to search for survivors. Look carefully...
+          </div>
+        </div>
+      )}
+
+      {/* Rain effect inside scene */}
+      <RainEffect />
+    </div>
+  )
 }
 
-function tagColor(tag) {
-  if (tag === 'RED') return COLORS.red
-  if (tag === 'YELLOW') return COLORS.amber
-  if (tag === 'GREEN') return COLORS.green
-  if (tag === 'BLACK') return '#333'
-  return COLORS.muted
-}
-
-/* ──────────────────────────────────────────────
+/* ══════════════════════════════════════════════
    MAIN COMPONENT
-   ────────────────────────────────────────────── */
+   ══════════════════════════════════════════════ */
 export default function IronTide() {
   const { dispatch: ctxDispatch } = useGame()
   const [gs, dispatch] = useReducer(gameStateReducer, initialGameState)
-  const timerRef = useRef(null)
-  const degradeRef = useRef(null)
-  const searchRef = useRef(null)
-  const heartbeatRef = useRef(null)
+  const timerRef = useRef(null), degradeRef = useRef(null), searchRef = useRef(null), heartbeatRef = useRef(null)
+  const [xrayMode, setXrayMode] = useState(false)
+  const [showSources, setShowSources] = useState(false)
+  const [activeScene, setActiveScene] = useState(null) // hotspot id for scene investigation view
 
-  // Inject CSS once
   useEffect(() => { injectStyles() }, [])
-
-  // Global timer
   useEffect(() => {
-    if (gs.phase === 'explore' || gs.phase === 'triage') {
-      timerRef.current = setInterval(() => dispatch({ type: 'TICK' }), 1000)
-      return () => clearInterval(timerRef.current)
-    }
+    if (gs.phase === 'explore' || gs.phase === 'triage') { timerRef.current = setInterval(() => dispatch({ type: 'TICK' }), 1000); return () => clearInterval(timerRef.current) }
   }, [gs.phase])
-
-  // Patient degradation
   useEffect(() => {
     if (gs.phase === 'explore' || gs.phase === 'triage') {
-      degradeRef.current = setInterval(() => {
-        gs.foundCasualties.forEach(casId => {
-          dispatch({ type: 'DEGRADE_CASUALTY', payload: { casId } })
-        })
-      }, DEGRADE_INTERVAL)
+      degradeRef.current = setInterval(() => { gs.foundCasualties.forEach(casId => dispatch({ type: 'DEGRADE_CASUALTY', payload: { casId } })) }, DEGRADE_INTERVAL)
       return () => clearInterval(degradeRef.current)
     }
   }, [gs.phase, gs.foundCasualties])
-
-  // Heartbeat sound for critical patients being viewed
   useEffect(() => {
     if (gs.phase === 'triage' && gs.currentCasualty) {
-      const cs = gs.casualtyState[gs.currentCasualty]
-      const cas = CASUALTIES.find(c => c.id === gs.currentCasualty)
+      const cs = gs.casualtyState[gs.currentCasualty], cas = CASUALTIES.find(c => c.id === gs.currentCasualty)
       if (cs && !cs.dead && (cas.correctTag === 'RED' || cs.vitals.status === 'CRITICAL')) {
-        heartbeatRef.current = setInterval(() => playHeartbeat(), 1200)
-        return () => clearInterval(heartbeatRef.current)
+        heartbeatRef.current = setInterval(() => playHeartbeat(), 1200); return () => clearInterval(heartbeatRef.current)
       }
     }
     return () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current) }
   }, [gs.phase, gs.currentCasualty, gs.casualtyState])
+  useEffect(() => { if (gs.errorMsg) { const t = setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), 4000); return () => clearTimeout(t) } }, [gs.errorMsg])
+  useEffect(() => { if (gs.shakeScreen) { playError(); const t = setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), 600); return () => clearTimeout(t) } }, [gs.shakeScreen])
+  useEffect(() => { if (gs.timer <= 0 && gs.phase !== 'report' && gs.phase !== 'start') dispatch({ type: 'FINISH_GAME' }) }, [gs.timer, gs.phase])
+  useEffect(() => { setXrayMode(false); setShowSources(false) }, [gs.currentCasualty])
 
-  // Clear error after 4 seconds
-  useEffect(() => {
-    if (gs.errorMsg) {
-      const t = setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), 4000)
-      return () => clearTimeout(t)
-    }
-  }, [gs.errorMsg])
-
-  // Shake screen clear
-  useEffect(() => {
-    if (gs.shakeScreen) {
-      playError()
-      const t = setTimeout(() => dispatch({ type: 'CLEAR_ERROR' }), 600)
-      return () => clearTimeout(t)
-    }
-  }, [gs.shakeScreen])
-
-  // Auto-finish if timer hits 0
-  useEffect(() => {
-    if (gs.timer <= 0 && gs.phase !== 'report' && gs.phase !== 'start') {
-      dispatch({ type: 'FINISH_GAME' })
-    }
-  }, [gs.timer, gs.phase])
-
-  // Search hotspot mechanic
   const startSearch = useCallback((hsId) => {
-    if (gs.searchingHotspot !== null) return
-    if (gs.searchedHotspots.includes(hsId)) return
-    dispatch({ type: 'BEGIN_SEARCH', payload: hsId })
-    const step = 50
-    const increment = (100 / (SEARCH_DURATION / step))
-    let progress = 0
+    if (gs.searchingHotspot !== null || gs.searchedHotspots.includes(hsId)) return
+    dispatch({ type: 'BEGIN_SEARCH', payload: hsId }); playScan()
+    const step = 50, inc = 100 / (SEARCH_DURATION / step); let p = 0
     searchRef.current = setInterval(() => {
-      progress += increment
-      dispatch({ type: 'SEARCH_PROGRESS', payload: increment })
-      if (progress >= 100) {
-        clearInterval(searchRef.current)
-        dispatch({ type: 'FINISH_SEARCH', payload: hsId })
-        const hs = HOTSPOTS[hsId]
-        if (hs.hasCasualty) playSuccess()
-        else playError()
-      }
+      p += inc; dispatch({ type: 'SEARCH_PROGRESS', payload: inc })
+      if (p >= 100) { clearInterval(searchRef.current); dispatch({ type: 'FINISH_SEARCH', payload: hsId }); HOTSPOTS[hsId].hasCasualty ? playSuccess() : playError() }
     }, step)
   }, [gs.searchingHotspot, gs.searchedHotspots])
 
   const handleApplyItem = useCallback((casId, zone) => {
     if (!gs.selectedItem) return
-    const item = gs.selectedItem
-    const cas = CASUALTIES.find(c => c.id === casId)
-
-    // Recovery position is a button, not zone-based
-    if (item === 'Recovery Position' || item === 'Remove Wet Clothes') {
-      dispatch({ type: 'APPLY_TREATMENT', payload: { casId, item } })
-      playSuccess()
-      return
-    }
-
-    // Check zone correctness
-    if (cas.treatmentZone && zone !== cas.treatmentZone) {
-      dispatch({ type: 'CLEAR_ERROR' })
-      dispatch({
-        type: 'APPLY_TREATMENT',
-        payload: { casId, item: '__wrong_zone__' },
-      })
-      // Actually just show error, don't consume
-      playError()
-      return
-    }
-
-    dispatch({ type: 'APPLY_TREATMENT', payload: { casId, item } })
-    playSuccess()
+    const item = gs.selectedItem, cas = CASUALTIES.find(c => c.id === casId)
+    if (item === 'Recovery Position' || item === 'Remove Wet Clothes') { dispatch({ type: 'APPLY_TREATMENT', payload: { casId, item } }); playSuccess(); return }
+    if (cas.treatmentZone && zone !== cas.treatmentZone) { playError(); return }
+    dispatch({ type: 'APPLY_TREATMENT', payload: { casId, item } }); playSuccess()
   }, [gs.selectedItem])
 
-  // Score calculation
   const computeScore = useCallback(() => {
-    let triageCorrect = 0
-    let treatmentCorrect = 0
-    let survived = 0
-    let wastedOnBlack = false
-
+    let triageCorrect = 0, treatmentCorrect = 0, survived = 0, wastedOnBlack = false
     const details = CASUALTIES.map(cas => {
       const cs = gs.casualtyState[cas.id]
-      const tagCorrect = cs?.tag === cas.correctTag
-      if (tagCorrect) triageCorrect++
-
-      const treatCorrect = cas.correctTreatment.length === 0
-        ? cs?.treatments.length === 0
-        : cas.correctTreatment.every(t => cs?.treatments.includes(t))
-      if (treatCorrect) treatmentCorrect++
-
-      const alive = !cs?.dead
-      if (alive && cas.correctTag !== 'BLACK') survived++
-      if (cas.correctTag === 'BLACK' && alive) survived++ // BLACK is always "survived" in sense they were already dead
-
+      const tagOk = cs?.tag === cas.correctTag; if (tagOk) triageCorrect++
+      const treatOk = cas.correctTreatment.length === 0 ? cs?.treatments.length === 0 : cas.correctTreatment.every(t => cs?.treatments.includes(t)); if (treatOk) treatmentCorrect++
+      const alive = !cs?.dead; if (alive) survived++
       if (cas.id === 'CAS-5' && cs?.treatments.length > 0) wastedOnBlack = true
-
-      return {
-        cas,
-        tag: cs?.tag || 'NONE',
-        tagCorrect,
-        treatments: cs?.treatments || [],
-        treatCorrect,
-        alive,
-      }
+      return { cas, tag: cs?.tag || 'NONE', tagCorrect: tagOk, treatments: cs?.treatments || [], treatCorrect: treatOk, alive }
     })
-
-    // Score: triage 30%, treatment 40%, survival 20%, time/resource 10%
-    const triageScore = (triageCorrect / 5) * 30
-    const treatmentScore = (treatmentCorrect / 5) * 40
-    const survivalScore = (survived / 5) * 20
-    const bonusScore = (wastedOnBlack ? 0 : 5) + (gs.timer > 0 ? 5 : 0)
-    const total = Math.round(triageScore + treatmentScore + survivalScore + bonusScore)
-
-    return {
-      triageCorrect,
-      treatmentCorrect,
-      survived,
-      wastedOnBlack,
-      timeRemaining: gs.timer,
-      total,
-      passed: total >= 60,
-      details,
-    }
+    const n = NUM_PATIENTS
+    const total = Math.round((triageCorrect / n) * 30 + (treatmentCorrect / n) * 40 + (survived / n) * 20 + (wastedOnBlack ? 0 : 5) + (gs.timer > 0 ? 5 : 0))
+    return { triageCorrect, treatmentCorrect, survived, wastedOnBlack, timeRemaining: gs.timer, total, passed: total >= 60, details }
   }, [gs.casualtyState, gs.timer])
 
-  // Record score on report phase
   const scoreRecorded = useRef(false)
   useEffect(() => {
     if (gs.phase === 'report' && !scoreRecorded.current) {
-      scoreRecorded.current = true
-      const result = computeScore()
-      ctxDispatch({
-        type: 'RECORD_SCORE',
-        payload: { key: 'iron-tide', result: { score: result.total, passed: result.passed } },
-      })
+      scoreRecorded.current = true; const r = computeScore()
+      ctxDispatch({ type: 'RECORD_SCORE', payload: { key: 'iron-tide', result: { score: r.total, passed: r.passed } } })
     }
   }, [gs.phase])
 
-  /* ──────────────────────────────────────────
-     RENDER: START SCREEN
-     ────────────────────────────────────────── */
+  /* ═══════════ START SCREEN ═══════════ */
   if (gs.phase === 'start') {
     return (
-      <div style={{
-        position: 'fixed', inset: 0, background: COLORS.bg,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        fontFamily: '"Courier New", Courier, monospace', color: COLORS.text, overflow: 'hidden',
-      }}>
-        <RainEffect />
-        <Vignette intensity="normal" />
-        <ScanLine />
+      <div style={{ position: 'fixed', inset: 0, background: COLORS.bg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: '"Courier New",Courier,monospace', color: COLORS.text, overflow: 'hidden' }}>
+        {/* Background image */}
+        <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${SCENE_IMAGES.stormBg})`, backgroundSize: 'cover', backgroundPosition: 'center', opacity: 0.25, filter: 'brightness(0.6)' }} />
+        <RainEffect /><Vignette intensity="normal" /><ScanLine />
+        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1, background: 'rgba(200,210,255,.12)', animation: 'it-lightning 8s ease-in-out infinite' }} />
 
-        <div style={{ position: 'relative', zIndex: 5, textAlign: 'center', maxWidth: 700, padding: '0 24px' }}>
-          {/* Title */}
-          <h1 style={{
-            fontSize: '3rem', fontWeight: 900, letterSpacing: '0.25em', textTransform: 'uppercase',
-            color: COLORS.red, textShadow: `0 0 30px rgba(220,38,38,0.5), 0 0 60px rgba(220,38,38,0.2)`,
-            margin: '0 0 12px 0', lineHeight: 1.1,
-            fontFamily: '"Courier New", Courier, monospace',
-          }}>
+        <div style={{ position: 'relative', zIndex: 5, textAlign: 'center', maxWidth: 800, padding: '0 32px' }}>
+          <h1 style={{ fontSize: '4.2rem', fontWeight: 900, letterSpacing: '.25em', textTransform: 'uppercase', color: COLORS.red, textShadow: '0 0 40px rgba(220,38,38,.6),0 0 80px rgba(220,38,38,.3)', margin: '0 0 16px', lineHeight: 1.1 }}>
             OPERATION:<br />IRON TIDE
           </h1>
-
-          <div style={{
-            width: 120, height: 2, background: `linear-gradient(90deg, transparent, ${COLORS.red}, transparent)`,
-            margin: '0 auto 24px',
-          }} />
-
-          {/* Dispatch text */}
-          <div style={{
-            background: 'rgba(0,0,0,0.6)', border: `1px solid ${COLORS.red}33`,
-            padding: '20px 24px', borderRadius: 4, marginBottom: 28,
-            fontSize: '0.95rem', lineHeight: 1.7, textAlign: 'left', color: COLORS.amber,
-            minHeight: 90,
-          }}>
-            <span style={{ color: COLORS.red, fontWeight: 'bold' }}>FLASH // PRIORITY // </span>
-            <Typewriter
-              text='FLASH FLOOD — SECTOR 7. MULTIPLE CASUALTIES REPORTED. YOU ARE THE ONLY FIRST RESPONDER. BEGIN TRIAGE IMMEDIATELY.'
-              speed={30}
-              onDone={() => dispatch({ type: 'SET_TYPEWRITER_DONE' })}
-            />
+          <div style={{ width: 160, height: 3, background: `linear-gradient(90deg,transparent,${COLORS.red},transparent)`, margin: '0 auto 28px' }} />
+          <div style={{ background: 'rgba(0,0,0,.65)', border: `1px solid ${COLORS.red}44`, padding: '24px 28px', borderRadius: 6, marginBottom: 32, fontSize: '1.15rem', lineHeight: 1.8, textAlign: 'left', color: COLORS.amber, backdropFilter: 'blur(4px)' }}>
+            <span style={{ color: COLORS.red, fontWeight: 'bold', fontSize: '1.2rem' }}>FLASH // PRIORITY // </span>
+            <Typewriter text='FLASH FLOOD — SECTOR 7. MULTIPLE CASUALTIES REPORTED. 8 POTENTIAL VICTIMS. YOU ARE THE ONLY FIRST RESPONDER. SEARCH AND TRIAGE IMMEDIATELY.' speed={28} onDone={() => dispatch({ type: 'SET_TYPEWRITER_DONE' })} />
           </div>
-
-          {/* Status readouts */}
-          <div style={{
-            display: 'flex', justifyContent: 'center', gap: 32, marginBottom: 36,
-            fontSize: '0.8rem', color: COLORS.muted, letterSpacing: '0.1em',
-          }}>
-            <span>CASUALTIES: <span style={{ color: COLORS.red }}>UNKNOWN</span></span>
-            <span>TIME: <span style={{ color: COLORS.amber }}>06:00</span></span>
-            <span>SUPPLIES: <span style={{ color: COLORS.amber }}>LIMITED</span></span>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 40, marginBottom: 40, fontSize: '1rem', color: COLORS.muted, letterSpacing: '.1em' }}>
+            <span>CASUALTIES: <span style={{ color: COLORS.red, fontWeight: 'bold' }}>UP TO 8</span></span>
+            <span>TIME: <span style={{ color: COLORS.amber, fontWeight: 'bold' }}>07:00</span></span>
+            <span>LOCATIONS: <span style={{ color: COLORS.amber, fontWeight: 'bold' }}>11</span></span>
           </div>
-
-          {/* Deploy button */}
-          <button
-            onClick={() => dispatch({ type: 'START_GAME' })}
-            style={{
-              background: 'transparent', border: `2px solid ${COLORS.red}`,
-              color: COLORS.red, fontSize: '1.3rem', fontWeight: 900,
-              letterSpacing: '0.3em', padding: '14px 56px',
-              cursor: 'pointer', fontFamily: '"Courier New", Courier, monospace',
-              textTransform: 'uppercase',
-              animation: 'it-deploy-pulse 2s ease-in-out infinite',
-              transition: 'all 0.2s',
-              position: 'relative',
-            }}
+          <button onClick={() => dispatch({ type: 'START_GAME' })} style={{ background: 'transparent', border: `2px solid ${COLORS.red}`, color: COLORS.red, fontSize: '1.6rem', fontWeight: 900, letterSpacing: '.3em', padding: '18px 64px', cursor: 'pointer', fontFamily: '"Courier New",monospace', textTransform: 'uppercase', animation: 'it-deploy-pulse 2s ease-in-out infinite', transition: 'all .2s' }}
             onMouseEnter={e => { e.target.style.background = COLORS.red; e.target.style.color = '#fff' }}
             onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = COLORS.red }}
-          >
-            DEPLOY
-          </button>
+          >DEPLOY</button>
         </div>
       </div>
     )
   }
 
-  /* ──────────────────────────────────────────
-     RENDER: EXPLORATION PHASE
-     ────────────────────────────────────────── */
+  /* ═══════════ EXPLORATION PHASE — IMMERSIVE ═══════════ */
   if (gs.phase === 'explore') {
-    const vignetteIntensity = gs.timer < 60 ? 'fast' : gs.timer < 120 ? 'normal' : 'none'
-    const urgencyFilter = gs.timer < 60 ? 'contrast(1.2) brightness(0.95)' : 'none'
+    const vi = gs.timer < 60 ? 'fast' : gs.timer < 120 ? 'normal' : 'none'
+    const sceneHs = activeScene !== null ? HOTSPOTS[activeScene] : null
+    const sceneSearched = sceneHs ? gs.searchedHotspots.includes(sceneHs.id) : false
+    const sceneSearching = sceneHs ? gs.searchingHotspot === sceneHs.id : false
+    const sceneFound = sceneSearched && sceneHs?.hasCasualty
+    const sceneEmpty = sceneSearched && sceneHs && !sceneHs.hasCasualty
 
     return (
-      <div style={{
-        position: 'fixed', inset: 0, background: COLORS.bg,
-        fontFamily: '"Courier New", Courier, monospace', color: COLORS.text,
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        filter: urgencyFilter,
-        animation: gs.shakeScreen ? 'it-shake 0.4s ease-in-out' : 'none',
-      }}>
-        <Vignette intensity={vignetteIntensity} />
-
+      <div style={{ position: 'fixed', inset: 0, background: '#050510', fontFamily: '"Courier New",monospace', color: COLORS.text, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Vignette intensity={vi} />
         {/* HUD */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '12px 20px', background: 'rgba(0,0,0,0.8)',
-          borderBottom: `1px solid ${COLORS.red}33`, zIndex: 10,
-        }}>
-          <div style={{ display: 'flex', gap: 28, fontSize: '0.8rem', letterSpacing: '0.08em' }}>
-            <span>CASUALTIES FOUND: <span style={{ color: COLORS.green }}>{gs.foundCasualties.length}/5</span></span>
-            <span>SEARCHED: <span style={{ color: COLORS.blue }}>{gs.searchedHotspots.length}/7</span></span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: 'rgba(0,0,0,.9)', borderBottom: `2px solid ${COLORS.red}33`, zIndex: 20, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 28, fontSize: '1rem', letterSpacing: '.08em' }}>
+            <span>CASUALTIES: <span style={{ color: COLORS.green, fontWeight: 'bold' }}>{gs.foundCasualties.length}/{NUM_PATIENTS}</span></span>
+            <span>SEARCHED: <span style={{ color: COLORS.blue, fontWeight: 'bold' }}>{gs.searchedHotspots.length}/{HOTSPOTS.length}</span></span>
           </div>
-          <div style={{
-            fontSize: '1.5rem', fontWeight: 'bold',
-            color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green,
-            animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none',
-          }}>
+          <div style={{ fontSize: '2rem', fontWeight: 'bold', color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green, animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none' }}>
             {formatTime(gs.timer)}
           </div>
         </div>
 
-        {/* Main content area */}
-        <div style={{
-          flex: 1, display: 'flex', padding: 16, gap: 16, position: 'relative', zIndex: 5,
-        }}>
-          {/* Map */}
-          <div style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <div style={{
-              width: 600, height: 500, position: 'relative',
-              background: '#0d0d1a', border: `1px solid ${COLORS.muted}33`,
-              borderRadius: 4, overflow: 'hidden',
-            }}>
-              {/* Grid lines */}
-              {Array.from({ length: 12 }, (_, i) => (
-                <div key={`gx${i}`} style={{
-                  position: 'absolute', left: `${(i + 1) * (100 / 12)}%`, top: 0,
-                  width: 1, height: '100%', background: 'rgba(100,116,139,0.08)',
-                }} />
-              ))}
-              {Array.from({ length: 10 }, (_, i) => (
-                <div key={`gy${i}`} style={{
-                  position: 'absolute', top: `${(i + 1) * (100 / 10)}%`, left: 0,
-                  height: 1, width: '100%', background: 'rgba(100,116,139,0.08)',
-                }} />
-              ))}
-
-              {/* Flooded street */}
-              <div style={{
-                position: 'absolute', left: 30, top: 180, width: 200, height: 80,
-                background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)',
-                borderRadius: 2,
-              }}>
-                <div style={{ position: 'absolute', bottom: 2, left: 4, fontSize: '0.55rem', color: COLORS.blue, opacity: 0.6 }}>
-                  FLOODED STREET
-                </div>
-              </div>
-
-              {/* Collapsed building */}
-              <div style={{
-                position: 'absolute', left: 140, top: 60, width: 100, height: 80,
-                background: 'rgba(120,90,60,0.25)', border: '1px solid rgba(120,90,60,0.4)',
-                borderRadius: 2,
-              }}>
-                {/* Rubble blocks */}
-                <div style={{ position: 'absolute', left: 10, top: 15, width: 25, height: 18, background: 'rgba(100,80,60,0.5)', transform: 'rotate(12deg)' }} />
-                <div style={{ position: 'absolute', left: 45, top: 25, width: 30, height: 15, background: 'rgba(90,70,50,0.5)', transform: 'rotate(-8deg)' }} />
-                <div style={{ position: 'absolute', left: 20, top: 45, width: 20, height: 20, background: 'rgba(80,65,45,0.5)', transform: 'rotate(5deg)' }} />
-                <div style={{ position: 'absolute', bottom: 2, left: 4, fontSize: '0.55rem', color: '#a08060', opacity: 0.6 }}>
-                  COLLAPSED BLDG
-                </div>
-              </div>
-
-              {/* Overturned vehicle */}
-              <div style={{
-                position: 'absolute', left: 350, top: 220, width: 90, height: 50,
-                background: 'rgba(100,100,120,0.3)', border: '1px solid rgba(100,100,120,0.5)',
-                borderRadius: 3, transform: 'rotate(25deg)',
-              }}>
-                <div style={{
-                  position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%) rotate(-25deg)',
-                  fontSize: '0.5rem', color: COLORS.muted, opacity: 0.6, whiteSpace: 'nowrap',
-                }}>
-                  VEHICLE
-                </div>
-              </div>
-
-              {/* Floating debris */}
-              <div style={{
-                position: 'absolute', left: 460, top: 340, width: 80, height: 60,
-                background: 'rgba(59,130,246,0.1)', border: '1px dashed rgba(100,80,60,0.4)',
-                borderRadius: 8,
-              }}>
-                {[12, 35, 55].map((l, i) => (
-                  <div key={i} style={{
-                    position: 'absolute', left: l, top: 10 + i * 12, width: 12 + i * 4, height: 6,
-                    background: 'rgba(100,80,50,0.4)', borderRadius: 2, transform: `rotate(${i * 15 - 10}deg)`,
-                  }} />
-                ))}
-                <div style={{ position: 'absolute', bottom: 2, left: 4, fontSize: '0.5rem', color: COLORS.muted, opacity: 0.5 }}>
-                  DEBRIS
-                </div>
-              </div>
-
-              {/* Intact building */}
-              <div style={{
-                position: 'absolute', left: 80, top: 340, width: 110, height: 90,
-                background: 'rgba(60,60,80,0.3)', border: '1px solid rgba(60,60,80,0.5)',
-                borderRadius: 2,
-              }}>
-                {/* Door */}
-                <div style={{
-                  position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-                  width: 18, height: 28, background: 'rgba(40,40,55,0.7)', border: '1px solid rgba(100,100,130,0.3)',
-                }} />
-                <div style={{ position: 'absolute', top: 4, left: 6, fontSize: '0.5rem', color: COLORS.muted, opacity: 0.5 }}>
-                  INTACT BLDG
-                </div>
-              </div>
-
-              {/* Bridge */}
-              <div style={{
-                position: 'absolute', left: 270, top: 100, width: 100, height: 60,
-                background: 'rgba(80,80,90,0.25)', border: '1px solid rgba(80,80,90,0.4)',
-                borderRadius: '4px 4px 0 0',
-              }}>
-                <div style={{
-                  position: 'absolute', bottom: 0, left: 0, right: 0, height: 8,
-                  background: 'rgba(80,80,90,0.5)',
-                }} />
-                <div style={{ position: 'absolute', bottom: 12, left: 8, fontSize: '0.5rem', color: COLORS.muted, opacity: 0.5 }}>
-                  UNDER BRIDGE
-                </div>
-              </div>
-
-              {/* Playground */}
-              <div style={{
-                position: 'absolute', left: 420, top: 60, width: 110, height: 80,
-                background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.25)',
-                borderRadius: 2,
-              }}>
-                {/* Swing frame */}
-                <div style={{ position: 'absolute', left: 20, top: 15, width: 2, height: 30, background: 'rgba(150,150,170,0.3)' }} />
-                <div style={{ position: 'absolute', left: 50, top: 15, width: 2, height: 30, background: 'rgba(150,150,170,0.3)' }} />
-                <div style={{ position: 'absolute', left: 18, top: 15, width: 36, height: 2, background: 'rgba(150,150,170,0.3)' }} />
-                <div style={{ position: 'absolute', bottom: 2, left: 4, fontSize: '0.5rem', color: COLORS.blue, opacity: 0.5 }}>
-                  PLAYGROUND
-                </div>
-              </div>
-
-              {/* Hotspots */}
-              {HOTSPOTS.map(hs => {
-                const searched = gs.searchedHotspots.includes(hs.id)
-                const isSearching = gs.searchingHotspot === hs.id
-                const found = searched && hs.hasCasualty
-                const empty = searched && !hs.hasCasualty
-
-                return (
-                  <div key={hs.id} style={{ position: 'absolute', left: hs.x - 16, top: hs.y - 16 }}>
-                    <button
-                      onClick={() => !searched && !isSearching && startSearch(hs.id)}
-                      disabled={searched || (gs.searchingHotspot !== null && !isSearching)}
-                      style={{
-                        width: 32, height: 32, borderRadius: '50%',
-                        border: found ? `2px solid ${COLORS.green}` : empty ? `2px solid ${COLORS.muted}` : `2px solid ${COLORS.red}`,
-                        background: found ? 'rgba(34,197,94,0.15)' : empty ? 'rgba(100,116,139,0.1)' : 'rgba(220,38,38,0.1)',
-                        cursor: searched ? 'default' : 'pointer',
-                        animation: searched ? 'none' : 'it-pulse-glow 2s ease-in-out infinite',
-                        position: 'relative',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '0.6rem', color: found ? COLORS.green : empty ? COLORS.muted : COLORS.red,
-                        fontFamily: '"Courier New", Courier, monospace',
-                        fontWeight: 'bold',
-                        transition: 'all 0.3s',
-                      }}
-                    >
-                      {found ? '!' : empty ? 'x' : '?'}
-                    </button>
-                    {/* Search progress bar */}
-                    {isSearching && (
-                      <div style={{
-                        position: 'absolute', top: 36, left: -10, width: 52, height: 4,
-                        background: 'rgba(0,0,0,0.6)', borderRadius: 2, overflow: 'hidden',
-                      }}>
-                        <div style={{
-                          height: '100%', background: COLORS.amber,
-                          width: `${gs.searchProgress}%`,
-                          transition: 'width 0.05s linear',
-                          borderRadius: 2,
-                        }} />
-                      </div>
-                    )}
-                    {/* Label */}
-                    {isSearching && (
-                      <div style={{
-                        position: 'absolute', top: 44, left: -30, width: 92,
-                        fontSize: '0.55rem', color: COLORS.amber, textAlign: 'center',
-                        letterSpacing: '0.05em',
-                      }}>
-                        SEARCHING...
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-
-              {/* Map title */}
-              <div style={{
-                position: 'absolute', top: 6, left: 8,
-                fontSize: '0.65rem', color: COLORS.muted, letterSpacing: '0.1em', opacity: 0.5,
-              }}>
-                SECTOR 7 — DISASTER ZONE
-              </div>
-            </div>
-          </div>
-
-          {/* Sidebar */}
-          <div style={{
-            width: 240, display: 'flex', flexDirection: 'column', gap: 12,
-          }}>
-            {/* Found casualties list */}
-            <div style={{
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-              borderRadius: 4, padding: 12, flex: 1,
-            }}>
-              <div style={{
-                fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                marginBottom: 10, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-              }}>
-                FOUND CASUALTIES
-              </div>
-              {gs.foundCasualties.length === 0 && (
-                <div style={{ fontSize: '0.75rem', color: COLORS.muted, fontStyle: 'italic' }}>
-                  Search hotspots to find casualties...
-                </div>
-              )}
+        {activeScene !== null && sceneHs ? (
+          /* ──── SCENE INVESTIGATION VIEW ──── */
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <SceneInvestigation
+              hotspot={sceneHs}
+              onBack={() => setActiveScene(null)}
+              onStartSearch={() => startSearch(sceneHs.id)}
+              searching={sceneSearching}
+              progress={gs.searchProgress}
+              done={sceneSearched}
+              found={sceneFound}
+            />
+            {/* Mini sidebar */}
+            <div style={{ width: 220, background: 'rgba(10,15,25,.95)', borderLeft: `1px solid ${COLORS.muted}22`, display: 'flex', flexDirection: 'column', gap: 10, padding: 12, overflowY: 'auto', flexShrink: 0 }}>
+              <div style={{ fontSize: '.8rem', color: COLORS.amber, fontWeight: 'bold', letterSpacing: '.08em', borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6 }}>FOUND</div>
+              {gs.foundCasualties.length === 0 && <div style={{ fontSize: '.8rem', color: COLORS.muted, fontStyle: 'italic' }}>No casualties yet...</div>}
               {gs.foundCasualties.map(casId => {
                 const cas = CASUALTIES.find(c => c.id === casId)
-                const cs = gs.casualtyState[casId]
-                return (
-                  <div key={casId} style={{
-                    padding: '6px 8px', margin: '4px 0', borderRadius: 3,
-                    background: cs?.dead ? 'rgba(100,100,100,0.15)' : 'rgba(220,38,38,0.08)',
-                    border: `1px solid ${cs?.dead ? COLORS.muted + '33' : COLORS.red + '33'}`,
-                    fontSize: '0.72rem',
-                  }}>
-                    <div style={{ color: cs?.dead ? COLORS.muted : COLORS.text, fontWeight: 'bold' }}>
-                      {cas.id}: {cas.name}
-                    </div>
-                    <div style={{ color: COLORS.muted, fontSize: '0.6rem', marginTop: 2 }}>
-                      {cas.location} {cs?.dead && ' — DECEASED'}
-                    </div>
-                  </div>
-                )
+                return <div key={casId} style={{ fontSize: '.8rem', color: COLORS.text, padding: '4px 0', borderBottom: `1px solid ${COLORS.muted}11` }}>{cas.id}: {cas.name}</div>
               })}
+              <div style={{ flex: 1 }} />
+              {sceneSearched && (
+                <button onClick={() => setActiveScene(null)} style={{ background: 'rgba(59,130,246,.15)', border: `1px solid ${COLORS.blue}44`, color: COLORS.blue, padding: '10px', borderRadius: 5, cursor: 'pointer', fontSize: '.85rem', fontWeight: 'bold', fontFamily: '"Courier New",monospace' }}>
+                  NEXT LOCATION →
+                </button>
+              )}
+              {gs.foundCasualties.length > 0 && (
+                <button onClick={() => dispatch({ type: 'BEGIN_TRIAGE' })} style={{ background: `linear-gradient(135deg,${COLORS.red},#b91c1c)`, color: '#fff', border: 'none', padding: '10px', borderRadius: 5, fontSize: '.85rem', fontWeight: 'bold', cursor: 'pointer', fontFamily: '"Courier New",monospace' }}>
+                  TRIAGE ({gs.foundCasualties.length})
+                </button>
+              )}
             </div>
-
-            {/* Supplies overview */}
-            <div style={{
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-              borderRadius: 4, padding: 12,
-            }}>
-              <div style={{
-                fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-              }}>
-                SUPPLIES
-              </div>
-              {Object.entries(gs.supplies).map(([name, qty]) => (
-                <div key={name} style={{
-                  display: 'flex', justifyContent: 'space-between',
-                  fontSize: '0.65rem', color: qty > 0 ? COLORS.text : COLORS.muted,
-                  padding: '2px 0', textDecoration: qty <= 0 ? 'line-through' : 'none',
-                }}>
-                  <span>{name}</span>
-                  <span style={{ color: qty > 0 ? COLORS.green : COLORS.red }}>{qty}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Begin Triage button */}
-            {gs.foundCasualties.length > 0 && (
-              <button
-                onClick={() => dispatch({ type: 'BEGIN_TRIAGE' })}
-                style={{
-                  background: COLORS.red, color: '#fff', border: 'none',
-                  padding: '12px 0', borderRadius: 4, fontSize: '0.85rem',
-                  fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.15em',
-                  fontFamily: '"Courier New", Courier, monospace',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={e => e.target.style.background = '#ef4444'}
-                onMouseLeave={e => e.target.style.background = COLORS.red}
-              >
-                BEGIN TRIAGE ({gs.foundCasualties.length} found)
-              </button>
-            )}
           </div>
-        </div>
+        ) : (
+          /* ──── OVERHEAD MAP VIEW ──── */
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            {/* Map area */}
+            <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+              {/* Aerial flood background */}
+              <div style={{ position: 'absolute', inset: 0, backgroundImage: `url(${SCENE_IMAGES.playground})`, backgroundSize: 'cover', backgroundPosition: 'center', filter: 'brightness(0.25) saturate(0.6)', }} />
+              <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at center, rgba(10,20,40,0.3) 0%, rgba(5,10,20,0.7) 100%)' }} />
+              <RainEffect />
+
+              {/* Map title */}
+              <div style={{ position: 'absolute', top: 16, left: 20, zIndex: 10 }}>
+                <div style={{ fontSize: '1.3rem', fontWeight: 'bold', color: COLORS.text, textShadow: '0 2px 8px rgba(0,0,0,.8)', letterSpacing: '.1em' }}>SECTOR 7 — DISASTER ZONE</div>
+                <div style={{ fontSize: '.85rem', color: COLORS.muted, marginTop: 4, textShadow: '0 1px 4px rgba(0,0,0,.8)' }}>Click a location to investigate. Use your flashlight to search for survivors.</div>
+              </div>
+
+              {/* Location markers — arranged on the map */}
+              <div style={{ position: 'absolute', inset: 60, display: 'flex', flexWrap: 'wrap', alignContent: 'center', justifyContent: 'center', gap: 12, padding: '40px 20px' }}>
+                {HOTSPOTS.map(hs => {
+                  const searched = gs.searchedHotspots.includes(hs.id)
+                  const found = searched && hs.hasCasualty
+                  const empty = searched && !hs.hasCasualty
+                  return (
+                    <div key={hs.id}
+                      onClick={() => !searched && setActiveScene(hs.id)}
+                      style={{
+                        width: 185, position: 'relative', borderRadius: 8, overflow: 'hidden',
+                        border: found ? `2px solid ${COLORS.green}` : empty ? `2px solid ${COLORS.muted}33` : `2px solid ${COLORS.red}55`,
+                        cursor: searched ? 'default' : 'pointer',
+                        opacity: empty ? 0.4 : 1,
+                        transition: 'all .3s, transform .2s',
+                        boxShadow: found ? '0 0 20px rgba(34,197,94,.25)' : !searched ? '0 0 15px rgba(220,38,38,.15)' : 'none',
+                        transform: searched ? 'scale(0.95)' : 'scale(1)',
+                      }}
+                      onMouseEnter={e => { if (!searched) e.currentTarget.style.transform = 'scale(1.04)' }}
+                      onMouseLeave={e => { e.currentTarget.style.transform = searched ? 'scale(0.95)' : 'scale(1)' }}
+                    >
+                      {/* Thumbnail image */}
+                      <div style={{
+                        height: 80, backgroundImage: `url(${hs.img})`, backgroundSize: 'cover', backgroundPosition: 'center',
+                        filter: empty ? 'grayscale(1) brightness(0.3)' : found ? 'brightness(0.5)' : 'brightness(0.45)',
+                      }} />
+                      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 80, background: 'linear-gradient(180deg, rgba(0,0,0,.3) 0%, rgba(0,0,0,.6) 100%)' }} />
+
+                      {/* Status badge */}
+                      {found && <div style={{ position: 'absolute', top: 6, right: 6, background: COLORS.red, color: '#fff', padding: '2px 8px', borderRadius: 3, fontSize: '.65rem', fontWeight: 'bold' }}>FOUND</div>}
+                      {empty && <div style={{ position: 'absolute', top: 6, right: 6, background: COLORS.muted, color: '#fff', padding: '2px 8px', borderRadius: 3, fontSize: '.65rem', fontWeight: 'bold' }}>CLEAR</div>}
+                      {!searched && <div style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(220,38,38,.3)', border: `1px solid ${COLORS.red}66`, color: COLORS.red, padding: '2px 8px', borderRadius: 3, fontSize: '.65rem', fontWeight: 'bold', animation: 'it-pulse-glow 2s ease-in-out infinite' }}>?</div>}
+
+                      {/* Label */}
+                      <div style={{ padding: '8px 10px', background: 'rgba(10,15,25,.95)' }}>
+                        <div style={{ fontSize: '.82rem', fontWeight: 'bold', color: searched ? COLORS.muted : COLORS.text }}>{hs.label}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Right sidebar */}
+            <div style={{ width: 250, background: 'rgba(10,15,25,.95)', borderLeft: `1px solid ${COLORS.muted}22`, display: 'flex', flexDirection: 'column', gap: 12, padding: 16, flexShrink: 0 }}>
+              <div style={{ fontSize: '.9rem', color: COLORS.amber, fontWeight: 'bold', letterSpacing: '.08em', borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8 }}>FOUND CASUALTIES</div>
+              {gs.foundCasualties.length === 0 && <div style={{ fontSize: '.85rem', color: COLORS.muted, fontStyle: 'italic' }}>Investigate locations to find survivors...</div>}
+              {gs.foundCasualties.map(casId => {
+                const cas = CASUALTIES.find(c => c.id === casId), cs = gs.casualtyState[casId]
+                return <div key={casId} style={{ padding: '8px 10px', borderRadius: 4, background: cs?.dead ? 'rgba(100,100,100,.15)' : 'rgba(220,38,38,.08)', border: `1px solid ${cs?.dead ? COLORS.muted + '33' : COLORS.red + '33'}`, fontSize: '.85rem' }}>
+                  <div style={{ color: cs?.dead ? COLORS.muted : COLORS.text, fontWeight: 'bold' }}>{cas.id}: {cas.name}</div>
+                  <div style={{ color: COLORS.muted, fontSize: '.7rem', marginTop: 2 }}>{cas.location}{cs?.dead ? ' — DECEASED' : ''}</div>
+                </div>
+              })}
+              <div style={{ flex: 1 }} />
+              <div style={{ background: 'rgba(17,24,39,.8)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 12 }}>
+                <div style={{ fontSize: '.8rem', color: COLORS.amber, fontWeight: 'bold', marginBottom: 6 }}>SUPPLIES</div>
+                {Object.entries(gs.supplies).map(([name, qty]) => <div key={name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.75rem', color: qty > 0 ? COLORS.text : COLORS.muted, padding: '2px 0' }}><span>{name}</span><span style={{ color: qty > 0 ? COLORS.green : COLORS.red, fontWeight: 'bold' }}>{qty}</span></div>)}
+              </div>
+              {gs.foundCasualties.length > 0 && (
+                <button onClick={() => dispatch({ type: 'BEGIN_TRIAGE' })} style={{ background: `linear-gradient(135deg,${COLORS.red},#b91c1c)`, color: '#fff', border: 'none', padding: '14px 0', borderRadius: 6, fontSize: '1.05rem', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '.12em', fontFamily: '"Courier New",monospace', boxShadow: '0 4px 20px rgba(220,38,38,.3)' }}>
+                  BEGIN TRIAGE ({gs.foundCasualties.length})
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
 
-  /* ──────────────────────────────────────────
-     RENDER: TRIAGE PHASE
-     ────────────────────────────────────────── */
+  /* ═══════════ TRIAGE PHASE ═══════════ */
   if (gs.phase === 'triage') {
-    const vignetteIntensity = gs.timer < 60 ? 'fast' : gs.timer < 120 ? 'normal' : 'none'
-    const urgencyFilter = gs.timer < 60 ? 'contrast(1.2) brightness(0.95)' : 'none'
+    const vi = gs.timer < 60 ? 'fast' : gs.timer < 120 ? 'normal' : 'none'
 
-    // Casualty list view
+    /* ---- Casualty list ---- */
     if (!gs.currentCasualty) {
       return (
-        <div style={{
-          position: 'fixed', inset: 0, background: COLORS.bg,
-          fontFamily: '"Courier New", Courier, monospace', color: COLORS.text,
-          display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          filter: urgencyFilter,
-        }}>
-          <Vignette intensity={vignetteIntensity} />
-
-          {/* HUD */}
-          <div style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '12px 20px', background: 'rgba(0,0,0,0.8)',
-            borderBottom: `1px solid ${COLORS.red}33`, zIndex: 10,
-          }}>
-            <div style={{ fontSize: '0.8rem', letterSpacing: '0.08em' }}>
-              TRIAGE MODE — <span style={{ color: COLORS.amber }}>SELECT CASUALTY</span>
-            </div>
-            <div style={{
-              fontSize: '1.5rem', fontWeight: 'bold',
-              color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green,
-              animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none',
-            }}>
-              {formatTime(gs.timer)}
-            </div>
+        <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(180deg,#060610 0%,#0a1020 50%,#080d18 100%)', fontFamily: '"Courier New",monospace', color: COLORS.text, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <Vignette intensity={vi} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 24px', background: 'rgba(0,0,0,.85)', borderBottom: `2px solid ${COLORS.red}33`, zIndex: 10 }}>
+            <div style={{ fontSize: '1.05rem', letterSpacing: '.08em' }}>TRIAGE MODE — <span style={{ color: COLORS.amber, fontWeight: 'bold' }}>SELECT CASUALTY</span></div>
+            <div style={{ fontSize: '2rem', fontWeight: 'bold', color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green, animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none' }}>{formatTime(gs.timer)}</div>
           </div>
-
-          <div style={{
-            flex: 1, display: 'flex', padding: 20, gap: 16, position: 'relative', zIndex: 5,
-          }}>
-            {/* Casualty cards */}
+          <div style={{ flex: 1, display: 'flex', padding: 24, gap: 20, position: 'relative', zIndex: 5 }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' }}>
               {gs.foundCasualties.map(casId => {
-                const cas = CASUALTIES.find(c => c.id === casId)
-                const cs = gs.casualtyState[casId]
+                const cas = CASUALTIES.find(c => c.id === casId), cs = gs.casualtyState[casId]
                 return (
-                  <button
-                    key={casId}
-                    onClick={() => dispatch({ type: 'SELECT_CASUALTY', payload: casId })}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 16,
-                      background: cs.dead ? 'rgba(50,50,50,0.3)' : COLORS.panel,
-                      border: `1px solid ${cs.dead ? COLORS.muted + '33' : cs.tag ? tagColor(cs.tag) + '66' : COLORS.red + '33'}`,
-                      borderRadius: 4, padding: '14px 18px',
-                      cursor: 'pointer', textAlign: 'left',
-                      fontFamily: '"Courier New", Courier, monospace',
-                      color: COLORS.text, transition: 'all 0.2s',
-                      animation: !cs.dead && !cs.treated && cas.degradeRate > 0 ? 'it-pulse-glow 3s ease-in-out infinite' : 'none',
-                      opacity: cs.dead ? 0.5 : 1,
-                    }}
-                    onMouseEnter={e => { if (!cs.dead) e.currentTarget.style.borderColor = COLORS.amber }}
-                    onMouseLeave={e => e.currentTarget.style.borderColor = cs.dead ? COLORS.muted + '33' : cs.tag ? tagColor(cs.tag) + '66' : COLORS.red + '33'}
-                  >
-                    {/* Tag indicator */}
-                    <div style={{
-                      width: 40, height: 40, borderRadius: 4, flexShrink: 0,
-                      background: cs.tag ? tagColor(cs.tag) : 'rgba(100,116,139,0.2)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: '0.6rem', fontWeight: 'bold', color: '#fff',
-                    }}>
-                      {cs.tag || '???'}
-                    </div>
-
+                  <button key={casId} onClick={() => dispatch({ type: 'SELECT_CASUALTY', payload: casId })} style={{
+                    display: 'flex', alignItems: 'center', gap: 16, background: cs.dead ? 'rgba(50,50,50,.3)' : 'rgba(17,24,39,.9)',
+                    border: `1px solid ${cs.dead ? COLORS.muted + '33' : cs.tag ? tagColor(cs.tag) + '66' : COLORS.red + '33'}`,
+                    borderRadius: 6, padding: '14px 18px', cursor: 'pointer', textAlign: 'left', fontFamily: '"Courier New",monospace', color: COLORS.text, transition: 'all .2s',
+                    animation: !cs.dead && !cs.treated && cas.degradeRate > 0 ? 'it-pulse-glow 3s ease-in-out infinite' : 'none', opacity: cs.dead ? 0.5 : 1,
+                  }}>
+                    <div style={{ width: 46, height: 46, borderRadius: 6, flexShrink: 0, background: cs.tag ? tagColor(cs.tag) : 'rgba(100,116,139,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '.75rem', fontWeight: 'bold', color: '#fff' }}>{cs.tag || '???'}</div>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 'bold', fontSize: '0.9rem' }}>
-                        {cas.id}: {cas.name}
-                      </div>
-                      <div style={{ fontSize: '0.7rem', color: COLORS.muted, marginTop: 2 }}>
-                        {cas.location}
-                      </div>
+                      <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{cas.id}: {cas.name}</div>
+                      <div style={{ fontSize: '.85rem', color: COLORS.muted, marginTop: 2 }}>{cas.location}</div>
                     </div>
-
-                    {/* Quick vitals */}
-                    <div style={{ textAlign: 'right', fontSize: '0.7rem' }}>
-                      <div style={{ color: cs.dead ? COLORS.muted : cs.vitals.hr < 50 ? COLORS.red : COLORS.green }}>
-                        HR: {cs.dead ? '---' : Math.round(cs.vitals.hr)}
-                      </div>
-                      <div style={{
-                        color: cs.dead ? COLORS.muted : cs.vitals.status === 'CRITICAL' ? COLORS.red : cs.vitals.status === 'STABLE' ? COLORS.green : COLORS.amber,
-                        fontWeight: 'bold', marginTop: 2,
-                      }}>
-                        {cs.vitals.status}
-                      </div>
+                    <div style={{ textAlign: 'right', fontSize: '.9rem' }}>
+                      <div style={{ color: cs.dead ? COLORS.muted : cs.vitals.hr < 50 ? COLORS.red : COLORS.green }}>HR: {cs.dead ? '---' : Math.round(cs.vitals.hr)}</div>
+                      <div style={{ color: cs.dead ? COLORS.muted : cs.vitals.status === 'CRITICAL' ? COLORS.red : cs.vitals.status === 'STABLE' ? COLORS.green : COLORS.amber, fontWeight: 'bold', marginTop: 2 }}>{cs.vitals.status}</div>
                     </div>
-
-                    {/* Treatment status */}
-                    <div style={{
-                      fontSize: '0.6rem', color: cs.treated ? COLORS.green : COLORS.amber,
-                      width: 60, textAlign: 'center',
-                    }}>
-                      {cs.treated ? 'TREATED' : cs.treatments.length > 0 ? 'PARTIAL' : 'UNTREATED'}
-                    </div>
+                    <div style={{ fontSize: '.75rem', color: cs.treated ? COLORS.green : COLORS.amber, width: 68, textAlign: 'center', fontWeight: 'bold' }}>{cs.treated ? 'TREATED' : cs.treatments.length > 0 ? 'PARTIAL' : 'UNTREATED'}</div>
                   </button>
                 )
               })}
             </div>
-
-            {/* Right panel: supplies + finish */}
-            <div style={{ width: 220, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{
-                background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-                borderRadius: 4, padding: 12,
-              }}>
-                <div style={{
-                  fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                  marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-                }}>
-                  MED KIT
-                </div>
-                {Object.entries(gs.supplies).map(([name, qty]) => (
-                  <div key={name} style={{
-                    display: 'flex', justifyContent: 'space-between',
-                    fontSize: '0.65rem', color: qty > 0 ? COLORS.text : COLORS.muted,
-                    padding: '2px 0', textDecoration: qty <= 0 ? 'line-through' : 'none',
-                  }}>
-                    <span>{name}</span>
-                    <span style={{ color: qty > 0 ? COLORS.green : COLORS.red }}>{qty}</span>
-                  </div>
-                ))}
+            <div style={{ width: 250, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <div style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 16 }}>
+                <div style={{ fontSize: '.9rem', color: COLORS.amber, letterSpacing: '.1em', marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8, fontWeight: 'bold' }}>MED KIT</div>
+                {Object.entries(gs.supplies).map(([n, q]) => <div key={n} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '.8rem', color: q > 0 ? COLORS.text : COLORS.muted, padding: '2px 0', textDecoration: q <= 0 ? 'line-through' : 'none' }}><span>{n}</span><span style={{ color: q > 0 ? COLORS.green : COLORS.red, fontWeight: 'bold' }}>{q}</span></div>)}
               </div>
-
-              <button
-                onClick={() => dispatch({ type: 'FINISH_GAME' })}
-                style={{
-                  background: COLORS.amber, color: '#000', border: 'none',
-                  padding: '12px 0', borderRadius: 4, fontSize: '0.8rem',
-                  fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.12em',
-                  fontFamily: '"Courier New", Courier, monospace',
-                }}
-              >
-                FINISH TRIAGE
-              </button>
-
-              {/* Instructions */}
-              <div style={{
-                background: 'rgba(0,0,0,0.4)', borderRadius: 4, padding: 10,
-                fontSize: '0.6rem', color: COLORS.muted, lineHeight: 1.6,
-              }}>
-                <div style={{ color: COLORS.amber, marginBottom: 4 }}>PROCEDURE:</div>
-                1. Select a casualty<br />
-                2. Check vitals (breathing, pulse, wounds)<br />
-                3. Assign triage tag<br />
-                4. Apply correct treatments<br />
-                5. Move to next patient
+              <button onClick={() => dispatch({ type: 'FINISH_GAME' })} style={{ background: `linear-gradient(135deg,${COLORS.amber},#d97706)`, color: '#000', border: 'none', padding: '14px 0', borderRadius: 6, fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '.12em', fontFamily: '"Courier New",monospace' }}>FINISH TRIAGE</button>
+              <div style={{ background: 'rgba(0,0,0,.5)', borderRadius: 6, padding: 14, fontSize: '.85rem', color: COLORS.muted, lineHeight: 1.7 }}>
+                <div style={{ color: COLORS.amber, marginBottom: 6, fontWeight: 'bold' }}>PROCEDURE:</div>
+                1. Select a casualty<br />2. Use medical tools to examine<br />3. Toggle X-RAY for bones<br />4. Rotate 3D body to inspect<br />5. Assign triage tag<br />6. Apply treatments<br />7. Check ? for official sources
               </div>
             </div>
           </div>
@@ -1355,581 +1028,144 @@ export default function IronTide() {
       )
     }
 
-    // Individual casualty examination view
-    const cas = CASUALTIES.find(c => c.id === gs.currentCasualty)
-    const cs = gs.casualtyState[gs.currentCasualty]
-
-    // Body zone click handler
-    const handleZoneClick = (zone) => {
-      if (gs.selectedItem) {
-        handleApplyItem(gs.currentCasualty, zone)
-      }
-    }
-
-    // Determine body outline highlight colors per casualty
-    const bodyHighlights = {
-      'CAS-1': { chest: 'rgba(59,130,246,0.4)' },
-      'CAS-2': { rightLeg: 'rgba(220,38,38,0.4)' },
-      'CAS-3': { leftArm: 'rgba(245,158,11,0.4)' },
-      'CAS-4': { torso: 'rgba(59,130,246,0.3)', head: 'rgba(59,130,246,0.2)', leftArm: 'rgba(59,130,246,0.2)', rightArm: 'rgba(59,130,246,0.2)', leftLeg: 'rgba(59,130,246,0.2)', rightLeg: 'rgba(59,130,246,0.2)' },
-      'CAS-5': { head: 'rgba(80,80,80,0.6)' },
-    }
-    const highlights = bodyHighlights[cas.id] || {}
-
-    // Skin color for body based on vitals
-    const skinBg = cs.dead ? '#333'
-      : cas.id === 'CAS-1' ? `rgba(59,130,246,${0.05 + (100 - cs.vitals.spo2) * 0.004})`
-      : cas.id === 'CAS-4' ? 'rgba(59,130,246,0.08)'
-      : 'rgba(200,180,160,0.08)'
+    /* ---- Individual examination ---- */
+    const cas = CASUALTIES.find(c => c.id === gs.currentCasualty), cs = gs.casualtyState[gs.currentCasualty]
+    const handleZoneClick = (zone) => { if (gs.selectedItem) handleApplyItem(gs.currentCasualty, zone) }
 
     return (
-      <div style={{
-        position: 'fixed', inset: 0, background: COLORS.bg,
-        fontFamily: '"Courier New", Courier, monospace', color: COLORS.text,
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        animation: gs.shakeScreen ? 'it-shake 0.4s ease-in-out' : 'none',
-      }}>
+      <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(180deg,#050510 0%,#0a0f1a 50%,#060810 100%)', fontFamily: '"Courier New",monospace', color: COLORS.text, display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: gs.shakeScreen ? 'it-shake .4s ease-in-out' : 'none' }}>
         <Vignette intensity={gs.timer < 60 ? 'fast' : gs.timer < 120 ? 'normal' : 'none'} />
-
         {/* HUD */}
-        <div style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          padding: '10px 20px', background: 'rgba(0,0,0,0.8)',
-          borderBottom: `1px solid ${COLORS.red}33`, zIndex: 10,
-        }}>
-          <button
-            onClick={() => dispatch({ type: 'BACK_TO_LIST' })}
-            style={{
-              background: 'transparent', border: `1px solid ${COLORS.muted}44`,
-              color: COLORS.text, padding: '4px 14px', borderRadius: 3,
-              cursor: 'pointer', fontSize: '0.75rem',
-              fontFamily: '"Courier New", Courier, monospace',
-            }}
-          >
-            &lt; BACK TO LIST
-          </button>
-          <div style={{ fontSize: '0.85rem', color: COLORS.amber }}>
-            {cas.id}: {cas.name} — <span style={{ color: COLORS.muted }}>{cas.location}</span>
-          </div>
-          <div style={{
-            fontSize: '1.3rem', fontWeight: 'bold',
-            color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green,
-            animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none',
-          }}>
-            {formatTime(gs.timer)}
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 24px', background: 'rgba(0,0,0,.85)', borderBottom: `2px solid ${COLORS.red}33`, zIndex: 10 }}>
+          <button onClick={() => dispatch({ type: 'BACK_TO_LIST' })} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${COLORS.muted}44`, color: COLORS.text, padding: '6px 18px', borderRadius: 4, cursor: 'pointer', fontSize: '.95rem', fontFamily: '"Courier New",monospace' }}>&lt; BACK</button>
+          <div style={{ fontSize: '1.1rem', color: COLORS.amber, fontWeight: 'bold' }}>{cas.id}: {cas.name} — <span style={{ color: COLORS.muted, fontWeight: 'normal' }}>{cas.location}</span></div>
+          <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: gs.timer < 60 ? COLORS.red : gs.timer < 120 ? COLORS.amber : COLORS.green, animation: gs.timer < 60 ? 'it-heartbeat 1s ease-in-out infinite' : 'none' }}>{formatTime(gs.timer)}</div>
         </div>
+        {gs.errorMsg && <div style={{ background: 'rgba(220,38,38,.15)', border: `1px solid ${COLORS.red}`, padding: '12px 24px', fontSize: '1rem', color: COLORS.red, textAlign: 'center', zIndex: 10, animation: 'it-fade-in .3s ease', fontWeight: 'bold' }}>{gs.errorMsg}</div>}
 
-        {/* Error banner */}
-        {gs.errorMsg && (
-          <div style={{
-            background: 'rgba(220,38,38,0.15)', border: `1px solid ${COLORS.red}`,
-            padding: '10px 20px', fontSize: '0.8rem', color: COLORS.red,
-            textAlign: 'center', zIndex: 10, animation: 'it-fade-in 0.3s ease',
-          }}>
-            {gs.errorMsg}
-          </div>
-        )}
-
-        <div style={{
-          flex: 1, display: 'flex', padding: 16, gap: 16, position: 'relative', zIndex: 5,
-          overflow: 'hidden',
-        }}>
-          {/* Left: Body diagram + vitals */}
+        <div style={{ flex: 1, display: 'flex', padding: 16, gap: 16, position: 'relative', zIndex: 5, overflow: 'hidden' }}>
+          {/* LEFT: Vitals + 3D Body */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {/* Vitals panel */}
-            <div style={{
-              display: 'flex', gap: 16, background: COLORS.panel,
-              border: `1px solid ${COLORS.muted}22`, borderRadius: 4, padding: '10px 16px',
-            }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em' }}>HEART RATE</div>
-                <div style={{
-                  fontSize: '1.6rem', fontWeight: 'bold',
-                  color: cs.dead ? COLORS.muted : cs.vitals.hr < 50 ? COLORS.red : cs.vitals.hr > 120 ? COLORS.amber : COLORS.green,
-                  animation: cs.dead ? 'none' : 'it-heartbeat 1.2s ease-in-out infinite',
-                }}>
-                  {cs.dead ? '---' : Math.round(cs.vitals.hr)}
-                </div>
-                <div style={{ fontSize: '0.55rem', color: COLORS.muted }}>BPM</div>
-              </div>
-              <div style={{ width: 1, background: COLORS.muted + '22' }} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em' }}>RESP RATE</div>
-                <div style={{
-                  fontSize: '1.6rem', fontWeight: 'bold',
-                  color: cs.dead ? COLORS.muted : cs.vitals.rr < 10 ? COLORS.red : COLORS.green,
-                }}>
-                  {cs.dead ? '---' : Math.round(cs.vitals.rr)}
-                </div>
-                <div style={{ fontSize: '0.55rem', color: COLORS.muted }}>/min</div>
-              </div>
-              <div style={{ width: 1, background: COLORS.muted + '22' }} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em' }}>SpO2</div>
-                <div style={{
-                  fontSize: '1.6rem', fontWeight: 'bold',
-                  color: cs.dead ? COLORS.muted : cs.vitals.spo2 < 85 ? COLORS.red : cs.vitals.spo2 < 92 ? COLORS.amber : COLORS.green,
-                }}>
-                  {cs.dead ? '---' : Math.round(cs.vitals.spo2)}
-                </div>
-                <div style={{ fontSize: '0.55rem', color: COLORS.muted }}>%</div>
-              </div>
-              <div style={{ width: 1, background: COLORS.muted + '22' }} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em' }}>SKIN</div>
-                <div style={{ fontSize: '0.85rem', color: cs.dead ? COLORS.muted : COLORS.text, marginTop: 4 }}>
-                  {cs.vitals.skin}
-                </div>
-              </div>
-              <div style={{ width: 1, background: COLORS.muted + '22' }} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em' }}>STATUS</div>
-                <div style={{
-                  fontSize: '0.95rem', fontWeight: 'bold', marginTop: 4,
-                  color: cs.vitals.status === 'DECEASED' ? COLORS.muted
-                    : cs.vitals.status === 'CRITICAL' ? COLORS.red
-                    : cs.vitals.status === 'STABLE' ? COLORS.green
-                    : COLORS.amber,
-                }}>
-                  {cs.vitals.status}
-                </div>
-              </div>
+            {/* Vitals */}
+            <div style={{ display: 'flex', gap: 16, background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: '12px 18px' }}>
+              {[
+                { l: 'HR', v: cs.dead ? '---' : Math.round(cs.vitals.hr), u: 'BPM', c: cs.dead ? COLORS.muted : cs.vitals.hr < 50 ? COLORS.red : cs.vitals.hr > 120 ? COLORS.amber : COLORS.green, anim: !cs.dead },
+                { l: 'RR', v: cs.dead ? '---' : Math.round(cs.vitals.rr), u: '/min', c: cs.dead ? COLORS.muted : cs.vitals.rr < 10 ? COLORS.red : COLORS.green },
+                { l: 'SpO2', v: cs.dead ? '---' : Math.round(cs.vitals.spo2), u: '%', c: cs.dead ? COLORS.muted : cs.vitals.spo2 < 85 ? COLORS.red : cs.vitals.spo2 < 92 ? COLORS.amber : COLORS.green },
+                { l: 'SKIN', v: cs.vitals.skin, u: '', c: cs.dead ? COLORS.muted : COLORS.text, txt: true },
+                { l: 'STATUS', v: cs.vitals.status, u: '', c: cs.vitals.status === 'DECEASED' ? COLORS.muted : cs.vitals.status === 'CRITICAL' ? COLORS.red : cs.vitals.status === 'STABLE' ? COLORS.green : COLORS.amber, txt: true },
+              ].map((x, i) => <div key={i} style={{ textAlign: 'center', flex: x.txt ? 1.2 : 1 }}>
+                <div style={{ fontSize: '.75rem', color: COLORS.muted, letterSpacing: '.1em', fontWeight: 'bold' }}>{x.l}</div>
+                <div style={{ fontSize: x.txt ? '1rem' : '2rem', fontWeight: 'bold', color: x.c, marginTop: x.txt ? 4 : 0, animation: x.anim ? 'it-heartbeat 1.2s ease-in-out infinite' : 'none' }}>{x.v}</div>
+                {x.u && <div style={{ fontSize: '.7rem', color: COLORS.muted }}>{x.u}</div>}
+              </div>)}
             </div>
 
-            {/* Body diagram */}
-            <div style={{
-              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`, borderRadius: 4,
-              position: 'relative', overflow: 'hidden',
-              opacity: cs.dead ? 0.4 : 1, transition: 'opacity 1s',
-            }}>
-              {cs.dead && (
-                <div style={{
-                  position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  zIndex: 20, fontSize: '2rem', fontWeight: 'bold', color: COLORS.muted, letterSpacing: '0.2em',
-                }}>
-                  DECEASED
-                </div>
-              )}
-
-              {/* Shivering effect for CAS-4 */}
-              <div style={{
-                animation: cas.id === 'CAS-4' && !cs.dead && !cs.treated
-                  ? `it-shiver ${0.15 + cs.degradeTime * 0.003}s ease-in-out infinite`
-                  : 'none',
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-              }}>
-                {/* Body outline - simplified human figure using divs */}
-                <div style={{ position: 'relative', width: 160, height: 340 }}>
-                  {/* Head */}
-                  <div
-                    onClick={() => handleZoneClick('head')}
-                    style={{
-                      position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
-                      width: 44, height: 48, borderRadius: '50%',
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.head || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transition: 'background 2s',
-                    }}
-                    title="Head"
-                  />
-
-                  {/* Neck */}
-                  <div style={{
-                    position: 'absolute', top: 48, left: '50%', transform: 'translateX(-50%)',
-                    width: 16, height: 14, background: skinBg, border: `1px solid ${COLORS.muted}44`,
-                  }} />
-
-                  {/* Torso / Chest */}
-                  <div
-                    onClick={() => handleZoneClick('chest')}
-                    style={{
-                      position: 'absolute', top: 62, left: '50%', transform: 'translateX(-50%)',
-                      width: 72, height: 55, borderRadius: '4px 4px 0 0',
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.chest || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transition: 'background 2s',
-                    }}
-                    title="Chest"
-                  />
-
-                  {/* Torso lower */}
-                  <div
-                    onClick={() => handleZoneClick('torso')}
-                    style={{
-                      position: 'absolute', top: 117, left: '50%', transform: 'translateX(-50%)',
-                      width: 68, height: 50, borderRadius: '0 0 4px 4px',
-                      border: `2px solid ${COLORS.muted}66`, borderTop: 'none',
-                      background: highlights.torso || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transition: 'background 2s',
-                    }}
-                    title="Torso"
-                  />
-
-                  {/* Left arm */}
-                  <div
-                    onClick={() => handleZoneClick('leftArm')}
-                    style={{
-                      position: 'absolute', top: 68, left: 8, width: 26, height: 90,
-                      borderRadius: 8,
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.leftArm || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transform: 'rotate(8deg)',
-                      transition: 'background 2s',
-                    }}
-                    title="Left Arm"
-                  />
-
-                  {/* Right arm */}
-                  <div
-                    onClick={() => handleZoneClick('rightArm')}
-                    style={{
-                      position: 'absolute', top: 68, right: 8, width: 26, height: 90,
-                      borderRadius: 8,
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.rightArm || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transform: 'rotate(-8deg)',
-                      transition: 'background 2s',
-                    }}
-                    title="Right Arm"
-                  />
-
-                  {/* Left leg */}
-                  <div
-                    onClick={() => handleZoneClick('leftLeg')}
-                    style={{
-                      position: 'absolute', top: 170, left: 32, width: 30, height: 110,
-                      borderRadius: 6,
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.leftLeg || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transition: 'background 2s',
-                    }}
-                    title="Left Leg"
-                  />
-
-                  {/* Right leg */}
-                  <div
-                    onClick={() => handleZoneClick('rightLeg')}
-                    style={{
-                      position: 'absolute', top: 170, right: 32, width: 30, height: 110,
-                      borderRadius: 6,
-                      border: `2px solid ${COLORS.muted}66`,
-                      background: highlights.rightLeg || skinBg,
-                      cursor: gs.selectedItem ? 'crosshair' : 'pointer',
-                      transition: 'background 2s',
-                    }}
-                    title="Right Leg"
-                  />
-
-                  {/* Left foot */}
-                  <div style={{
-                    position: 'absolute', top: 280, left: 28, width: 38, height: 16,
-                    borderRadius: '4px 4px 8px 8px',
-                    background: skinBg, border: `1px solid ${COLORS.muted}44`,
-                  }} />
-
-                  {/* Right foot */}
-                  <div style={{
-                    position: 'absolute', top: 280, right: 28, width: 38, height: 16,
-                    borderRadius: '4px 4px 8px 8px',
-                    background: skinBg, border: `1px solid ${COLORS.muted}44`,
-                  }} />
-
-                  {/* Blood pool for CAS-2 */}
-                  {cas.id === 'CAS-2' && !cs.treated && !cs.dead && (
-                    <div style={{
-                      position: 'absolute', top: 255, right: 20,
-                      width: 10 + cs.degradeTime * 0.6, height: 6 + cs.degradeTime * 0.3,
-                      maxWidth: 70, maxHeight: 35,
-                      background: 'radial-gradient(ellipse, rgba(220,38,38,0.7), rgba(220,38,38,0.2))',
-                      borderRadius: '50%', transition: 'all 0.5s',
-                    }} />
-                  )}
-
-                  {/* Treatment applied indicators */}
-                  {cs.treatments.includes('Rescue Breathing Mask') && (
-                    <div style={{
-                      position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)',
-                      width: 36, height: 18, border: `2px solid ${COLORS.green}`,
-                      borderRadius: '0 0 12px 12px', background: 'rgba(34,197,94,0.15)',
-                      animation: 'it-pulse-glow-green 2s ease-in-out infinite',
-                    }} />
-                  )}
-                  {cs.treatments.includes('Tourniquet') && cas.id === 'CAS-2' && (
-                    <div style={{
-                      position: 'absolute', top: 175, right: 30, width: 34, height: 8,
-                      background: COLORS.red, borderRadius: 4, opacity: 0.7,
-                    }} />
-                  )}
-                  {cs.treatments.includes('Pressure Bandage') && cas.id === 'CAS-2' && (
-                    <div style={{
-                      position: 'absolute', top: 210, right: 28, width: 36, height: 24,
-                      background: 'rgba(255,255,255,0.2)', border: `1px solid ${COLORS.green}`,
-                      borderRadius: 4,
-                    }} />
-                  )}
-                  {cs.treatments.includes('Gauze Pads') && cas.id === 'CAS-3' && (
-                    <div style={{
-                      position: 'absolute', top: 100, left: 6, width: 30, height: 20,
-                      background: 'rgba(255,255,255,0.2)', border: `1px solid ${COLORS.green}`,
-                      borderRadius: 3,
-                    }} />
-                  )}
-                  {cs.treatments.includes('Mylar Blanket') && cas.id === 'CAS-4' && (
-                    <div style={{
-                      position: 'absolute', top: 55, left: '50%', transform: 'translateX(-50%)',
-                      width: 80, height: 120, background: 'rgba(245,158,11,0.15)',
-                      border: `1px solid ${COLORS.amber}44`, borderRadius: 4,
-                    }} />
-                  )}
-                </div>
-
-                {/* Patient label */}
-                <div style={{
-                  marginTop: 8, fontSize: '0.65rem', color: COLORS.muted, letterSpacing: '0.08em',
-                  textAlign: 'center',
-                }}>
-                  {cas.id === 'CAS-4' ? 'CHILD' : 'ADULT'} — CLICK BODY ZONES TO EXAMINE / APPLY TREATMENT
+            {/* 3D Body */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'rgba(17,24,39,.9)', border: `1px solid ${xrayMode ? COLORS.blue + '44' : COLORS.muted + '22'}`, borderRadius: 6, overflow: 'hidden', position: 'relative', transition: 'border-color .5s', boxShadow: xrayMode ? '0 0 30px rgba(59,130,246,.15)' : '0 2px 15px rgba(0,0,0,.3)' }}>
+              {cs.dead && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 20, fontSize: '2.5rem', fontWeight: 'bold', color: COLORS.muted, letterSpacing: '.2em', background: 'rgba(0,0,0,.5)', pointerEvents: 'none' }}>DECEASED</div>}
+              <div style={{ flex: 1, opacity: cs.dead ? 0.3 : 1, transition: 'opacity 1s' }}>
+                <HumanBody3D casualtyId={gs.currentCasualty} casualtyState={cs} selectedItem={gs.selectedItem} onZoneClick={handleZoneClick} xrayMode={xrayMode} />
+              </div>
+              {/* Controls */}
+              <div style={{ position: 'absolute', bottom: 12, left: 12, right: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'none' }}>
+                <button onClick={() => { setXrayMode(m => !m); playXray() }} style={{ pointerEvents: 'auto', background: xrayMode ? 'rgba(59,130,246,.3)' : 'rgba(0,0,0,.6)', border: `2px solid ${xrayMode ? COLORS.blue : COLORS.muted + '66'}`, color: xrayMode ? COLORS.blue : COLORS.text, padding: '10px 22px', borderRadius: 6, cursor: 'pointer', fontSize: '1rem', fontWeight: 'bold', fontFamily: '"Courier New",monospace', letterSpacing: '.15em', animation: xrayMode ? 'it-pulse-glow-blue 2s ease-in-out infinite' : 'none', backdropFilter: 'blur(4px)' }}>
+                  {xrayMode ? 'X-RAY: ON' : 'X-RAY: OFF'}
+                </button>
+                <div style={{ pointerEvents: 'auto', background: 'rgba(0,0,0,.6)', padding: '8px 16px', borderRadius: 4, fontSize: '.8rem', color: COLORS.muted, backdropFilter: 'blur(4px)' }}>
+                  {cas.id === 'CAS-4' ? 'CHILD' : 'ADULT'} — Drag to rotate
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Right panel: checks, tag, med kit */}
-          <div style={{
-            width: 300, display: 'flex', flexDirection: 'column', gap: 10,
-            overflowY: 'auto',
-          }}>
-            {/* Examination buttons */}
-            <div style={{
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-              borderRadius: 4, padding: 12,
-            }}>
-              <div style={{
-                fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-              }}>
-                EXAMINATION
-              </div>
+          {/* RIGHT PANEL */}
+          <div style={{ width: 340, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', position: 'relative' }}>
+            {/* Source citation ? button */}
+            <button onClick={() => setShowSources(s => !s)} style={{
+              position: 'absolute', top: 0, right: 0, zIndex: 40, width: 36, height: 36, borderRadius: '50%',
+              background: showSources ? COLORS.blue : 'rgba(59,130,246,.15)', border: `2px solid ${COLORS.blue}`,
+              color: showSources ? '#fff' : COLORS.blue, fontSize: '1.1rem', fontWeight: 'bold', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'serif',
+              boxShadow: '0 2px 10px rgba(0,0,0,.3)', transition: 'all .2s',
+            }}>?</button>
 
-              {/* Check Breathing */}
-              <button
-                onClick={() => {
-                  dispatch({ type: 'CHECK_VITALS', payload: { casId: cas.id, checkType: 'breathing' } })
-                }}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: 6,
-                  background: cs.checks.includes('breathing') ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${cs.checks.includes('breathing') ? COLORS.green + '44' : COLORS.muted + '22'}`,
-                  borderRadius: 3, cursor: 'pointer', color: COLORS.text,
-                  fontFamily: '"Courier New", Courier, monospace', fontSize: '0.75rem',
-                }}
-              >
-                <span style={{ color: COLORS.blue }}>CHECK BREATHING</span>
-                {cs.checks.includes('breathing') && (
-                  <div style={{ fontSize: '0.68rem', color: COLORS.muted, marginTop: 4, lineHeight: 1.4 }}>
-                    {cas.breathingResult}
-                  </div>
-                )}
-              </button>
+            {/* Sources panel overlay */}
+            {showSources && <SourcesPanel casId={gs.currentCasualty} onClose={() => setShowSources(false)} />}
 
-              {/* Check Pulse */}
-              <button
-                onClick={() => {
-                  dispatch({ type: 'CHECK_VITALS', payload: { casId: cas.id, checkType: 'pulse' } })
-                }}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: 6,
-                  background: cs.checks.includes('pulse') ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${cs.checks.includes('pulse') ? COLORS.green + '44' : COLORS.muted + '22'}`,
-                  borderRadius: 3, cursor: 'pointer', color: COLORS.text,
-                  fontFamily: '"Courier New", Courier, monospace', fontSize: '0.75rem',
-                }}
-              >
-                <span style={{ color: COLORS.blue }}>CHECK PULSE</span>
-                {cs.checks.includes('pulse') && (
-                  <div style={{ fontSize: '0.68rem', color: COLORS.muted, marginTop: 4, lineHeight: 1.4 }}>
-                    {cas.pulseResult}
-                  </div>
-                )}
-              </button>
-
-              {/* Examine Wounds */}
-              <button
-                onClick={() => {
-                  dispatch({ type: 'CHECK_VITALS', payload: { casId: cas.id, checkType: 'wounds' } })
-                }}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '8px 10px',
-                  background: cs.checks.includes('wounds') ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)',
-                  border: `1px solid ${cs.checks.includes('wounds') ? COLORS.green + '44' : COLORS.muted + '22'}`,
-                  borderRadius: 3, cursor: 'pointer', color: COLORS.text,
-                  fontFamily: '"Courier New", Courier, monospace', fontSize: '0.75rem',
-                }}
-              >
-                <span style={{ color: COLORS.blue }}>EXAMINE WOUNDS</span>
-                {cs.checks.includes('wounds') && (
-                  <div style={{ fontSize: '0.68rem', color: COLORS.muted, marginTop: 4, lineHeight: 1.4 }}>
-                    {cas.woundsResult}
-                  </div>
-                )}
-              </button>
+            {/* Examination */}
+            <div style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: '.95rem', color: COLORS.amber, letterSpacing: '.1em', marginBottom: 10, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8, fontWeight: 'bold' }}>MEDICAL EXAMINATION</div>
+              {[
+                { key: 'breathing', label: 'STETHOSCOPE — BREATHING', result: cas.breathingResult },
+                { key: 'pulse', label: 'PULSE OXIMETER — PULSE', result: cas.pulseResult },
+                { key: 'wounds', label: 'PHYSICAL EXAM — WOUNDS', result: cas.woundsResult },
+                { key: 'pupils', label: 'PENLIGHT — PUPILS', result: cas.pupilResult },
+                { key: 'temperature', label: 'THERMOMETER — TEMP', result: cas.temperatureResult },
+                { key: 'bp', label: 'BP CUFF — BLOOD PRESSURE', result: cas.bpResult },
+              ].map(({ key, label, result }) => (
+                <button key={key} onClick={() => dispatch({ type: 'CHECK_VITALS', payload: { casId: cas.id, checkType: key } })} style={{
+                  width: '100%', textAlign: 'left', padding: '9px 12px', marginBottom: 5,
+                  background: cs.checks.includes(key) ? 'rgba(34,197,94,.1)' : 'rgba(255,255,255,.03)',
+                  border: `1px solid ${cs.checks.includes(key) ? COLORS.green + '44' : COLORS.muted + '22'}`,
+                  borderRadius: 5, cursor: 'pointer', color: COLORS.text, fontFamily: '"Courier New",monospace', fontSize: '.9rem',
+                  animation: !cs.checks.includes(key) && ['breathing', 'pulse', 'wounds'].includes(key) ? 'it-equipment-glow 3s ease-in-out infinite' : 'none',
+                }}>
+                  <span style={{ color: COLORS.blue, fontWeight: 'bold' }}>{label}</span>
+                  {cs.checks.includes(key) && <div style={{ fontSize: '.85rem', color: COLORS.muted, marginTop: 5, lineHeight: 1.5 }}>{result}</div>}
+                </button>
+              ))}
             </div>
 
-            {/* Triage tag assignment */}
-            <div style={{
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-              borderRadius: 4, padding: 12,
-            }}>
-              <div style={{
-                fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-              }}>
-                TRIAGE TAG
+            {/* Triage tag */}
+            <div style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: '.95rem', color: COLORS.amber, letterSpacing: '.1em', marginBottom: 10, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8, fontWeight: 'bold' }}>TRIAGE TAG</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {TRIAGE_TAGS.map(tag => <button key={tag} onClick={() => dispatch({ type: 'SET_TAG', payload: { casId: cas.id, tag } })} style={{
+                  flex: 1, padding: '10px 4px', borderRadius: 5,
+                  border: cs.tag === tag ? '2px solid #fff' : `1px solid ${tagColor(tag)}66`,
+                  background: cs.tag === tag ? tagColor(tag) : 'transparent',
+                  color: cs.tag === tag ? '#fff' : tagColor(tag),
+                  fontSize: '.85rem', fontWeight: 'bold', cursor: 'pointer', fontFamily: '"Courier New",monospace',
+                  boxShadow: cs.tag === tag ? `0 0 15px ${tagColor(tag)}44` : 'none',
+                }}>{tag}</button>)}
               </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {TRIAGE_TAGS.map(tag => (
-                  <button
-                    key={tag}
-                    onClick={() => dispatch({ type: 'SET_TAG', payload: { casId: cas.id, tag } })}
-                    style={{
-                      flex: 1, padding: '8px 4px', borderRadius: 3,
-                      border: cs.tag === tag ? `2px solid #fff` : `1px solid ${tagColor(tag)}66`,
-                      background: cs.tag === tag ? tagColor(tag) : 'transparent',
-                      color: cs.tag === tag ? '#fff' : tagColor(tag),
-                      fontSize: '0.65rem', fontWeight: 'bold', cursor: 'pointer',
-                      fontFamily: '"Courier New", Courier, monospace',
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-              {cs.tag && (
-                <div style={{
-                  marginTop: 6, fontSize: '0.6rem', color: COLORS.muted, textAlign: 'center',
-                }}>
-                  Tagged as: <span style={{ color: tagColor(cs.tag), fontWeight: 'bold' }}>{cs.tag}</span>
-                </div>
-              )}
+              {cs.tag && <div style={{ marginTop: 8, fontSize: '.85rem', color: COLORS.muted, textAlign: 'center' }}>Tagged: <span style={{ color: tagColor(cs.tag), fontWeight: 'bold' }}>{cs.tag}</span></div>}
             </div>
 
             {/* Med Kit */}
-            <div style={{
-              background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-              borderRadius: 4, padding: 12,
-            }}>
-              <div style={{
-                fontSize: '0.7rem', color: COLORS.amber, letterSpacing: '0.1em',
-                marginBottom: 8, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 6,
-              }}>
-                MED KIT {gs.selectedItem && <span style={{ color: COLORS.green }}>— HOLDING: {gs.selectedItem}</span>}
+            <div style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: '.95rem', color: COLORS.amber, letterSpacing: '.1em', marginBottom: 10, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8, fontWeight: 'bold' }}>
+                MED KIT {gs.selectedItem && <span style={{ color: COLORS.green }}>— {gs.selectedItem}</span>}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {Object.entries(gs.supplies).map(([name, qty]) => (
-                  <button
-                    key={name}
-                    onClick={() => {
-                      if (qty > 0 && !cs.dead) {
-                        dispatch({ type: 'SELECT_ITEM', payload: name })
-                      }
-                    }}
-                    disabled={qty <= 0 || cs.dead}
-                    style={{
-                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      padding: '6px 8px', borderRadius: 3,
-                      background: gs.selectedItem === name ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.02)',
-                      border: gs.selectedItem === name ? `1px solid ${COLORS.green}` : `1px solid ${COLORS.muted}22`,
-                      color: qty > 0 ? COLORS.text : COLORS.muted,
-                      cursor: qty > 0 && !cs.dead ? 'pointer' : 'not-allowed',
-                      fontFamily: '"Courier New", Courier, monospace', fontSize: '0.7rem',
-                      textDecoration: qty <= 0 ? 'line-through' : 'none',
-                      opacity: qty <= 0 ? 0.4 : 1,
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <span>{name}</span>
-                    <span style={{
-                      color: qty > 0 ? COLORS.green : COLORS.red,
-                      fontWeight: 'bold', minWidth: 16, textAlign: 'right',
-                    }}>{qty}</span>
-                  </button>
-                ))}
+                {Object.entries(gs.supplies).map(([name, qty]) => <button key={name} onClick={() => { if (qty > 0 && !cs.dead) dispatch({ type: 'SELECT_ITEM', payload: name }) }} disabled={qty <= 0 || cs.dead} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 10px', borderRadius: 5,
+                  background: gs.selectedItem === name ? 'rgba(34,197,94,.15)' : 'rgba(255,255,255,.02)',
+                  border: gs.selectedItem === name ? `2px solid ${COLORS.green}` : `1px solid ${COLORS.muted}22`,
+                  color: qty > 0 ? COLORS.text : COLORS.muted, cursor: qty > 0 && !cs.dead ? 'pointer' : 'not-allowed',
+                  fontFamily: '"Courier New",monospace', fontSize: '.85rem', textDecoration: qty <= 0 ? 'line-through' : 'none', opacity: qty <= 0 ? 0.4 : 1,
+                }}><span>{name}</span><span style={{ color: qty > 0 ? COLORS.green : COLORS.red, fontWeight: 'bold' }}>{qty}</span></button>)}
               </div>
-
-              {gs.selectedItem && (
-                <button
-                  onClick={() => dispatch({ type: 'DESELECT_ITEM' })}
-                  style={{
-                    marginTop: 8, width: '100%', padding: '6px 0',
-                    background: 'rgba(220,38,38,0.1)', border: `1px solid ${COLORS.red}44`,
-                    borderRadius: 3, color: COLORS.red, fontSize: '0.65rem',
-                    cursor: 'pointer', fontFamily: '"Courier New", Courier, monospace',
-                  }}
-                >
-                  DROP ITEM
-                </button>
-              )}
+              {gs.selectedItem && <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1, padding: 8, fontSize: '.8rem', color: COLORS.green, background: 'rgba(34,197,94,.08)', borderRadius: 4, border: `1px solid ${COLORS.green}33`, textAlign: 'center' }}>Click body zone to apply</div>
+                <button onClick={() => dispatch({ type: 'DESELECT_ITEM' })} style={{ padding: '8px 14px', background: 'rgba(220,38,38,.1)', border: `1px solid ${COLORS.red}44`, borderRadius: 4, color: COLORS.red, fontSize: '.8rem', cursor: 'pointer', fontFamily: '"Courier New",monospace', fontWeight: 'bold' }}>DROP</button>
+              </div>}
             </div>
 
-            {/* Special action buttons (Recovery Position, Remove Wet Clothes) */}
+            {/* Special actions */}
             {cas.id === 'CAS-1' && cs.treatments.includes('Rescue Breathing Mask') && !cs.treatments.includes('Recovery Position') && !cs.dead && (
-              <button
-                onClick={() => {
-                  dispatch({ type: 'APPLY_TREATMENT', payload: { casId: cas.id, item: 'Recovery Position' } })
-                  playSuccess()
-                }}
-                style={{
-                  background: COLORS.blue, color: '#fff', border: 'none',
-                  padding: '10px 0', borderRadius: 4, fontSize: '0.8rem',
-                  fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.1em',
-                  fontFamily: '"Courier New", Courier, monospace',
-                  animation: 'it-pulse-glow-green 2s ease-in-out infinite',
-                }}
-              >
-                PLACE IN RECOVERY POSITION
-              </button>
+              <button onClick={() => { dispatch({ type: 'APPLY_TREATMENT', payload: { casId: cas.id, item: 'Recovery Position' } }); playSuccess() }} style={{ background: `linear-gradient(135deg,${COLORS.blue},#2563eb)`, color: '#fff', border: 'none', padding: '12px 0', borderRadius: 6, fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '.1em', fontFamily: '"Courier New",monospace', animation: 'it-pulse-glow-green 2s ease-in-out infinite' }}>RECOVERY POSITION</button>
             )}
-
             {cas.id === 'CAS-4' && !cs.treatments.includes('Remove Wet Clothes') && !cs.dead && (
-              <button
-                onClick={() => {
-                  dispatch({ type: 'APPLY_TREATMENT', payload: { casId: cas.id, item: 'Remove Wet Clothes' } })
-                  playSuccess()
-                }}
-                style={{
-                  background: COLORS.blue, color: '#fff', border: 'none',
-                  padding: '10px 0', borderRadius: 4, fontSize: '0.8rem',
-                  fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.1em',
-                  fontFamily: '"Courier New", Courier, monospace',
-                }}
-              >
-                REMOVE WET CLOTHING
-              </button>
+              <button onClick={() => { dispatch({ type: 'APPLY_TREATMENT', payload: { casId: cas.id, item: 'Remove Wet Clothes' } }); playSuccess() }} style={{ background: `linear-gradient(135deg,${COLORS.blue},#2563eb)`, color: '#fff', border: 'none', padding: '12px 0', borderRadius: 6, fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer', fontFamily: '"Courier New",monospace' }}>REMOVE WET CLOTHING</button>
             )}
 
-            {/* Applied treatments list */}
+            {/* Applied treatments */}
             {cs.treatments.length > 0 && (
-              <div style={{
-                background: 'rgba(34,197,94,0.05)', border: `1px solid ${COLORS.green}22`,
-                borderRadius: 4, padding: 10,
-              }}>
-                <div style={{ fontSize: '0.65rem', color: COLORS.green, letterSpacing: '0.08em', marginBottom: 4 }}>
-                  APPLIED TREATMENTS
-                </div>
-                {cs.treatments.map((t, i) => (
-                  <div key={i} style={{ fontSize: '0.65rem', color: COLORS.text, padding: '1px 0' }}>
-                    + {t}
-                  </div>
-                ))}
+              <div style={{ background: 'rgba(34,197,94,.06)', border: `1px solid ${COLORS.green}22`, borderRadius: 6, padding: 12 }}>
+                <div style={{ fontSize: '.85rem', color: COLORS.green, letterSpacing: '.08em', marginBottom: 6, fontWeight: 'bold' }}>APPLIED</div>
+                {cs.treatments.map((t, i) => <div key={i} style={{ fontSize: '.85rem', color: COLORS.text, padding: '2px 0' }}>+ {t}</div>)}
               </div>
             )}
           </div>
@@ -1938,196 +1174,89 @@ export default function IronTide() {
     )
   }
 
-  /* ──────────────────────────────────────────
-     RENDER: AFTER-ACTION REPORT
-     ────────────────────────────────────────── */
+  /* ═══════════ REPORT ═══════════ */
   if (gs.phase === 'report') {
-    const result = computeScore()
-
+    const r = computeScore()
     return (
-      <div style={{
-        position: 'fixed', inset: 0, background: COLORS.bg,
-        fontFamily: '"Courier New", Courier, monospace', color: COLORS.text,
-        overflow: 'auto',
-      }}>
+      <div style={{ position: 'fixed', inset: 0, background: 'linear-gradient(180deg,#050510 0%,#0a0f1a 50%,#060810 100%)', fontFamily: '"Courier New",monospace', color: COLORS.text, overflow: 'auto' }}>
         <Vignette intensity="none" />
-
-        <div style={{
-          maxWidth: 800, margin: '0 auto', padding: '30px 24px',
-          position: 'relative', zIndex: 5,
-        }}>
-          {/* Header */}
-          <div style={{ textAlign: 'center', marginBottom: 30 }}>
-            <div style={{
-              fontSize: '0.7rem', color: COLORS.red, letterSpacing: '0.2em', marginBottom: 8,
-            }}>
-              CLASSIFIED // AFTER-ACTION REPORT
-            </div>
-            <h1 style={{
-              fontSize: '2rem', fontWeight: 900, letterSpacing: '0.15em',
-              color: COLORS.text, margin: 0,
-            }}>
-              OPERATION: IRON TIDE
-            </h1>
-            <div style={{
-              width: 100, height: 2, background: `linear-gradient(90deg, transparent, ${COLORS.red}, transparent)`,
-              margin: '12px auto',
-            }} />
-            <div style={{ fontSize: '0.75rem', color: COLORS.muted }}>
-              DEBRIEF — SECTOR 7 FLASH FLOOD RESPONSE
-            </div>
+        <div style={{ maxWidth: 900, margin: '0 auto', padding: '36px 28px', position: 'relative', zIndex: 5 }}>
+          <div style={{ textAlign: 'center', marginBottom: 36 }}>
+            <div style={{ fontSize: '.95rem', color: COLORS.red, letterSpacing: '.2em', marginBottom: 10, fontWeight: 'bold' }}>CLASSIFIED // AFTER-ACTION REPORT</div>
+            <h1 style={{ fontSize: '2.8rem', fontWeight: 900, letterSpacing: '.15em', color: COLORS.text, margin: 0 }}>OPERATION: IRON TIDE</h1>
+            <div style={{ width: 140, height: 3, background: `linear-gradient(90deg,transparent,${COLORS.red},transparent)`, margin: '14px auto' }} />
+            <div style={{ fontSize: '1rem', color: COLORS.muted }}>DEBRIEF — SECTOR 7 FLASH FLOOD — {NUM_PATIENTS} CASUALTIES</div>
           </div>
 
-          {/* Score overview */}
-          <div style={{
-            display: 'flex', gap: 16, marginBottom: 24, justifyContent: 'center', flexWrap: 'wrap',
-          }}>
+          {/* Stats */}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 28, justifyContent: 'center', flexWrap: 'wrap' }}>
             {[
-              { label: 'TRIAGE ACCURACY', value: `${result.triageCorrect}/5`, color: result.triageCorrect >= 4 ? COLORS.green : result.triageCorrect >= 2 ? COLORS.amber : COLORS.red },
-              { label: 'TREATMENT ACCURACY', value: `${result.treatmentCorrect}/5`, color: result.treatmentCorrect >= 4 ? COLORS.green : result.treatmentCorrect >= 2 ? COLORS.amber : COLORS.red },
-              { label: 'PATIENTS SURVIVED', value: `${result.survived}/5`, color: result.survived >= 4 ? COLORS.green : result.survived >= 2 ? COLORS.amber : COLORS.red },
-              { label: 'TIME REMAINING', value: formatTime(result.timeRemaining), color: result.timeRemaining > 120 ? COLORS.green : result.timeRemaining > 0 ? COLORS.amber : COLORS.red },
-              { label: 'WASTED ON EXPECTANT', value: result.wastedOnBlack ? 'YES' : 'NO', color: result.wastedOnBlack ? COLORS.red : COLORS.green },
-            ].map((stat, i) => (
-              <div key={i} style={{
-                background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-                borderRadius: 4, padding: '12px 18px', textAlign: 'center', minWidth: 130,
-              }}>
-                <div style={{ fontSize: '0.6rem', color: COLORS.muted, letterSpacing: '0.1em', marginBottom: 6 }}>
-                  {stat.label}
-                </div>
-                <div style={{ fontSize: '1.3rem', fontWeight: 'bold', color: stat.color }}>
-                  {stat.value}
-                </div>
-              </div>
-            ))}
+              { l: 'TRIAGE', v: `${r.triageCorrect}/${NUM_PATIENTS}`, c: r.triageCorrect >= 6 ? COLORS.green : r.triageCorrect >= 4 ? COLORS.amber : COLORS.red },
+              { l: 'TREATMENT', v: `${r.treatmentCorrect}/${NUM_PATIENTS}`, c: r.treatmentCorrect >= 6 ? COLORS.green : r.treatmentCorrect >= 4 ? COLORS.amber : COLORS.red },
+              { l: 'SURVIVED', v: `${r.survived}/${NUM_PATIENTS}`, c: r.survived >= 6 ? COLORS.green : r.survived >= 4 ? COLORS.amber : COLORS.red },
+              { l: 'TIME LEFT', v: formatTime(r.timeRemaining), c: r.timeRemaining > 120 ? COLORS.green : r.timeRemaining > 0 ? COLORS.amber : COLORS.red },
+              { l: 'WASTED', v: r.wastedOnBlack ? 'YES' : 'NO', c: r.wastedOnBlack ? COLORS.red : COLORS.green },
+            ].map((s, i) => <div key={i} style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: '14px 20px', textAlign: 'center', minWidth: 120 }}>
+              <div style={{ fontSize: '.75rem', color: COLORS.muted, letterSpacing: '.1em', marginBottom: 6, fontWeight: 'bold' }}>{s.l}</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: s.c }}>{s.v}</div>
+            </div>)}
           </div>
 
           {/* Overall score */}
-          <div style={{
-            textAlign: 'center', marginBottom: 30, padding: '20px 0',
-            background: COLORS.panel, borderRadius: 6,
-            border: `1px solid ${result.passed ? COLORS.green : COLORS.red}44`,
-          }}>
-            <div style={{ fontSize: '0.7rem', color: COLORS.muted, letterSpacing: '0.15em', marginBottom: 8 }}>
-              OVERALL SCORE
-            </div>
-            <div style={{
-              fontSize: '3.5rem', fontWeight: 900,
-              color: result.total >= 80 ? COLORS.green : result.total >= 60 ? COLORS.amber : COLORS.red,
-            }}>
-              {result.total}
-            </div>
-            <div style={{
-              fontSize: '1rem', fontWeight: 'bold', letterSpacing: '0.2em',
-              color: result.passed ? COLORS.green : COLORS.red,
-              marginTop: 4,
-            }}>
-              {result.total >= 90 ? 'EXEMPLARY PERFORMANCE' : result.total >= 80 ? 'MISSION SUCCESS' : result.total >= 60 ? 'PASSED — NEEDS IMPROVEMENT' : 'MISSION FAILURE'}
+          <div style={{ textAlign: 'center', marginBottom: 36, padding: '24px 0', background: 'rgba(17,24,39,.9)', borderRadius: 8, border: `1px solid ${r.passed ? COLORS.green : COLORS.red}44` }}>
+            <div style={{ fontSize: '.95rem', color: COLORS.muted, letterSpacing: '.15em', marginBottom: 10, fontWeight: 'bold' }}>OVERALL SCORE</div>
+            <div style={{ fontSize: '4.5rem', fontWeight: 900, color: r.total >= 80 ? COLORS.green : r.total >= 60 ? COLORS.amber : COLORS.red }}>{r.total}</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 'bold', letterSpacing: '.2em', color: r.passed ? COLORS.green : COLORS.red, marginTop: 6 }}>
+              {r.total >= 90 ? 'EXEMPLARY PERFORMANCE' : r.total >= 80 ? 'MISSION SUCCESS' : r.total >= 60 ? 'PASSED — NEEDS IMPROVEMENT' : 'MISSION FAILURE'}
             </div>
           </div>
 
           {/* Per-casualty breakdown */}
-          <div style={{ marginBottom: 30 }}>
-            <div style={{
-              fontSize: '0.8rem', color: COLORS.amber, letterSpacing: '0.15em',
-              marginBottom: 16, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 8,
-            }}>
-              CASUALTY-BY-CASUALTY DEBRIEF
-            </div>
-
-            {result.details.map((d, i) => (
-              <div key={i} style={{
-                background: COLORS.panel, border: `1px solid ${COLORS.muted}22`,
-                borderRadius: 4, padding: 16, marginBottom: 12,
-                animation: 'it-fade-in 0.5s ease forwards',
-                animationDelay: `${i * 0.15}s`,
-                opacity: 0,
-                borderLeft: `3px solid ${tagColor(d.cas.correctTag)}`,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div style={{ marginBottom: 36 }}>
+            <div style={{ fontSize: '1.1rem', color: COLORS.amber, letterSpacing: '.15em', marginBottom: 20, borderBottom: `1px solid ${COLORS.muted}22`, paddingBottom: 10, fontWeight: 'bold' }}>CASUALTY-BY-CASUALTY DEBRIEF</div>
+            {r.details.map((d, i) => (
+              <div key={i} style={{ background: 'rgba(17,24,39,.9)', border: `1px solid ${COLORS.muted}22`, borderRadius: 6, padding: 18, marginBottom: 12, animation: 'it-fade-in .5s ease forwards', animationDelay: `${i * 0.1}s`, opacity: 0, borderLeft: `4px solid ${tagColor(d.cas.correctTag)}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                   <div>
-                    <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>
-                      {d.cas.id}: {d.cas.name}
-                    </div>
-                    <div style={{ fontSize: '0.7rem', color: COLORS.muted, marginTop: 2 }}>
-                      {d.cas.location}
-                    </div>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{d.cas.id}: {d.cas.name}</div>
+                    <div style={{ fontSize: '.85rem', color: COLORS.muted, marginTop: 2 }}>{d.cas.location}</div>
                   </div>
-                  <div style={{
-                    fontSize: '0.7rem', fontWeight: 'bold',
-                    color: d.alive || d.cas.correctTag === 'BLACK' ? COLORS.green : COLORS.red,
-                  }}>
+                  <div style={{ fontSize: '.9rem', fontWeight: 'bold', color: d.alive || d.cas.correctTag === 'BLACK' ? COLORS.green : COLORS.red }}>
                     {d.cas.correctTag === 'BLACK' ? 'EXPECTANT' : d.alive ? 'SURVIVED' : 'DIED'}
                   </div>
                 </div>
-
-                <div style={{ display: 'flex', gap: 20, marginBottom: 10, fontSize: '0.72rem' }}>
-                  <div>
-                    <span style={{ color: COLORS.muted }}>Your Tag: </span>
-                    <span style={{
-                      color: d.tagCorrect ? COLORS.green : COLORS.red,
-                      fontWeight: 'bold',
-                    }}>
-                      {d.tag} {d.tagCorrect ? '[CORRECT]' : `[WRONG — should be ${d.cas.correctTag}]`}
-                    </span>
-                  </div>
+                <div style={{ fontSize: '.9rem', marginBottom: 8 }}>
+                  <span style={{ color: COLORS.muted }}>Tag: </span>
+                  <span style={{ color: d.tagCorrect ? COLORS.green : COLORS.red, fontWeight: 'bold' }}>{d.tag} {d.tagCorrect ? '[CORRECT]' : `[WRONG — ${d.cas.correctTag}]`}</span>
                 </div>
-
-                <div style={{ fontSize: '0.72rem', marginBottom: 10 }}>
-                  <span style={{ color: COLORS.muted }}>Your Treatment: </span>
+                <div style={{ fontSize: '.9rem', marginBottom: 10 }}>
+                  <span style={{ color: COLORS.muted }}>Treatment: </span>
                   <span style={{ color: d.treatCorrect ? COLORS.green : COLORS.amber }}>
                     {d.treatments.length === 0 ? 'None' : d.treatments.join(', ')}
                     {d.treatCorrect ? ' [CORRECT]' : ` [NEEDED: ${d.cas.correctTreatment.length === 0 ? 'None' : d.cas.correctTreatment.join(', ')}]`}
                   </span>
                 </div>
-
-                <div style={{
-                  background: 'rgba(59,130,246,0.05)', border: `1px solid ${COLORS.blue}22`,
-                  borderRadius: 3, padding: '8px 10px', fontSize: '0.68rem',
-                  color: COLORS.blue, lineHeight: 1.5,
-                }}>
-                  <span style={{ fontWeight: 'bold' }}>MEDICAL NOTES: </span>
-                  {d.cas.educational}
+                <div style={{ background: 'rgba(59,130,246,.06)', border: `1px solid ${COLORS.blue}22`, borderRadius: 5, padding: '10px 12px', fontSize: '.85rem', color: COLORS.blue, lineHeight: 1.6 }}>
+                  <span style={{ fontWeight: 'bold' }}>MEDICAL NOTES: </span>{d.cas.educational}
+                </div>
+                {/* Source references for this patient */}
+                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {(PATIENT_SOURCES[d.cas.id] || []).map((sk, j) => {
+                    const src = SOURCES[sk]
+                    return src ? <a key={j} href={src.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '.7rem', color: COLORS.blue, background: 'rgba(59,130,246,.08)', padding: '2px 8px', borderRadius: 3, textDecoration: 'none', border: `1px solid ${COLORS.blue}22` }}>{src.org} ↗</a> : null
+                  })}
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Action buttons */}
-          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', paddingBottom: 40 }}>
-            <button
-              onClick={() => {
-                scoreRecorded.current = false
-                dispatch({ type: 'START_GAME' })
-              }}
-              style={{
-                background: COLORS.red, color: '#fff', border: 'none',
-                padding: '14px 40px', borderRadius: 4, fontSize: '1rem',
-                fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.15em',
-                fontFamily: '"Courier New", Courier, monospace',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={e => e.target.style.background = '#ef4444'}
-              onMouseLeave={e => e.target.style.background = COLORS.red}
-            >
-              REDEPLOY
-            </button>
-            <button
-              onClick={() => ctxDispatch({ type: 'BACK_TO_MENU' })}
-              style={{
-                background: 'transparent', color: COLORS.muted,
-                border: `1px solid ${COLORS.muted}44`,
-                padding: '14px 40px', borderRadius: 4, fontSize: '1rem',
-                fontWeight: 'bold', cursor: 'pointer', letterSpacing: '0.15em',
-                fontFamily: '"Courier New", Courier, monospace',
-                transition: 'all 0.2s',
-              }}
+          {/* Actions */}
+          <div style={{ display: 'flex', gap: 20, justifyContent: 'center', paddingBottom: 48 }}>
+            <button onClick={() => { scoreRecorded.current = false; dispatch({ type: 'START_GAME' }) }} style={{ background: `linear-gradient(135deg,${COLORS.red},#b91c1c)`, color: '#fff', border: 'none', padding: '16px 48px', borderRadius: 6, fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '.15em', fontFamily: '"Courier New",monospace' }}>REDEPLOY</button>
+            <button onClick={() => ctxDispatch({ type: 'BACK_TO_MENU' })} style={{ background: 'transparent', color: COLORS.muted, border: `1px solid ${COLORS.muted}44`, padding: '16px 48px', borderRadius: 6, fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer', letterSpacing: '.15em', fontFamily: '"Courier New",monospace' }}
               onMouseEnter={e => { e.target.style.borderColor = COLORS.text; e.target.style.color = COLORS.text }}
               onMouseLeave={e => { e.target.style.borderColor = COLORS.muted + '44'; e.target.style.color = COLORS.muted }}
-            >
-              RETURN TO BASE
-            </button>
+            >RETURN TO BASE</button>
           </div>
         </div>
       </div>
