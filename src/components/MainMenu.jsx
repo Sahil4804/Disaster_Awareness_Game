@@ -69,6 +69,13 @@ export default function MainMenu() {
         >
           🩸 Operation: Iron Tide — Immersive Triage Sim
         </button>
+
+        <button
+          style={styles.sosBtn}
+          onClick={() => dispatch({ type: 'NAVIGATE', payload: 'sosGame' })}
+        >
+          🪞 Signal for Survival — SOS Signaling Game
+        </button>
       </div>
     </div>
   )
@@ -142,5 +149,15 @@ const styles = {
     borderRadius: 12, cursor: 'pointer',
     transition: 'all 0.15s',
     boxShadow: '0 0 20px rgba(220,38,38,0.15)',
+    marginBottom: 10,
+  },
+  sosBtn: {
+    display: 'block', width: '100%',
+    padding: '14px 0', fontSize: 15, fontWeight: 700,
+    background: 'linear-gradient(135deg, rgba(6,182,212,0.15), rgba(6,182,212,0.08))',
+    color: '#22d3ee', border: '1px solid rgba(6,182,212,0.35)',
+    borderRadius: 12, cursor: 'pointer',
+    transition: 'all 0.15s',
+    boxShadow: '0 0 20px rgba(6,182,212,0.15)',
   },
 }

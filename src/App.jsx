@@ -6,6 +6,7 @@ import MetricsDashboard from './components/MetricsDashboard'
 import SourcesPanel from './components/SourcesPanel'
 import Presentation from './components/Presentation'
 import IronTide from './modules/IronTide'
+import SOSSignalGame from './modules/SOSSignalGame'
 import { getModuleSources } from './data/moduleSources'
 import GoBagModule from './modules/flood/Module1_GoBag'
 import HomeDefenseModule from './modules/flood/Module2_HomeDefense'
@@ -33,6 +34,7 @@ function Router() {
     case 'metrics':        return <MetricsDashboard />
     case 'presentation':   return <Presentation />
     case 'ironTide':       return <IronTide />
+    case 'sosGame':        return <SOSSignalGame />
     default:               return <MainMenu />
   }
 }
