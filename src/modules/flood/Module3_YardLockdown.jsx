@@ -7,6 +7,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
+import Narrator from '../../components/Narrator'
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
@@ -708,6 +709,11 @@ export default function Module3_YardLockdown() {
         </div>
         <div style={{ marginTop:12 }}><button onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#94a3b8', fontSize:13, cursor:'pointer' }}>← Back to Modules</button></div>
       </div>
+      <Narrator 
+        characterKey="neighbor" 
+        visible={phase === 'intro'} 
+        text="The raft holds up! But listen—our neighbors are trapped on their roofs in the dark. Use your flashlight to navigate the debris and avoid downed power lines. Bring them to the safety shelter. We can't leave them behind!" 
+      />
     </div>
   )
 

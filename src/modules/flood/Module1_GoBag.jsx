@@ -7,6 +7,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
+import Narrator from '../../components/Narrator'
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
@@ -519,7 +520,7 @@ function ItemTooltip({ item, x, y }) {
   )
 }
 
-function BagPanel({ bagIds, onFinish, bagRef }) {
+function BagPanel({ bagIds, onFinish, bagRef, onDrop }) {
   const [expanded, setExpanded] = useState(false)
   const items = CATALOGUE.filter(i => bagIds.includes(i.id))
   const weight = items.reduce((s, i) => s + i.wt, 0)
@@ -602,8 +603,16 @@ function BagPanel({ bagIds, onFinish, bagRef }) {
               animation: 'pop-in 0.25s ease-out'
             }}>
               <span style={{ fontSize: 13 }}>{i.emoji}</span>
-              <span style={{ flex: 1, color: '#1e293b', fontWeight: 600 }}>{i.name}</span>
+              <span style={{ flex: 1, color: '#1e293b', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.name}</span>
               <span style={{ color: '#64748b', fontSize: 9 }}>{i.wt}kg</span>
+              <button 
+                onClick={(e) => { e.stopPropagation(); onDrop(i.id); }}
+                style={{
+                  background: 'none', border: 'none', color: '#ef4444', fontWeight: 'bold',
+                  cursor: 'pointer', padding: '0 2px', fontSize: 12
+                }}
+                title="Drop item"
+              >×</button>
             </div>
           ))}
         </div>
@@ -633,6 +642,12 @@ export default function Module1_GoBag() {
   const [currentRoom, setCurrentRoom] = useState(null)
   const [roomFlash, setRoomFlash] = useState(false)
   const [flying, setFlying] = useState([])
+  
+  // Mid-game narrator state
+  const [midGameNarrative, setMidGameNarrative] = useState(null)
+  const hasWarnedTimeRef = useRef(false)
+  const hasWarnedWeightRef = useRef(false)
+  const hasPraisedRef = useRef(false)
 
   const playerRef = useRef({ x: 100, y: 660, vx: 0, vy: 0, facing: 1, grounded: false })
   const keysRef = useRef({ left: false, right: false, up: false })
@@ -680,17 +695,42 @@ export default function Module1_GoBag() {
     })
   }
 
-  // Timer
+  // Timer and Triggers
   useEffect(() => {
     if (phase !== 'play') return
     timerRef.current = setInterval(() => {
       setTimeLeft(t => {
+        if (t === 31 && !hasWarnedTimeRef.current) {
+          hasWarnedTimeRef.current = true
+          setMidGameNarrative({ text: "Only 30 seconds left! The water is coming. Grab only the essentials and get to higher ground!", emotion: 'urgent', characterKey: 'broadcaster', visible: true })
+        }
         if (t <= 1) { clearInterval(timerRef.current); finishRef.current(); return 0 }
         return t - 1
       })
     }, 1000)
     return () => clearInterval(timerRef.current)
   }, [phase])
+
+  // Weight & Item Triggers
+  useEffect(() => {
+    if (phase !== 'play') return
+    const currentWeight = CATALOGUE.filter(i => bagIds.includes(i.id)).reduce((s, i) => s + i.wt, 0)
+    
+    if (currentWeight > MAX_WEIGHT && !hasWarnedWeightRef.current) {
+      hasWarnedWeightRef.current = true
+      setMidGameNarrative({ text: "Your bag is too heavy! You won't be able to run. Drop non-essentials immediately!", emotion: 'urgent', characterKey: 'broadcaster', visible: true })
+    }
+    
+    // Praise for picking up first essential
+    if (!hasPraisedRef.current && bagIds.length > 0) {
+      const items = CATALOGUE.filter(i => bagIds.includes(i.id))
+      const hasEssential = items.some(i => i.essential)
+      if (hasEssential && currentWeight <= MAX_WEIGHT) {
+        hasPraisedRef.current = true
+        setMidGameNarrative({ text: "Good choice. Prioritize essentials like ORS, first-aid, and flashlights.", emotion: 'neutral', characterKey: 'neighbor', visible: true })
+      }
+    }
+  }, [bagIds, phase])
 
   // Input
   useEffect(() => {
@@ -797,6 +837,10 @@ export default function Module1_GoBag() {
 
   function retry() {
     setBagIds([]); setTimeLeft(TIMER_START); setResult(null); setFlying([]); setNearbyItem(null); setCurrentRoom(null)
+    setMidGameNarrative(null)
+    hasWarnedTimeRef.current = false
+    hasWarnedWeightRef.current = false
+    hasPraisedRef.current = false
     playerRef.current = { x: 100, y: 660, vx: 0, vy: 0, facing: 1, grounded: false }
     cameraRef.current = { x: 0, y: 200 }
     currentRoomRef.current = null; nearItemRef.current = null
@@ -850,6 +894,12 @@ export default function Module1_GoBag() {
             cursor: 'pointer', boxShadow: '0 10px 24px rgba(239,68,68,0.5)', animation: 'pulse-ring 1.5s infinite',
           }}>🚨 START EVACUATION</button>
         </div>
+        
+        <Narrator 
+          characterKey="broadcaster" 
+          visible={phase === 'intro'} 
+          text="Attention citizens! A severe flash flood warning has been issued by the IMD. Water levels are rising rapidly. You have exactly 120 seconds to pack your Go-Bag with essentials and evacuate. Do not overpack—heavy bags will slow you down. Move now!" 
+        />
       </div>
     )
   }
@@ -1012,7 +1062,17 @@ export default function Module1_GoBag() {
         <span>← → Move</span><span>·</span><span>↑ Jump</span><span>·</span><span>E/Space Collect</span>
       </div>
 
-      <BagPanel bagIds={bagIds} onFinish={() => finishRef.current()} bagRef={bagRef} />
+      <BagPanel bagIds={bagIds} onFinish={() => finishRef.current()} bagRef={bagRef} onDrop={(id) => {
+        setBagIds(prev => {
+          const idx = prev.indexOf(id);
+          if (idx !== -1) {
+            const next = [...prev];
+            next.splice(idx, 1);
+            return next;
+          }
+          return prev;
+        });
+      }} />
 
       {hoveredItem && <ItemTooltip item={hoveredItem} x={hoverPos.x} y={hoverPos.y} />}
 
@@ -1023,6 +1083,20 @@ export default function Module1_GoBag() {
           filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.35))'
         }}>{f.emoji}</div>
       ))}
+
+      {/* In-Game Narrator */}
+      {midGameNarrative && (
+        <Narrator
+          characterKey={midGameNarrative.characterKey}
+          text={midGameNarrative.text}
+          visible={midGameNarrative.visible}
+          emotion={midGameNarrative.emotion}
+          autoHide={true}
+          onComplete={(status) => {
+            if (status === 'hidden') setMidGameNarrative(prev => ({ ...prev, visible: false }))
+          }}
+        />
+      )}
     </div>
   )
 }

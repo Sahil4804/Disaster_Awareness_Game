@@ -11,9 +11,9 @@ import HomeDefenseModule from './modules/flood/Module2_HomeDefense'
 import YardLockdownModule from './modules/flood/Module3_YardLockdown'
 import FieldTriageModule from './modules/flood/Module4_FieldTriage'
 import SinkingCarModule from './modules/flood/Module5_SinkingCar'
-import FirstResponderModule from './modules/flood/Module6_FirstResponder'
+import SOSSignalingModule from './modules/flood/Module6_SOSSignaling'
 import CampSafeHavenModule from './modules/flood/Module7_CampSafeHaven'
-import SOSSignalingModule from './modules/flood/Module8_SOSSignaling'
+import FirstResponderModule from './modules/flood/Module8_FirstResponder'
 import ToxicCleanupModule from './modules/flood/Module9_ToxicCleanup'
 import InvisibleTrapModule from './modules/flood/Module10_InvisibleTrap'
 import ToxicSoupModule from './modules/flood/Module11_ToxicSoup'
@@ -48,9 +48,9 @@ function ModuleRouter() {
       case 3:  moduleEl = <YardLockdownModule />;  break
       case 4:  moduleEl = <FieldTriageModule />;    break
       case 5:  moduleEl = <SinkingCarModule />;      break
-      case 6:  moduleEl = <FirstResponderModule />; break
+      case 6:  moduleEl = <SOSSignalingModule />; break
       case 7:  moduleEl = <CampSafeHavenModule />; break
-      case 8:  moduleEl = <SOSSignalingModule />;  break
+      case 8:  moduleEl = <FirstResponderModule />;  break
       case 9:  moduleEl = <ToxicCleanupModule />;  break
       case 10: moduleEl = <InvisibleTrapModule />; break
       case 11: moduleEl = <ToxicSoupModule />;     break

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useGame } from '../../context/GameContext'
+import Narrator from '../../components/Narrator'
 
 function shuffleArray(arr) {
   const a = [...arr]
@@ -143,7 +144,8 @@ const SPEED_BONUS_MAX = 50
 export default function SOSSignalingModule() {
   const { dispatch } = useGame()
 
-  const [phase, setPhase] = useState('intro') // intro | round | flareAim | feedback | result
+  // Expanded phases
+  const [phase, setPhase] = useState('intro') // intro | round | flareAim | mirrorAim | whistleBlow | feedback | result
   const [roundIdx, setRoundIdx] = useState(0)
   const [timeLeft, setTimeLeft] = useState(ROUND_TIME)
   const [scores, setScores] = useState([])
@@ -151,9 +153,20 @@ export default function SOSSignalingModule() {
   const [feedbackOk, setFeedbackOk] = useState(false)
   const [vehiclePos, setVehiclePos] = useState(0)
   const [roundFailed, setRoundFailed] = useState(false)
-  const timerRef = useRef(null)
+  
+  // Mirror State
+  const [mirrorX, setMirrorX] = useState(50)
+  const [mirrorY, setMirrorY] = useState(50)
+  const [mirrorHoldTime, setMirrorHoldTime] = useState(0)
 
-  // Shuffle rounds and tools once per game session
+  // Whistle State
+  const [whistleCode, setWhistleCode] = useState([]) // Array of 'S' (short) or 'L' (long)
+  const [isBlowing, setIsBlowing] = useState(false)
+  const blowStartRef = useRef(0)
+
+  const timerRef = useRef(null)
+  const animRef = useRef(null)
+
   const ROUNDS = useMemo(() => shuffleArray(ALL_ROUNDS), [])
   const TOOLS = useMemo(() => shuffleArray(ALL_TOOLS), [])
 
@@ -161,7 +174,7 @@ export default function SOSSignalingModule() {
 
   // Timer countdown
   useEffect(() => {
-    if (phase !== 'round' && phase !== 'flareAim') return
+    if (!['round', 'flareAim', 'mirrorAim', 'whistleBlow'].includes(phase)) return
     if (timeLeft <= 0) {
       handleTimeout()
       return
@@ -170,14 +183,49 @@ export default function SOSSignalingModule() {
     return () => clearTimeout(timerRef.current)
   }, [timeLeft, phase])
 
-  // Vehicle animation
+  // Vehicle animation loop
   useEffect(() => {
-    if (phase !== 'round' && phase !== 'flareAim') return
-    const interval = setInterval(() => {
-      setVehiclePos(p => p + 0.5)
-    }, 50)
-    return () => clearInterval(interval)
-  }, [phase])
+    if (!['round', 'flareAim', 'mirrorAim', 'whistleBlow'].includes(phase)) return
+    let start = Date.now()
+    
+    const tick = () => {
+      setVehiclePos(p => {
+        const next = p + 0.15
+        return next > 100 ? -10 : next
+      })
+      
+      // Mirror Logic: Check intersection
+      if (phase === 'mirrorAim') {
+        setVehiclePos(vPos => {
+          setMirrorX(mx => {
+            // Vehicle is at x=vPos, y=~20
+            const dx = mx - vPos
+            const dy = mirrorY - 20
+            const dist = Math.hypot(dx, dy)
+            if (dist < 10) {
+              setMirrorHoldTime(ht => {
+                const newHt = ht + 0.05
+                if (newHt >= 2) {
+                  // Success
+                  handleMiniGameSuccess('✅ Great tracking! The pilot saw the flash and is coming around!')
+                  return 2
+                }
+                return newHt
+              })
+            } else {
+              setMirrorHoldTime(ht => Math.max(0, ht - 0.02))
+            }
+            return mx
+          })
+          return vPos
+        })
+      }
+      
+      animRef.current = requestAnimationFrame(tick)
+    }
+    animRef.current = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(animRef.current)
+  }, [phase, mirrorY])
 
   const handleTimeout = useCallback(() => {
     clearTimeout(timerRef.current)
@@ -188,15 +236,47 @@ export default function SOSSignalingModule() {
     setScores(prev => [...prev, 0])
   }, [])
 
+  const handleMiniGameSuccess = useCallback((msg) => {
+    clearTimeout(timerRef.current)
+    const timeUsed = ROUND_TIME - timeLeft
+    const speedBonus = Math.max(0, Math.round(SPEED_BONUS_MAX * (1 - timeUsed / ROUND_TIME)))
+    const pts = BASE_POINTS + speedBonus
+    setScores(prev => [...prev, pts])
+    setFeedbackOk(true)
+    setRoundFailed(false)
+    setFeedbackMsg(`${msg} +${pts} points`)
+    setPhase('feedback')
+  }, [timeLeft])
+
+  const handleMiniGameFail = useCallback((msg) => {
+    clearTimeout(timerRef.current)
+    setScores(prev => [...prev, 0])
+    setFeedbackOk(false)
+    setRoundFailed(true)
+    setFeedbackMsg(msg)
+    setPhase('feedback')
+  }, [])
+
   const handleToolSelect = useCallback((toolId) => {
     if (phase !== 'round') return
-    clearTimeout(timerRef.current)
 
     if (toolId === round.correctTool) {
       if (toolId === 'flare' && (round.id === 'night' || round.id === 'dusk')) {
         setPhase('flareAim')
         return
       }
+      if (toolId === 'mirror' && (round.id === 'day' || round.id === 'distance')) {
+        setPhase('mirrorAim')
+        setMirrorHoldTime(0)
+        return
+      }
+      if (toolId === 'whistle' && round.id === 'fog') {
+        setPhase('whistleBlow')
+        setWhistleCode([])
+        return
+      }
+      
+      clearTimeout(timerRef.current)
       const timeUsed = ROUND_TIME - timeLeft
       const speedBonus = Math.max(0, Math.round(SPEED_BONUS_MAX * (1 - timeUsed / ROUND_TIME)))
       const pts = BASE_POINTS + speedBonus
@@ -207,39 +287,69 @@ export default function SOSSignalingModule() {
       setFeedbackMsg(`✅ Correct! ${toolName} is perfect for ${round.label} conditions! +${pts} points`)
       setPhase('feedback')
     } else {
+      clearTimeout(timerRef.current)
       setScores(prev => [...prev, 0])
       setFeedbackOk(false)
       setRoundFailed(true)
       setFeedbackMsg(`❌ Wrong tool! ${round.wrongFeedback[toolId]}`)
       setPhase('feedback')
     }
-  }, [phase, round, timeLeft])
+  }, [phase, round, timeLeft, TOOLS])
 
   const handleFlareAim = useCallback((e) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const clickY = (e.clientY - rect.top) / rect.height
 
-    clearTimeout(timerRef.current)
-
     if (clickY < 0.45) {
-      // Aimed high - correct
-      const timeUsed = ROUND_TIME - timeLeft
-      const speedBonus = Math.max(0, Math.round(SPEED_BONUS_MAX * (1 - timeUsed / ROUND_TIME)))
-      const pts = BASE_POINTS + speedBonus
-      setScores(prev => [...prev, pts])
-      setFeedbackOk(true)
-      setRoundFailed(false)
-      setFeedbackMsg(`✅ Great aim! You fired the flare HIGH into the sky where rescuers can see it! +${pts} points`)
-      setPhase('feedback')
+      handleMiniGameSuccess('✅ Great aim! You fired the flare HIGH into the sky where rescuers can see it!')
     } else {
-      // Aimed at boat level
-      setScores(prev => [...prev, 0])
-      setFeedbackOk(false)
-      setRoundFailed(true)
-      setFeedbackMsg('🚫 Never aim a flare at rescuers! Flares burn at 1,500°F and can injure or kill. Always fire HIGH into the sky!')
-      setPhase('feedback')
+      handleMiniGameFail('🚫 Never aim a flare at rescuers! Flares burn at 1,500°F and can injure or kill. Always fire HIGH into the sky!')
     }
-  }, [timeLeft])
+  }, [handleMiniGameSuccess, handleMiniGameFail])
+
+  const handleMirrorMove = useCallback((e) => {
+    if (phase !== 'mirrorAim') return
+    const rect = e.currentTarget.getBoundingClientRect()
+    setMirrorX(((e.clientX - rect.left) / rect.width) * 100)
+    setMirrorY(((e.clientY - rect.top) / rect.height) * 100)
+  }, [phase])
+
+  // Whistle Logic
+  useEffect(() => {
+    if (phase !== 'whistleBlow') return
+    
+    const handleDown = (e) => {
+      if (e.key === ' ' && !isBlowing) {
+        setIsBlowing(true)
+        blowStartRef.current = Date.now()
+      }
+    }
+    const handleUp = (e) => {
+      if (e.key === ' ' && isBlowing) {
+        setIsBlowing(false)
+        const dur = Date.now() - blowStartRef.current
+        const type = dur < 300 ? 'S' : 'L'
+        setWhistleCode(prev => {
+          const next = [...prev, type]
+          // Check win condition
+          // SOS is 3 Short, 3 Long, 3 Short. We'll simplify to just getting 3 of any type for the sake of the minigame, or exact.
+          // Let's do a simplified check: just need 3 shorts in a row.
+          if (next.join('').includes('SSS')) {
+            handleMiniGameSuccess('✅ They heard the distress signal! Sound travels well in fog.')
+          }
+          if (next.length > 8) return [] // reset if they mess up
+          return next
+        })
+      }
+    }
+    window.addEventListener('keydown', handleDown)
+    window.addEventListener('keyup', handleUp)
+    return () => {
+      window.removeEventListener('keydown', handleDown)
+      window.removeEventListener('keyup', handleUp)
+    }
+  }, [phase, isBlowing, handleMiniGameSuccess])
+
 
   const nextRound = useCallback(() => {
     if (roundIdx + 1 >= ROUNDS.length) {
@@ -251,7 +361,7 @@ export default function SOSSignalingModule() {
       setRoundFailed(false)
       setPhase('round')
     }
-  }, [roundIdx])
+  }, [roundIdx, ROUNDS.length])
 
   const totalScore = scores.reduce((a, b) => a + b, 0)
   const maxPossible = ROUNDS.length * (BASE_POINTS + SPEED_BONUS_MAX)
@@ -259,24 +369,18 @@ export default function SOSSignalingModule() {
   const passed = totalScore >= BASE_POINTS * 3
 
   const finishModule = () => {
-    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-8', result: { score: normalizedScore, passed } } })
+    dispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-6', result: { score: normalizedScore, passed } } })
     dispatch({ type: 'BACK_TO_MODULES' })
   }
 
-  // Star field for night
   const renderStars = () => {
     const stars = []
     for (let i = 0; i < 30; i++) {
       stars.push(
         <div key={i} style={{
-          position: 'absolute',
-          left: `${(i * 37 + 13) % 100}%`,
-          top: `${(i * 23 + 7) % 50}%`,
-          width: i % 3 === 0 ? 3 : 2,
-          height: i % 3 === 0 ? 3 : 2,
-          borderRadius: '50%',
-          background: '#fff',
-          opacity: 0.5 + (i % 5) * 0.1,
+          position: 'absolute', left: `${(i * 37 + 13) % 100}%`, top: `${(i * 23 + 7) % 50}%`,
+          width: i % 3 === 0 ? 3 : 2, height: i % 3 === 0 ? 3 : 2,
+          borderRadius: '50%', background: '#fff', opacity: 0.5 + (i % 5) * 0.1,
         }} />
       )
     }
@@ -289,10 +393,10 @@ export default function SOSSignalingModule() {
       <div style={styles.container}>
         <div style={styles.card}>
           <div style={{ fontSize: 64 }}>🆘</div>
-          <h1 style={styles.title}>Module 8: SOS Signaling</h1>
+          <h1 style={styles.title}>Module 6: SOS Signaling</h1>
           <p style={styles.text}>
-            You're stranded in floodwater and rescue teams are passing nearby.
-            You must signal them correctly based on the conditions!
+            You have escaped the sinking vehicle and are stranded on nearby debris. 
+            Rescue teams are passing nearby. You must signal them correctly based on the conditions!
           </p>
           <div style={{ ...styles.infoBox, background: 'rgba(56,189,248,0.15)', borderColor: '#38bdf8' }}>
             <p style={styles.text}>🪞 <strong>Mirror</strong> — Reflects sunlight over great distances</p>
@@ -311,6 +415,11 @@ export default function SOSSignalingModule() {
             ← Back to Modules
           </button>
         </div>
+        <Narrator 
+          characterKey="dispatcher" 
+          visible={phase === 'intro'} 
+          text="You made it out! Good job. We have rescue units patrolling the area. You need to signal them so they can find you. Choose the right signaling method based on the weather conditions. If it's sunny, use a mirror. If it's night, use a flare or flashlight. Pay attention!" 
+        />
       </div>
     )
   }
@@ -380,54 +489,70 @@ export default function SOSSignalingModule() {
   if (phase === 'flareAim') {
     return (
       <div style={styles.container}>
-        <div style={{
-          ...styles.scene,
-          background: round.sky,
-          cursor: 'crosshair',
-          position: 'relative',
-        }} onClick={handleFlareAim}>
+        <div style={{ ...styles.scene, background: round.sky, cursor: 'crosshair', position: 'relative' }} onClick={handleFlareAim}>
           {renderStars()}
-          {/* Boat */}
-          <div style={{
-            position: 'absolute', bottom: '18%',
-            left: `${Math.min(vehiclePos, 80)}%`,
-            fontSize: 40, transition: 'left 0.05s linear',
-          }}>
-            {round.vehicleEmoji}
+          <div style={{ position: 'absolute', bottom: '18%', left: `${vehiclePos}%`, fontSize: 40, transition: 'left 0.1s linear' }}>{round.vehicleEmoji}</div>
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '20%', background: 'linear-gradient(180deg, rgba(30,58,138,0.7), rgba(15,23,42,0.9))' }} />
+          <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.7)', padding: '10px 20px', borderRadius: 12, border: '2px solid #f97316' }}>
+            <p style={{ ...styles.text, fontSize: 18, textAlign: 'center', margin: 0 }}>🎯 Click HIGH in the sky to fire the flare!</p>
+            <p style={{ ...styles.text, fontSize: 14, textAlign: 'center', margin: '4px 0 0', color: '#fbbf24' }}>⚠️ Do NOT aim at the rescue boat!</p>
           </div>
-          {/* Water */}
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: '20%',
-            background: 'linear-gradient(180deg, rgba(30,58,138,0.7), rgba(15,23,42,0.9))',
-          }} />
-          {/* Instructions */}
-          <div style={{
-            position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
-            background: 'rgba(0,0,0,0.7)', padding: '10px 20px', borderRadius: 12,
-            border: '2px solid #f97316',
-          }}>
-            <p style={{ ...styles.text, fontSize: 18, textAlign: 'center', margin: 0 }}>
-              🎯 Click HIGH in the sky to fire the flare!
-            </p>
-            <p style={{ ...styles.text, fontSize: 14, textAlign: 'center', margin: '4px 0 0', color: '#fbbf24' }}>
-              ⚠️ Do NOT aim at the rescue boat!
-            </p>
+          <div style={{ position: 'absolute', top: '45%', left: 0, right: 0, borderTop: '1px dashed rgba(255,255,255,0.15)' }} />
+          <div style={{ position: 'absolute', top: '46%', right: 12, color: 'rgba(255,255,255,0.3)', fontSize: 11 }}>↑ AIM HIGH</div>
+          <div style={styles.timerBadge}>⏱️ {timeLeft}s</div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── MIRROR AIM ──
+  if (phase === 'mirrorAim') {
+    return (
+      <div style={styles.container}>
+        <div style={{ ...styles.scene, background: round.sky, position: 'relative', overflow:'hidden' }} onMouseMove={handleMirrorMove}>
+          <div style={{ position: 'absolute', top: '8%', right: '15%', width: 60, height: 60, borderRadius: '50%', background: '#fbbf24', boxShadow: '0 0 40px 15px rgba(251,191,36,0.4)' }} />
+          <div style={{ position: 'absolute', top: '20%', left: `${vehiclePos}%`, fontSize: 40, transition: 'left 0.1s linear' }}>{round.vehicleEmoji}</div>
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '22%', background: 'linear-gradient(180deg, rgba(56,189,248,0.6), rgba(14,165,233,0.8))' }} />
+          
+          {/* Mirror Reflection Dot */}
+          <div style={{ position:'absolute', top:`${mirrorY}%`, left:`${mirrorX}%`, width:30, height:30, background:'#fff', borderRadius:'50%', transform:'translate(-50%, -50%)', pointerEvents:'none', boxShadow:'0 0 30px 10px rgba(255,255,255,0.8)' }}>
+            {mirrorHoldTime > 0 && <div style={{ position:'absolute', inset:-10, border:'2px solid #22c55e', borderRadius:'50%', animation:'spin 1s linear infinite' }}/>}
           </div>
-          {/* Divider hint */}
-          <div style={{
-            position: 'absolute', top: '45%', left: 0, right: 0,
-            borderTop: '1px dashed rgba(255,255,255,0.15)',
-          }} />
-          <div style={{
-            position: 'absolute', top: '46%', right: 12,
-            color: 'rgba(255,255,255,0.3)', fontSize: 11,
-          }}>
-            ↑ AIM HIGH
+
+          <div style={{ position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.7)', padding: '10px 20px', borderRadius: 12, border: '2px solid #38bdf8' }}>
+            <p style={{ ...styles.text, fontSize: 16, textAlign: 'center', margin: 0 }}>🪞 Move your mouse to track the helicopter with the reflection!</p>
           </div>
-          {/* Timer */}
-          <div style={styles.timerBadge}>
-            ⏱️ {timeLeft}s
+          <div style={styles.timerBadge}>⏱️ {timeLeft}s</div>
+        </div>
+        <style>{`@keyframes spin { 100% { transform:rotate(360deg) } }`}</style>
+      </div>
+    )
+  }
+
+  // ── WHISTLE BLOW ──
+  if (phase === 'whistleBlow') {
+    return (
+      <div style={styles.container}>
+        <div style={{ ...styles.scene, background: round.sky, position: 'relative' }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(148,163,184,0.9)', backdropFilter: 'blur(8px)', zIndex:5 }} />
+          <div style={{ position: 'absolute', bottom: '18%', left: `${vehiclePos}%`, fontSize: 40, transition: 'left 0.1s linear', filter:'blur(4px)', opacity:0.3, zIndex:1 }}>{round.vehicleEmoji}</div>
+          <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '22%', background: 'linear-gradient(180deg, rgba(30,58,138,0.7), rgba(15,23,42,0.9))', zIndex:1 }} />
+          
+          <div style={{ position: 'absolute', inset:0, zIndex:10, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ background: 'rgba(0,0,0,0.7)', padding: '10px 20px', borderRadius: 12, border: '2px solid #a78bfa', marginBottom:20 }}>
+              <p style={{ ...styles.text, fontSize: 16, textAlign: 'center', margin: 0 }}>📯 Tap SPACEBAR 3 times quickly to signal SOS in the fog!</p>
+            </div>
+            
+            <div style={{ display:'flex', gap:10 }}>
+              {whistleCode.map((c, i) => (
+                <div key={i} style={{ width: c==='S'?20:40, height:20, background:'#a78bfa', borderRadius:10, boxShadow:'0 0 10px #a78bfa' }}/>
+              ))}
+            </div>
+            
+            <div style={{ marginTop:30, fontSize:64, filter:`drop-shadow(0 0 20px ${isBlowing ? '#a78bfa' : 'transparent'})`, transform: isBlowing ? 'scale(1.1)' : 'scale(1)' }}>📯</div>
           </div>
+
+          <div style={{...styles.timerBadge, zIndex:20}}>⏱️ {timeLeft}s</div>
         </div>
       </div>
     )
@@ -436,89 +561,29 @@ export default function SOSSignalingModule() {
   // ── ROUND (tool selection) ──
   return (
     <div style={styles.container}>
-      {/* Scene */}
       <div style={{ ...styles.scene, background: round.sky, position: 'relative' }}>
-        {/* Sun */}
-        {round.sun && (
-          <div style={{
-            position: 'absolute', top: '8%', right: '15%',
-            width: 60, height: 60, borderRadius: '50%',
-            background: '#fbbf24', boxShadow: '0 0 40px 15px rgba(251,191,36,0.4)',
-          }} />
-        )}
-        {/* Stars */}
+        {round.sun && <div style={{ position: 'absolute', top: '8%', right: '15%', width: 60, height: 60, borderRadius: '50%', background: '#fbbf24', boxShadow: '0 0 40px 15px rgba(251,191,36,0.4)' }} />}
         {round.stars && renderStars()}
-        {/* Fog overlay */}
-        {round.fog && (
-          <div style={{
-            position: 'absolute', inset: 0,
-            background: 'rgba(148,163,184,0.5)',
-            backdropFilter: 'blur(3px)',
-          }} />
-        )}
-        {/* Vehicle */}
-        <div style={{
-          position: 'absolute',
-          top: round.vehicle === 'helicopter' ? '20%' : undefined,
-          bottom: round.vehicle === 'boat' ? '18%' : undefined,
-          left: `${Math.min(vehiclePos, 85)}%`,
-          fontSize: 44, transition: 'left 0.05s linear',
-          filter: round.fog ? 'blur(2px)' : 'none',
-          zIndex: 2,
-        }}>
-          {round.vehicleEmoji}
-        </div>
-        {/* Water */}
-        <div style={{
-          position: 'absolute', bottom: 0, left: 0, right: 0, height: '22%',
-          background: (round.id === 'day' || round.id === 'distance')
-            ? 'linear-gradient(180deg, rgba(56,189,248,0.6), rgba(14,165,233,0.8))'
-            : 'linear-gradient(180deg, rgba(30,58,138,0.7), rgba(15,23,42,0.9))',
-          zIndex: 1,
-        }} />
-        {/* Player on roof */}
-        <div style={{
-          position: 'absolute', bottom: '22%', left: '10%',
-          fontSize: 36, zIndex: 3,
-        }}>
-          🏠🧍
-        </div>
-        {/* Timer */}
-        <div style={styles.timerBadge}>
-          ⏱️ {timeLeft}s
-        </div>
-        {/* Round label */}
-        <div style={{
-          position: 'absolute', top: 12, left: 12,
-          background: 'rgba(0,0,0,0.6)', padding: '6px 14px', borderRadius: 8,
-          color: '#f1f5f9', fontWeight: 'bold', fontSize: 14,
-        }}>
-          Round {roundIdx + 1}/{ROUNDS.length} — {round.label}
-        </div>
+        {round.fog && <div style={{ position: 'absolute', inset: 0, background: 'rgba(148,163,184,0.5)', backdropFilter: 'blur(3px)' }} />}
+        <div style={{ position: 'absolute', top: round.vehicle === 'helicopter' ? '20%' : undefined, bottom: round.vehicle === 'boat' ? '18%' : undefined, left: `${vehiclePos}%`, fontSize: 44, filter: round.fog ? 'blur(2px)' : 'none', zIndex: 2 }}>{round.vehicleEmoji}</div>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '22%', background: (round.id === 'day' || round.id === 'distance') ? 'linear-gradient(180deg, rgba(56,189,248,0.6), rgba(14,165,233,0.8))' : 'linear-gradient(180deg, rgba(30,58,138,0.7), rgba(15,23,42,0.9))', zIndex: 1 }} />
+        <div style={{ position: 'absolute', bottom: '22%', left: '10%', fontSize: 36, zIndex: 3 }}>🏠🧍</div>
+        <div style={styles.timerBadge}>⏱️ {timeLeft}s</div>
+        <div style={{ position: 'absolute', top: 12, left: 12, background: 'rgba(0,0,0,0.6)', padding: '6px 14px', borderRadius: 8, color: '#f1f5f9', fontWeight: 'bold', fontSize: 14 }}>Round {roundIdx + 1}/{ROUNDS.length} — {round.label}</div>
       </div>
 
-      {/* Description */}
       <div style={{ padding: '12px 16px', textAlign: 'center' }}>
         <p style={{ ...styles.text, fontSize: 16, margin: 0 }}>{round.description}</p>
         <p style={{ ...styles.text, fontSize: 13, color: '#94a3b8', margin: '4px 0 0' }}>{round.hint}</p>
       </div>
 
-      {/* Tool selection */}
-      <div style={{
-        display: 'flex', gap: 12, justifyContent: 'center',
-        padding: '8px 16px 20px', flexWrap: 'wrap',
-      }}>
+      <div style={{ display: 'flex', gap: 12, justifyContent: 'center', padding: '8px 16px 20px', flexWrap: 'wrap' }}>
         {TOOLS.map(tool => (
           <button key={tool.id} onClick={() => handleToolSelect(tool.id)} style={{
             background: `rgba(${tool.id === 'mirror' ? '56,189,248' : tool.id === 'flare' ? '249,115,22' : tool.id === 'whistle' ? '167,139,250' : tool.id === 'flag' ? '239,68,68' : '245,158,11'},0.15)`,
-            border: `2px solid ${tool.color}`,
-            borderRadius: 16, padding: '16px 24px', cursor: 'pointer',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-            minWidth: 100, transition: 'transform 0.15s, box-shadow 0.15s',
-          }}
-            onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.08)'; e.currentTarget.style.boxShadow = `0 0 20px ${tool.color}55` }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = 'none' }}
-          >
+            border: `2px solid ${tool.color}`, borderRadius: 16, padding: '16px 24px', cursor: 'pointer',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, minWidth: 100,
+          }}>
             <span style={{ fontSize: 36 }}>{tool.emoji}</span>
             <span style={{ color: tool.color, fontWeight: 'bold', fontSize: 14 }}>{tool.name}</span>
           </button>
@@ -529,93 +594,14 @@ export default function SOSSignalingModule() {
 }
 
 const styles = {
-  container: {
-    minHeight: '100vh',
-    background: '#0f172a',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    fontFamily: "'Segoe UI', system-ui, sans-serif",
-  },
-  card: {
-    background: '#1e293b',
-    borderRadius: 20,
-    padding: '32px 28px',
-    maxWidth: 520,
-    width: '100%',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 16,
-    border: '1px solid #334155',
-  },
-  scene: {
-    width: '100%',
-    maxWidth: 600,
-    height: 300,
-    borderRadius: '16px 16px 0 0',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  title: {
-    color: '#f1f5f9',
-    margin: 0,
-    fontSize: 26,
-    textAlign: 'center',
-  },
-  text: {
-    color: '#f1f5f9',
-    margin: '4px 0',
-    fontSize: 15,
-    lineHeight: 1.5,
-  },
-  infoBox: {
-    border: '1px solid',
-    borderRadius: 12,
-    padding: '12px 16px',
-    width: '100%',
-  },
-  scoreBox: {
-    border: '2px solid',
-    borderRadius: 16,
-    padding: '16px 32px',
-    display: 'flex',
-    alignItems: 'baseline',
-    gap: 8,
-  },
-  btnPrimary: {
-    background: 'linear-gradient(135deg, #2563eb, #7c3aed)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 12,
-    padding: '14px 32px',
-    fontSize: 17,
-    fontWeight: 'bold',
-    cursor: 'pointer',
-    marginTop: 8,
-    transition: 'transform 0.15s',
-  },
-  btnBack: {
-    background: 'transparent',
-    color: '#94a3b8',
-    border: '1px solid #475569',
-    borderRadius: 10,
-    padding: '10px 24px',
-    fontSize: 14,
-    cursor: 'pointer',
-  },
-  timerBadge: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    background: 'rgba(0,0,0,0.7)',
-    color: '#fbbf24',
-    padding: '6px 14px',
-    borderRadius: 8,
-    fontWeight: 'bold',
-    fontSize: 16,
-    zIndex: 10,
-  },
+  container: { minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 16, fontFamily: "'Segoe UI', system-ui, sans-serif" },
+  card: { background: '#1e293b', borderRadius: 20, padding: '32px 28px', maxWidth: 700, width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, border: '1px solid #334155' },
+  scene: { width: '100%', maxWidth: 1000, height: 500, borderRadius: '16px 16px 0 0', position: 'relative', overflow: 'hidden' },
+  title: { color: '#f1f5f9', margin: 0, fontSize: 26, textAlign: 'center' },
+  text: { color: '#f1f5f9', margin: '4px 0', fontSize: 15, lineHeight: 1.5 },
+  infoBox: { border: '1px solid', borderRadius: 12, padding: '12px 16px', width: '100%' },
+  scoreBox: { border: '2px solid', borderRadius: 16, padding: '16px 32px', display: 'flex', alignItems: 'baseline', gap: 8 },
+  btnPrimary: { background: 'linear-gradient(135deg, #2563eb, #7c3aed)', color: '#fff', border: 'none', borderRadius: 12, padding: '14px 32px', fontSize: 17, fontWeight: 'bold', cursor: 'pointer', marginTop: 8 },
+  btnBack: { background: 'transparent', color: '#94a3b8', border: '1px solid #475569', borderRadius: 10, padding: '10px 24px', fontSize: 14, cursor: 'pointer' },
+  timerBadge: { position: 'absolute', top: 12, right: 12, background: 'rgba(0,0,0,0.7)', color: '#fbbf24', padding: '6px 14px', borderRadius: 8, fontWeight: 'bold', fontSize: 16, zIndex: 10 },
 }

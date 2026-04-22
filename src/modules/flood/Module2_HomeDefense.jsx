@@ -8,6 +8,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
+import Narrator from '../../components/Narrator'
 
 // ═══════════════════════════════════════════════════════════════
 // CONFIG
@@ -703,6 +704,11 @@ export default function Module2_HomeDefense() {
         <button onClick={()=>setPhase('blueprint')} style={{ padding:'16px 40px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#3b82f6,#1d4ed8)', color:'#fff', fontWeight:900, fontSize:18, letterSpacing:1, cursor:'pointer', boxShadow:'0 10px 24px rgba(59,130,246,0.5)' }}>📋 VIEW BLUEPRINT</button>
         <div style={{ marginTop:12 }}><button onClick={()=>gameDispatch({type:'BACK_TO_MODULES'})} style={{ background:'none', border:'none', color:'#94a3b8', fontSize:13, cursor:'pointer' }}>← Back to Modules</button></div>
       </div>
+      <Narrator 
+        characterKey="neighbor" 
+        visible={phase === 'intro'} 
+        text="Hey! The water is rising too fast! We're trapped upstairs. The NDRF says to build an improvised raft using sealed drums and strong ropes. Check the garage for supplies and let's build something that floats!" 
+      />
     </div>
   )
 

@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
+import Narrator from '../../components/Narrator'
 
 // ═══════════════════════════════════════════════════════════════
 // VICTIMS & MEDICAL DATA
@@ -539,6 +540,11 @@ export default function Module4_SinkingCar() {
         <button onClick={() => setPhase('triage')} style={{ padding:'14px 40px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#1e40af,#1d4ed8)', color:'#fff', fontWeight:900, fontSize:16, cursor:'pointer' }}>🩺 Begin Triage</button>
         <div style={{ marginTop:12 }}><button onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#94a3b8', fontSize:13, cursor:'pointer' }}>← Back to Modules</button></div>
       </div>
+      <Narrator 
+        characterKey="doctor" 
+        visible={phase === 'intro'} 
+        text="Great job getting everyone to the shelter. I'm the head doctor here. We need your help to triage these 5 victims. Examine them, sort them from most to least critical, and then we'll need you to run the raft to the government cache for supplies to treat them." 
+      />
     </div>
   )
 
@@ -1306,7 +1312,11 @@ export default function Module4_SinkingCar() {
           </div>
           <div style={{ display:'flex', gap:12, justifyContent:'center', paddingBottom:20 }}>
             <button onClick={retry} style={{ padding:'12px 28px', borderRadius:999, background:'#fff', color:'#0f172a', border:'2px solid #0f172a', fontWeight:800, fontSize:13, cursor:'pointer' }}>🔄 Try Again</button>
-            <button onClick={() => gameDispatch({ type:'BACK_TO_MODULES' })} style={{ padding:'12px 28px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#1e40af,#1d4ed8)', color:'#fff', fontWeight:800, fontSize:13, cursor:'pointer' }}>← Back to Modules</button>
+            {result.passed ? (
+              <button onClick={() => gameDispatch({ type:'SELECT_MODULE', payload:5 })} style={{ padding:'12px 28px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#22c55e,#16a34a)', color:'#fff', fontWeight:900, fontSize:13, cursor:'pointer', boxShadow:'0 8px 20px rgba(34,197,94,0.4)' }}>🚗 Next: Escort Medical Expert</button>
+            ) : (
+              <button onClick={() => gameDispatch({ type:'BACK_TO_MODULES' })} style={{ padding:'12px 28px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#1e40af,#1d4ed8)', color:'#fff', fontWeight:800, fontSize:13, cursor:'pointer' }}>← Back to Modules</button>
+            )}
           </div>
         </div>
       </div>
