@@ -2,9 +2,9 @@ import { useGame } from '../context/GameContext'
 
 const floodModules = [
   { id: 1,  title: 'The 60-Second Go-Bag', phase: 'Preparedness', icon: '🎒' },
-  { id: 2,  title: 'Home Defense',          phase: 'Preparedness', icon: '🏠' },
-  { id: 3,  title: 'Yard Lockdown',         phase: 'Preparedness', icon: '⛓️' },
-  { id: 4,  title: 'The Sinking Car',       phase: 'Response',     icon: '🚗' },
+  { id: 2,  title: 'Build the Raft',       phase: 'Preparedness', icon: '🛶' },
+  { id: 3,  title: 'Flood Rescue',          phase: 'Response',     icon: '🔦' },
+  { id: 4,  title: 'Field Triage',          phase: 'Response',     icon: '🩺' },
   { id: 5,  title: 'Treacherous Trek',      phase: 'Response',     icon: '🚶' },
   { id: 6,  title: 'First Responder',       phase: 'Survival',     icon: '🩹' },
   { id: 7,  title: 'Camp Safe Haven',       phase: 'Survival',     icon: '⛺' },

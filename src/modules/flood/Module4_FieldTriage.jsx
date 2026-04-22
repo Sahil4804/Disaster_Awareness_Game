@@ -141,42 +141,7 @@ const KEYFRAMES = `
 @keyframes xraySweep{0%{opacity:0;transform:translateX(-100%)}50%{opacity:1}100%{opacity:0;transform:translateX(100%)}}
 @keyframes drip{0%{transform:translateY(0);opacity:1}100%{transform:translateY(20px);opacity:0}}
 @keyframes bpPump{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.15)}}
-@keyframes rainDrop{0%{transform:translateY(-20px);opacity:0}20%{opacity:1}100%{transform:translateY(100vh);opacity:0.3}}
-@keyframes shake{0%,100%{transform:translateX(0)}10%{transform:translateX(-5px)}20%{transform:translateX(5px)}30%{transform:translateX(-3px)}40%{transform:translateX(3px)}50%{transform:translateX(0)}}
-@keyframes waterRise{0%{height:0%}100%{height:100%}}
-@keyframes breathe{0%,100%{transform:scale(1);opacity:0.7}50%{transform:scale(1.1);opacity:1}}
-@keyframes flash{0%,100%{opacity:0}50%{opacity:1}}
 `
-
-// ═══════════════════════════════════════════════════════════════
-// DRIVING & SINKING CAR CONSTANTS
-// ═══════════════════════════════════════════════════════════════
-const ROUTES = [
-  { id: 'highway', name: 'NH-48 Highway', dist: '12 km', time: '~18 min', emoji: '🛣️', hazards: ['Low-lying underpass', 'IMD Flash Flood Warning zone'], status: 'CAUTION', safety: 'caution', ndma: '"Turn Around, Don\'t Drown" — Never drive through flooded underpasses. 30cm of water can float most vehicles.', floodAt: 65 },
-  { id: 'stateroad', name: 'State Road 27', dist: '18 km', time: '~25 min', emoji: '🌉', hazards: ['Bridge over River Kosi', 'Longer route'], status: 'SAFE', safety: 'safe', ndma: 'NDMA: Use elevated routes and bridges during floods. Monitor CWC river level data before crossing.', floodAt: 80 },
-  { id: 'bypass', name: 'Village Bypass', dist: '8 km', time: '~12 min', emoji: '🏘️', hazards: ['Unpaved road near canal', 'Debris reported'], status: 'CLOSED', safety: 'danger', ndma: 'NDMA: Avoid unpaved/kutcha roads during floods. Waterlogged soil collapses without warning.', floodAt: 40 },
-]
-
-const ESCAPE_STEPS = [
-  { id: 'calm', label: 'Stay Calm', emoji: '😤', instruction: 'Take 3 deep breaths. You have about 60 seconds before the car is fully submerged.', action: 'Click the breathing circles in rhythm (3 times)', ndma: 'NDMA: Panic consumes oxygen and clouds judgment. Stay calm and act methodically.', clickCount: 3 },
-  { id: 'unbuckle', label: 'Unbuckle Seatbelt', emoji: '🔓', instruction: 'Release your seatbelt immediately. Help any passengers too.', action: 'Click the seatbelt buckle to release', ndma: 'NDMA: Remove seatbelt first — you cannot escape while restrained.', clickCount: 1 },
-  { id: 'window', label: 'Open Window', emoji: '🪟', instruction: 'Roll down windows BEFORE water reaches them. This is your escape route.', action: 'Press and hold the window button', ndma: 'NDMA: Windows are your primary escape. Doors are nearly impossible to open due to water pressure (~600 lbs/sqft).', clickCount: 1 },
-  { id: 'break', label: 'Break Window', emoji: '🔨', instruction: 'Power window failed! Use the headrest spikes to break the SIDE window corner.', action: 'Drag the headrest to the window corner', ndma: 'NDMA: Remove headrest, use metal spikes to strike the CORNER of side windows. Never attempt the windshield.', clickCount: 1 },
-  { id: 'swim', label: 'Escape & Swim Up', emoji: '🏊', instruction: 'Climb out through the window. Follow air bubbles to the surface. Swim to higher ground.', action: 'Use arrow keys to swim upward', ndma: 'NDMA: Once out, swim to the nearest elevated surface. Signal for help. Never re-enter floodwater.', clickCount: 1 },
-]
-
-const SOS_ROUNDS = [
-  { id: 'day', label: 'DAY — Helicopter', vehicle: '🚁', correctTool: 'mirror', sky: 'linear-gradient(180deg,#38bdf8,#7dd3fc,#bae6fd)', desc: 'A rescue helicopter is overhead in bright sunlight!', hint: 'Sunlight reflects brilliantly off shiny surfaces...', wrongMsg: { flare: 'Flares are hard to see in bright daylight!', whistle: 'Can\'t be heard over rotors!', flag: 'Too small to spot from altitude!' } },
-  { id: 'night', label: 'NIGHT — Boat', vehicle: '🚤', correctTool: 'flare', sky: 'linear-gradient(180deg,#020617,#0f172a,#1e293b)', desc: 'A rescue boat is approaching in darkness!', hint: 'You need your own light source...', wrongMsg: { mirror: 'No sunlight at night!', whistle: 'Boat engine drowns sound!', flag: 'Invisible in darkness!' } },
-  { id: 'fog', label: 'FOG — Boat', vehicle: '🚤', correctTool: 'whistle', sky: 'linear-gradient(180deg,#94a3b8,#cbd5e1,#94a3b8)', desc: 'A boat is nearby in thick fog!', hint: 'Zero visibility — what signal works without sight?', wrongMsg: { mirror: 'No sunlight in fog!', flare: 'Light scatters in fog!', flag: 'No one can see it!' } },
-]
-
-const SOS_TOOLS = [
-  { id: 'mirror', name: 'Signal Mirror', emoji: '🪞', color: '#38bdf8' },
-  { id: 'flare', name: 'Flare Gun', emoji: '🔥', color: '#f97316' },
-  { id: 'whistle', name: 'Whistle', emoji: '📯', color: '#a78bfa' },
-  { id: 'flag', name: 'Signal Flag', emoji: '🚩', color: '#ef4444' },
-]
 
 function dist(x1, y1, x2, y2) { return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2) }
 function rectCollide(ax, ay, aw, ah, bx, by, bw, bh) { return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by }
@@ -186,7 +151,7 @@ function rectCollide(ax, ay, aw, ah, bx, by, bw, bh) { return ax < bx + bw && ax
 // ═══════════════════════════════════════════════════════════════
 export default function Module4_SinkingCar() {
   const { dispatch: gameDispatch } = useGame()
-  const [phase, setPhase] = useState('intro') // intro,triage,govtAlert,supply,chapterBreak,treat,expertBrief,routeAlert,driving,sinkingCar,sosSignal,result
+  const [phase, setPhase] = useState('intro') // intro, triage, govtAlert, supply, chapterBreak, treat, result
   const [triageOrder, setTriageOrder] = useState([])
   const [dragIdx, setDragIdx] = useState(null)
   const [inventory, setInventory] = useState([...SHELTER_ITEMS])
@@ -208,21 +173,7 @@ export default function Module4_SinkingCar() {
   const [examUsed, setExamUsed] = useState({})
   const [examResult, setExamResult] = useState(null)
   const [bodyView, setBodyView] = useState('normal')
-  // Driving & Sinking Car & SOS
-  const [selectedRoute, setSelectedRoute] = useState(null)
-  const [driveProgress, setDriveProgress] = useState(0)
-  const [waterLevel, setWaterLevel] = useState(0)
-  const [escapeStep, setEscapeStep] = useState(0)
-  const [escapeClicks, setEscapeClicks] = useState(0)
-  const [escapeTimer, setEscapeTimer] = useState(60)
-  const [escapeFailed, setEscapeFailed] = useState(false)
-  const [sosRound, setSosRound] = useState(0)
-  const [sosScores, setSosScores] = useState([])
-  const [sosFeedback, setSosFeedback] = useState(null)
-  const [vehiclePos, setVehiclePos] = useState(0)
-  const [treatScore, setTreatScore] = useState(0)
-  const carRef = useRef({ x: 50, speed: 0 })
-
+  
   // Raft refs for supply run
   const raftRef = useRef({ x: 300, y: 250, vx: 0, vy: 0, angle: 0 })
   const keysRef = useRef({})
@@ -530,25 +481,20 @@ export default function Module4_SinkingCar() {
   }
 
   function finishGame() {
-    // Calculate treatment score for later
     const sortedVictims = [...VICTIMS].sort((a, b) => a.priority - b.priority)
-    let ts = 0
-    sortedVictims.forEach(v => { const t = treatedVictims[v.id]; if (t?.correct) ts += 6; else if (t?.partial) ts += 3 })
-    setTreatScore(ts)
-    setPhase('expertBrief') // Transition to next chapter
-  }
-
-  function finalScore(escapeSuccess, sosScoreArr) {
+    let treatScore = 0
+    sortedVictims.forEach(v => {
+      const t = treatedVictims[v.id]
+      if (t?.correct) treatScore += 6
+      else if (t?.partial) treatScore += 3
+    })
     const allItemsFound = neededItems.every(i => inventory.includes(i))
-    const itemScore = allItemsFound ? 15 : Math.round((inventory.filter(i => neededItems.includes(i)).length / Math.max(1, neededItems.length)) * 15)
-    const escapeScore = escapeSuccess ? 15 : 0
-    const sosTotal = sosScoreArr.reduce((a,b) => a+b, 0)
-    const sosNorm = Math.round((sosTotal / (SOS_ROUNDS.length * 100)) * 15)
-    const noWrong = Object.values(treatedVictims).every(t => t.correct) ? 5 : 0
-    const total = Math.min(100, triageScore + itemScore + treatScore + escapeScore + sosNorm + noWrong + 10)
-    const res = { score: total, passed: total >= 50, triageScore, itemScore, treatScore, escapeScore, sosScore: sosNorm, noWrong, treatedVictims, escapeSuccess }
+    const itemScore = allItemsFound ? 30 : Math.round((inventory.filter(i => neededItems.includes(i)).length / Math.max(1, neededItems.length)) * 30)
+    const noWrongTreatment = Object.values(treatedVictims).every(t => t.correct) ? 10 : 0
+    const total = Math.min(100, triageScore + itemScore + treatScore + noWrongTreatment + 10)
+    const res = { score: total, passed: total >= 60, triageScore, itemScore, treatScore, noWrongTreatment, treatedVictims }
     setResult(res)
-    gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-4', result: { score: total, passed: total >= 50 } } })
+    gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-4', result: { score: total, passed: total >= 60 } } })
     setPhase('result')
   }
 
@@ -1313,8 +1259,6 @@ export default function Module4_SinkingCar() {
       </div>
     )
   }
-
-
 
   // ═══════════ RESULT ═══════════
   if (phase === 'result' && result) {

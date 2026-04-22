@@ -1,707 +1,1103 @@
 /**
- * Module 3 — Yard Triage: Spatial Logistics & Cascading Failure Simulator
- * Aesthetic : Tactical Command Center — #0a0a0a, cyan/amber, JetBrains Mono
- * Mechanics : useReducer · 120-minute time budget · physics cascade simulation
- * Reference : FEMA P-348, NOAA Storm Surge, EPA Hazmat in Flood Guidelines
+ * Module 3 — Flood Rescue: Night Navigation
+ * Top-down 2D raft navigation through dark flooded neighborhood.
+ * Find and rescue 5 trapped victims using torch/flashlight.
+ * Avoid electrical hazards, clear debris obstacles.
+ * 180s timer, NDMA-aligned.
  */
-import { useReducer, useState } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useGame } from '../../context/GameContext'
 
-const MONO = "'JetBrains Mono','Courier New',Courier,monospace"
+// ═══════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════
+const TIMER_START = 180
+const MAP_W = 2400
+const MAP_H = 2400
+const RAFT_W = 28
+const RAFT_H = 44
+const RAFT_SPEED = 1600
+const RAFT_DRAG = 0.92
+const CAM_LERP = 0.1
+const TORCH_RADIUS = 700
+const RESCUE_RANGE = 55
+const INTERACT_TIME = 1500  // ms to hold E for rescue/clear
+const DEBRIS_CLEAR_TIME = 2000
+const BOAT_CAPACITY = 2
+const SHELTER = { x: 2200, y: 180, w: 140, h: 100 }
+const SHELTER_RANGE = 80
+const SHOCK_PENALTY = 10
+const SHOCK_COOLDOWN = 3000
 
-// ─── Item catalogue ───────────────────────────────────────────────────────────
-const ITEMS_INIT = [
-  {
-    id:'propane', emoji:'🛢️', name:'500-Gal Propane Tank', zone:'yard', state:'unsecured',
-    hazard:'Explosive / Buoyant', hc:'#ef4444',
-    weight:2365, buoyancy:4212, contaminant:'HIGH', windDrag:'LOW',
-    mapX:110, mapY:330,
-    desc:'Full tank. 4,212 lbs upward buoyancy force at 3ft flood. Floats, snaps the gas line, then ruptures. BLAST RADIUS: 50 m. (Source: NFPA 58)',
-  },
-  {
-    id:'furniture', emoji:'🪑', name:'Resin Patio Set', zone:'yard', state:'unsecured',
-    hazard:'Wind Projectile', hc:'#f97316',
-    weight:185, buoyancy:900, contaminant:'LOW', windDrag:'HIGH',
-    mapX:230, mapY:300,
-    desc:'185 lbs, very high wind drag surface area. At 80 mph becomes a 185-lb shrapnel mass. Can shatter windows and breach walls. (Source: FEMA P-361)',
-  },
-  {
-    id:'fertilizer', emoji:'🧴', name:'Lawn Chemicals (12 gal)', zone:'yard', state:'unsecured',
-    hazard:'Toxic Contamination', hc:'#eab308',
-    weight:80, buoyancy:60, contaminant:'CRITICAL', windDrag:'LOW',
-    mapX:160, mapY:390,
-    desc:'Nitrogen fertilizer + herbicides. Dissolves into floodwater, creates toxic nitrate soup. Cannot be made safe by boiling. EPA Superfund risk. (Source: EPA 832-R-06-005)',
-  },
-  {
-    id:'mower', emoji:'🚜', name:'Riding Mower', zone:'yard', state:'unsecured',
-    hazard:'Mechanical / Oil', hc:'#f59e0b',
-    weight:450, buoyancy:1625, contaminant:'MEDIUM', windDrag:'LOW',
-    mapX:340, mapY:365,
-    desc:'Engine oil + fuel contaminate floodwater. Electrical systems destroyed at 12 inches of submersion. Replacement cost: $2,000+. (Source: FEMA Individual Assistance)',
-  },
-  {
-    id:'debris', emoji:'🍂', name:'Loose Mulch & Leaves', zone:'yard', state:'unsecured',
-    hazard:'CASCADE — Drain Clog', hc:'#dc2626',
-    weight:30, buoyancy:10, contaminant:'LOW', windDrag:'HIGH',
-    mapX:290, mapY:425,
-    desc:'⚠ CASCADING HAZARD: Clogs storm drains within minutes. Raises local flood depth 3.0 ft → 4.5 ft, OVERRIDING all 2ft block elevations. (Source: FEMA Stormwater Mgmt)',
-  },
-  {
-    id:'hvac', emoji:'🌀', name:'HVAC Condenser Unit', zone:'yardpad', state:'grid_powered',
-    hazard:'Electrical Short', hc:'#8b5cf6',
-    weight:220, buoyancy:750, contaminant:'LOW', windDrag:'MEDIUM',
-    mapX:425, mapY:305,
-    desc:'220V live unit. When submerged, arcs through conductive floodwater. $5,000 repair. Creates electrocution hazard throughout the yard. (Source: OSHA 3186)',
-  },
+// ═══════════════════════════════════════════════════════════════
+// MAP DATA — flooded neighborhood
+// ═══════════════════════════════════════════════════════════════
+
+// Buildings (impassable, partially submerged)
+const BUILDINGS = [
+  // Row 1 — top
+  { x: 120, y: 80, w: 180, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 420, y: 60, w: 200, h: 160, color: '#1a1a2e', roof: '#2a2040', label: 'Apartment' },
+  { x: 780, y: 100, w: 160, h: 120, color: '#1a1a2e', roof: '#2d2040', label: 'Shop' },
+  { x: 1100, y: 80, w: 220, h: 150, color: '#1a1a2e', roof: '#302040', label: 'School' },
+  { x: 1480, y: 60, w: 180, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'Clinic' },
+  { x: 1800, y: 100, w: 200, h: 130, color: '#1a1a2e', roof: '#2a2040', label: 'Office' },
+  // Row 2
+  { x: 80, y: 400, w: 200, h: 180, color: '#1a1a2e', roof: '#2d2040', label: 'Temple' },
+  { x: 450, y: 380, w: 160, h: 160, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 780, y: 420, w: 240, h: 140, color: '#1a1a2e', roof: '#302040', label: 'Market' },
+  { x: 1200, y: 380, w: 180, h: 180, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 1550, y: 400, w: 200, h: 150, color: '#1a1a2e', roof: '#2a2040', label: 'Pharmacy' },
+  { x: 1900, y: 380, w: 160, h: 170, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  // Row 3
+  { x: 150, y: 760, w: 160, h: 140, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 500, y: 740, w: 200, h: 160, color: '#1a1a2e', roof: '#302040', label: 'Warehouse' },
+  { x: 880, y: 780, w: 180, h: 130, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 1250, y: 740, w: 220, h: 160, color: '#1a1a2e', roof: '#2a2040', label: 'Hospital' },
+  { x: 1600, y: 760, w: 160, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 1950, y: 750, w: 180, h: 150, color: '#1a1a2e', roof: '#302040', label: 'Store' },
+  // Row 4
+  { x: 100, y: 1100, w: 180, h: 160, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 420, y: 1080, w: 200, h: 140, color: '#1a1a2e', roof: '#2a2040', label: 'Garage' },
+  { x: 800, y: 1120, w: 160, h: 130, color: '#1a1a2e', roof: '#302040', label: 'House' },
+  { x: 1150, y: 1080, w: 240, h: 180, color: '#1a1a2e', roof: '#2d2040', label: 'Community Hall' },
+  { x: 1520, y: 1100, w: 180, h: 150, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 1880, y: 1110, w: 200, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  // Row 5
+  { x: 200, y: 1440, w: 200, h: 160, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 560, y: 1420, w: 180, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 900, y: 1460, w: 160, h: 130, color: '#1a1a2e', roof: '#302040', label: 'Shop' },
+  { x: 1280, y: 1420, w: 220, h: 170, color: '#1a1a2e', roof: '#2d2040', label: 'Panchayat' },
+  { x: 1620, y: 1440, w: 180, h: 150, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 1960, y: 1450, w: 160, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  // Row 6
+  { x: 120, y: 1780, w: 180, h: 150, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 480, y: 1800, w: 200, h: 130, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 850, y: 1760, w: 160, h: 160, color: '#1a1a2e', roof: '#302040', label: 'Masjid' },
+  { x: 1200, y: 1780, w: 220, h: 140, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  { x: 1560, y: 1800, w: 180, h: 130, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 1920, y: 1770, w: 200, h: 160, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
+  // Row 7 - bottom
+  { x: 200, y: 2120, w: 160, h: 140, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 560, y: 2100, w: 200, h: 160, color: '#1a1a2e', roof: '#2d2040', label: 'School' },
+  { x: 920, y: 2140, w: 180, h: 120, color: '#1a1a2e', roof: '#302040', label: 'House' },
+  { x: 1300, y: 2100, w: 220, h: 160, color: '#1a1a2e', roof: '#2d2040', label: 'Station' },
+  { x: 1680, y: 2120, w: 160, h: 140, color: '#1a1a2e', roof: '#2a2040', label: 'House' },
+  { x: 2020, y: 2130, w: 180, h: 130, color: '#1a1a2e', roof: '#2d2040', label: 'House' },
 ]
 
-// ─── Zone item slots ──────────────────────────────────────────────────────────
-const ZONE_SLOTS = {
-  yard:        [[110,330],[230,300],[160,390],[340,365],[290,425],[425,305]],
-  garage:      [[545,220],[600,220],[545,265],[600,265],[572,295]],
-  high_shelf:  [[540,148],[588,148],[536,170],[584,170]],
-  pool:        [[78,175],[122,160],[78,210],[122,210]],
+// Obstacles (clearable debris and impassable cars)
+const OBSTACLES_INIT = [
+  { id: 'deb1', type: 'debris', x: 370, y: 300, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb2', type: 'debris', x: 700, y: 350, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb3', type: 'debris', x: 1050, y: 650, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb4', type: 'debris', x: 1400, y: 300, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb5', type: 'debris', x: 600, y: 1000, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb6', type: 'debris', x: 1700, y: 950, w: 50, h: 30, emoji: '🪵', cleared: false },
+  { id: 'deb7', type: 'tree', x: 350, y: 680, w: 60, h: 60, emoji: '🌳', cleared: false },
+  { id: 'deb8', type: 'tree', x: 1100, y: 350, w: 60, h: 60, emoji: '🌳', cleared: false },
+  { id: 'deb9', type: 'tree', x: 750, y: 1350, w: 60, h: 60, emoji: '🌳', cleared: false },
+  { id: 'deb10', type: 'tree', x: 1800, y: 650, w: 60, h: 60, emoji: '🌳', cleared: false },
+  { id: 'car1', type: 'car', x: 680, y: 580, w: 60, h: 35, emoji: '🚗', cleared: false },
+  { id: 'car2', type: 'car', x: 1350, y: 1000, w: 60, h: 35, emoji: '🚗', cleared: false },
+  { id: 'car3', type: 'car', x: 400, y: 1350, w: 60, h: 35, emoji: '🚗', cleared: false },
+  { id: 'car4', type: 'car', x: 1750, y: 1400, w: 60, h: 35, emoji: '🚗', cleared: false },
+]
+
+// Electrical hazard zones (downed power lines)
+const HAZARDS = [
+  { id: 'hz1', x: 650, y: 250, radius: 70, wireX1: 620, wireY1: 200, wireX2: 680, wireY2: 300 },
+  { id: 'hz2', x: 1050, y: 550, radius: 65, wireX1: 1020, wireY1: 500, wireX2: 1080, wireY2: 600 },
+  { id: 'hz3', x: 1500, y: 700, radius: 75, wireX1: 1470, wireY1: 650, wireX2: 1530, wireY2: 750 },
+  { id: 'hz4', x: 350, y: 1200, radius: 60, wireX1: 320, wireY1: 1150, wireX2: 380, wireY2: 1250 },
+  { id: 'hz5', x: 1800, y: 1200, radius: 70, wireX1: 1770, wireY1: 1150, wireX2: 1830, wireY2: 1250 },
+]
+
+// Victims to rescue — signalRange varies by signal effectiveness
+// Fire > Flag > Flashlight > SOS > Phone > Shout (shouting is short range)
+const VICTIMS_INIT = [
+  { id: 'v1', x: 310, y: 160, rescued: false, name: 'Priya', age: 28, injury: 'Hypothermia',
+    signal: 'fire', signalRange: 2000, signalDesc: 'Fire signal visible from far away',
+    soundFreq: 440, buildingIdx: 0, tip: 'Fire is the most visible signal at night — visible from kilometres away.' },
+  { id: 'v2', x: 990, y: 480, rescued: false, name: 'Rajan', age: 55, injury: 'Leg fracture',
+    signal: 'flag', signalRange: 1200, signalDesc: 'Bright cloth flag waving from terrace',
+    soundFreq: 520, buildingIdx: 8, tip: 'Bright-colored cloth on rooftops is visible to helicopters and boats.' },
+  { id: 'v3', x: 1380, y: 520, rescued: false, name: 'Meera & child', age: 32, injury: 'Dehydration',
+    signal: 'flashlight', signalRange: 900, signalDesc: 'Flashlight flickering from window',
+    soundFreq: 600, buildingIdx: 11, tip: 'Flashlights are effective at night but drain battery — use SOS pattern.' },
+  { id: 'v4', x: 680, y: 860, rescued: false, name: 'Ahmed', age: 42, injury: 'Minor cuts',
+    signal: 'shout', signalRange: 500, signalDesc: 'Shouting for help — short range only',
+    soundFreq: 350, buildingIdx: 14, tip: 'Shouting works in close range only. Whistle carries 3x farther.' },
+  { id: 'v5', x: 1450, y: 840, rescued: false, name: 'Lakshmi', age: 67, injury: 'Diabetic emergency',
+    signal: 'sos', signalRange: 800, signalDesc: 'SOS mirror flash from rooftop',
+    soundFreq: 700, buildingIdx: 16, tip: 'Mirror SOS flashes can be seen from 10km in daylight. At night, use torch.' },
+]
+
+// Submerged poles/trees (visual only, small collision)
+const POLES = [
+  { x: 340, y: 330 }, { x: 760, y: 270 }, { x: 1160, y: 330 },
+  { x: 500, y: 650 }, { x: 980, y: 680 }, { x: 1420, y: 650 },
+  { x: 220, y: 980 }, { x: 740, y: 1050 }, { x: 1330, y: 980 },
+  { x: 1680, y: 330 }, { x: 2050, y: 500 }, { x: 1880, y: 900 },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// SCORING
+// ═══════════════════════════════════════════════════════════════
+function computeScore(delivered, shockCount, timeLeft) {
+  const rescuePoints = delivered * 18            // 18 × 5 = 90 max
+  const noShockBonus = shockCount === 0 ? 5 : 0
+  const allRescuedBonus = delivered >= 5 && timeLeft > 0 ? 5 : 0
+  const total = Math.min(100, rescuePoints + noShockBonus + allRescuedBonus)
+  const passed = total >= 60
+  const headline = delivered >= 5 ? '🏆 ALL SURVIVORS DELIVERED TO SAFETY!'
+    : delivered >= 3 ? '⚠️ PARTIAL RESCUE — Some still stranded'
+    : delivered >= 1 ? '🆘 CRITICAL — Most victims not delivered' : '💀 MISSION FAILED — No one reached safety'
+  return { score: total, passed, headline, rescued: delivered, shockCount, timeLeft, noShockBonus, allRescuedBonus }
 }
 
-// ─── Action definitions ───────────────────────────────────────────────────────
-const ACTIONS = {
-  relocate_garage: {
-    label:'Relocate to Garage', timeCost:10, budgetCost:0, icon:'🏠',
-    desc:'Move into garage. Required step before elevation or shelving.',
-    canDo: i => (i.zone==='yard'||i.zone==='yardpad') && i.id!=='hvac' && i.id!=='debris',
-  },
-  elevate_blocks: {
-    label:'Elevate on Blocks (+2 ft)', timeCost:15, budgetCost:0, icon:'⬆️',
-    desc:'Raises item 2 ft off garage floor. Protects against standard 3 ft flood only.',
-    canDo: i => i.zone==='garage' && i.state!=='elevated' && i.state!=='shelved',
-  },
-  high_shelves: {
-    label:'Move to High Shelves', timeCost:8, budgetCost:0, icon:'📦',
-    desc:'Chemicals only — moves above flood line. Prevents toxic runoff.',
-    canDo: i => i.zone==='garage' && i.id==='fertilizer' && i.state!=='shelved',
-  },
-  throw_pool: {
-    label:'Throw in Pool (5 min)', timeCost:5, budgetCost:0, icon:'🏊',
-    desc:'Furniture only. Submerged in controlled water — no wind exposure. Resin is waterproof.',
-    canDo: i => i.zone==='yard' && i.id==='furniture',
-  },
-  anchor_fill: {
-    label:'Anchor & Fill w/Water ($100)', timeCost:30, budgetCost:100, icon:'⚓',
-    desc:'Tank only. Ground anchor + water ballast counteracts 4,212 lbs buoyancy. FEMA P-348.',
-    canDo: i => i.id==='propane' && i.state!=='anchored',
-  },
-  bag_debris: {
-    label:'Bag & Secure Debris', timeCost:20, budgetCost:0, icon:'🗑️',
-    desc:'Removes loose organic matter. CRITICAL — prevents storm drain clog cascade.',
-    canDo: i => i.id==='debris' && i.state!=='secured',
-  },
-  kill_breaker: {
-    label:'Kill Outdoor Breaker', timeCost:5, budgetCost:0, icon:'⚡',
-    desc:'Isolates 220V HVAC from grid. Prevents electrocution hazard in floodwater.',
-    canDo: i => i.id==='hvac' && i.state==='grid_powered',
-  },
+// ═══════════════════════════════════════════════════════════════
+// KEYFRAMES
+// ═══════════════════════════════════════════════════════════════
+const KEYFRAMES = `
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(239,68,68,0.5)}100%{box-shadow:0 0 0 14px rgba(239,68,68,0)}}
+@keyframes flashlight-flicker{0%,90%,100%{opacity:1}92%,97%{opacity:0.2}}
+@keyframes sos-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:0.5}}
+@keyframes flag-wave{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(8deg)}}
+@keyframes shout-ring{0%{transform:scale(0.5);opacity:0.8}100%{transform:scale(2.5);opacity:0}}
+@keyframes phone-glow{0%,100%{box-shadow:0 0 8px #fff}50%{box-shadow:0 0 20px #fff,0 0 40px rgba(255,255,255,0.3)}}
+@keyframes spark{0%{opacity:1;transform:translate(0,0) scale(1)}50%{opacity:0.8}100%{opacity:0;transform:translate(var(--sx),var(--sy)) scale(0)}}
+@keyframes wire-glow{0%,100%{filter:drop-shadow(0 0 4px #fbbf24)}50%{filter:drop-shadow(0 0 12px #fbbf24) drop-shadow(0 0 20px rgba(251,191,36,0.5))}}
+@keyframes rescue-flash{0%{background:rgba(34,197,94,0.3)}100%{background:transparent}}
+@keyframes wake{0%{opacity:0.4;transform:scaleX(1)}100%{opacity:0;transform:scaleX(2.5) translateY(8px)}}
+@keyframes compassPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
+@keyframes interactFill{from{width:0%}to{width:100%}}
+`
+
+// ═══════════════════════════════════════════════════════════════
+// COLLISION HELPERS
+// ═══════════════════════════════════════════════════════════════
+function rectCollide(ax, ay, aw, ah, bx, by, bw, bh) {
+  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
 }
 
-// ─── Cascading failure simulation ─────────────────────────────────────────────
-function simulate(items) {
-  let waterMult = 1.0
-  const findings = []
-  let totalLoss = 0
-
-  // Step 1 — DEBRIS CHECK (must run first, cascades to everything)
-  const debris = items.find(i=>i.id==='debris')
-  const drainClogged = debris.state !== 'secured'
-  if (drainClogged) {
-    waterMult = 2.0
-    findings.push({
-      type:'CASCADE', id:'debris',
-      title:'⚠ STORM DRAINS CLOGGED — CASCADE EVENT',
-      msg:'Loose mulch & leaves blocked storm drains within 8 minutes of rainfall. Local flood depth elevated from 3.0 ft → 4.5 ft. All 2 ft elevation measures are now INSUFFICIENT.',
-      loss:0,
-    })
-  }
-  const maxDepth = drainClogged ? 4.5 : 3.0
-
-  // Step 2 — PROPANE TANK
-  const propane = items.find(i=>i.id==='propane')
-  if (propane.state !== 'anchored') {
-    findings.push({ type:'CRITICAL', id:'propane', title:'💥 PROPANE TANK RUPTURE',
-      msg:`Archimedes principle: 4,212 lbs upward buoyancy force at ${maxDepth}ft flood. Anchor missing. Tank displaced, severed gas line, ignited. Blast radius 50 m. Entire property destroyed.`, loss:25000 })
-    totalLoss += 25000
-  } else {
-    findings.push({ type:'PASS', id:'propane', title:'✓ PROPANE: ANCHORED & BALLASTED',
-      msg:`Water ballast + ground anchor resisted 4,212 lbs buoyancy force. Gas line intact. No rupture.` })
-  }
-
-  // Step 3 — FURNITURE
-  const furn = items.find(i=>i.id==='furniture')
-  if (furn.zone==='yard') {
-    findings.push({ type:'FAIL', id:'furniture', title:'🪟 WINDOWS SMASHED — PROJECTILE',
-      msg:`185-lb resin set reached ~80 mph in wind. Struck east windows. Structural breach allowed flood ingress into living space.`, loss:3500 })
-    totalLoss += 3500
-  } else if (furn.zone==='pool') {
-    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SUBMERGED IN POOL',
-      msg:`Controlled submersion. No wind exposure. Resin construction resists water damage. Zero loss.` })
-  } else {
-    findings.push({ type:'PASS', id:'furniture', title:'✓ FURNITURE: SECURED IN GARAGE',
-      msg:`Protected from 80 mph wind. No damage.` })
-  }
-
-  // Step 4 — CHEMICALS
-  const chem = items.find(i=>i.id==='fertilizer')
-  const chemSafe = chem.state === 'shelved'
-  if (!chemSafe) {
-    findings.push({ type:'FAIL', id:'fertilizer', title:'☠ TOXIC CONTAMINATION',
-      msg:`Nitrogen fertilizer + herbicides dissolved into floodwater. Created toxic nitrate + herbicide soup. Cannot be boiled safe. Requires EPA-grade decontamination.`, loss:8000 })
-    totalLoss += 8000
-  } else {
-    findings.push({ type:'PASS', id:'fertilizer', title:'✓ CHEMICALS: ON HIGH SHELVES',
-      msg:`Secured at ${(maxDepth+1.8).toFixed(1)} ft elevation — above the ${maxDepth}ft flood line. No contamination.` })
-  }
-
-  // Step 5 — MOWER (with the cascade TRAP)
-  const mower = items.find(i=>i.id==='mower')
-  if (mower.zone==='yard') {
-    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED IN YARD',
-      msg:`Submerged in ${maxDepth}ft of floodwater. Engine oil + fuel contaminated water. All electrical systems shorted. $2,000 replacement.`, loss:2000 })
-    totalLoss += 2000
-  } else if (mower.zone==='garage' && mower.state==='elevated') {
-    if (!drainClogged) {
-      findings.push({ type:'PASS', id:'mower', title:'✓ MOWER: ELEVATED — SAFE',
-        msg:`2 ft blocks cleared 3 ft flood. No damage.` })
-    } else {
-      findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER DESTROYED — CASCADE TRAP!',
-        msg:`⚠ You elevated on 2 ft blocks (correct instinct) but LEFT THE DEBRIS UNSECURED. Clogged drains raised flood to 4.5 ft — exceeding the 2 ft blocks by 2.5 ft. LESSON: Clear debris FIRST, then elevate.`, loss:2000 })
-      totalLoss += 2000
-    }
-  } else if (mower.zone==='garage') {
-    findings.push({ type:'FAIL', id:'mower', title:'🚜 MOWER FLOOR-LEVEL DAMAGE',
-      msg:`In garage but not elevated. Flood water entered garage floor. Partial damage to electrics.`, loss:1200 })
-    totalLoss += 1200
-  }
-
-  // Step 6 — HVAC
-  const hvac = items.find(i=>i.id==='hvac')
-  if (hvac.state === 'grid_powered' && maxDepth >= 1.5) {
-    findings.push({ type:'CRITICAL', id:'hvac', title:'⚡ HVAC ELECTRICAL SHORT',
-      msg:`220V discharge through conductive floodwater. Arc flash created electrocution hazard throughout the yard. $5,000 repair + electrical remediation.`, loss:5000 })
-    totalLoss += 5000
-  } else if (hvac.state === 'isolated') {
-    findings.push({ type:'PASS', id:'hvac', title:'✓ HVAC: ISOLATED',
-      msg:`Outdoor breaker killed. No voltage in floodwater. No hazard.` })
-  }
-
-  const criticals = findings.filter(f=>f.type==='CRITICAL').length
-  const fails     = findings.filter(f=>f.type==='FAIL').length
-  const passed    = criticals===0 && fails===0
-  const score     = Math.max(0, Math.round(100 - totalLoss / 400))
-
-  return { findings, totalLoss, score, passed, maxDepth, drainClogged, criticals, fails }
+function dist(x1, y1, x2, y2) {
+  return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 }
 
-// ─── Reducer ──────────────────────────────────────────────────────────────────
-const INIT = {
-  timeRemaining: 120,
-  budget: 200,
-  items: ITEMS_INIT,
-  selectedId: null,
-  phase: 'setup',
-  simResult: null,
-}
-
-function reducer(s, a) {
-  switch (a.type) {
-    case 'SELECT':
-      return { ...s, selectedId: s.selectedId === a.id ? null : a.id }
-
-    case 'ACTION': {
-      const def = ACTIONS[a.action]
-      if (!def || s.timeRemaining < def.timeCost || s.budget < def.budgetCost) return s
-      const items = s.items.map(item => {
-        if (item.id !== a.itemId) return item
-        switch (a.action) {
-          case 'relocate_garage': return { ...item, zone:'garage',     state:'in_garage'  }
-          case 'elevate_blocks':  return { ...item, state:'elevated'                      }
-          case 'high_shelves':    return { ...item, zone:'high_shelf', state:'shelved'    }
-          case 'throw_pool':      return { ...item, zone:'pool',       state:'pooled'     }
-          case 'anchor_fill':     return { ...item, state:'anchored'                      }
-          case 'bag_debris':      return { ...item, state:'secured',   zone:'secured'     }
-          case 'kill_breaker':    return { ...item, state:'isolated'                      }
-          default:                return item
-        }
-      })
-      return { ...s, items, timeRemaining: s.timeRemaining - def.timeCost, budget: s.budget - def.budgetCost }
-    }
-
-    case 'SIMULATE': {
-      const result = simulate(s.items)
-      return { ...s, phase:'result', simResult: result }
-    }
-
-    case 'RESET': return { ...INIT, items: ITEMS_INIT.map(i => ({ ...i })) }
-    default:      return s
-  }
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function stateLabel(item) {
-  switch (item.state) {
-    case 'in_garage':   return { text:'IN GARAGE',  color:'#fbbf24' }
-    case 'elevated':    return { text:'ELEVATED +2ft', color:'#22c55e' }
-    case 'shelved':     return { text:'HIGH SHELF', color:'#22c55e' }
-    case 'pooled':      return { text:'IN POOL',    color:'#3b82f6' }
-    case 'anchored':    return { text:'ANCHORED',   color:'#22c55e' }
-    case 'secured':     return { text:'BAGGED',     color:'#22c55e' }
-    case 'isolated':    return { text:'ISOLATED',   color:'#22c55e' }
-    case 'grid_powered':return { text:'LIVE 220V',  color:'#ef4444' }
-    default:            return { text:'UNSECURED',  color:'#ef4444' }
-  }
-}
-
-function isSecured(item) {
-  return !['unsecured','grid_powered'].includes(item.state)
-}
-
-// ─── Map: assign positions by zone ────────────────────────────────────────────
-function getPositions(items) {
-  const counts = {}
-  return items.map(item => {
-    const zone = item.state === 'secured' ? 'secured_off' : item.zone
-    const slots = ZONE_SLOTS[zone] || ZONE_SLOTS.yard
-    const idx = counts[zone] ?? 0
-    counts[zone] = idx + 1
-    return { item, x: slots[idx]?.[0] ?? 100 + idx * 40, y: slots[idx]?.[1] ?? 350 }
-  })
-}
-
-// ─── SVG Yard Map ─────────────────────────────────────────────────────────────
-function YardMap({ items, selectedId, onSelect, simResult }) {
-  const positions = getPositions(items)
-  const flooding  = !!simResult
+// ═══════════════════════════════════════════════════════════════
+// SPARK PARTICLE COMPONENT
+// ═══════════════════════════════════════════════════════════════
+function SparkParticles({ x, y, radius }) {
+  // Generate random spark positions around the hazard
+  const sparks = useRef(Array.from({ length: 12 }, (_, i) => ({
+    angle: (i / 12) * Math.PI * 2 + Math.random() * 0.5,
+    dist: 10 + Math.random() * (radius * 0.6),
+    delay: Math.random() * 2,
+    dur: 0.4 + Math.random() * 0.6,
+    sx: (Math.random() - 0.5) * 30,
+    sy: -10 - Math.random() * 20,
+    size: 2 + Math.random() * 3,
+  }))).current
 
   return (
-    <svg viewBox="0 0 700 480" style={{ width:'100%', height:'100%' }}>
-      <defs>
-        <linearGradient id="floodGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#1d4ed8" stopOpacity={simResult?.drainClogged ? '0.72' : '0.52'}/>
-          <stop offset="100%" stopColor="#1e40af" stopOpacity={simResult?.drainClogged ? '0.52' : '0.38'}/>
-        </linearGradient>
-      </defs>
-
-      {/* Background */}
-      <rect width={700} height={480} fill="#080808"/>
-
-      {/* Ground texture */}
-      <rect width={700} height={480} fill="url(#grassPat)" opacity="0.4"/>
-
-      {/* ── Zone fills ── */}
-      {/* Yard */}
-      <rect x={10} y={235} width={475} height={195} rx={4}
-            fill="rgba(20,40,10,0.75)" stroke="#22c55e" strokeWidth={1.5} strokeDasharray="8,5"/>
-      {/* Pool */}
-      <rect x={10} y={75} width={175} height={160} rx={10}
-            fill="rgba(29,78,216,0.22)" stroke="#3b82f6" strokeWidth={1.5}/>
-      {/* Garage */}
-      <rect x={490} y={75} width={195} height={265} rx={4}
-            fill="rgba(42,32,8,0.85)" stroke="#f59e0b" strokeWidth={1.5}/>
-      {/* High Shelves (inside garage) */}
-      <rect x={500} y={84} width={175} height={78} rx={3}
-            fill="rgba(80,60,0,0.35)" stroke="#fbbf24" strokeWidth={1} strokeDasharray="4,3"/>
-      {/* Storm drain strip */}
-      <rect x={10} y={437} width={475} height={32} rx={2}
-            fill="rgba(14,165,233,0.18)" stroke="#0ea5e9" strokeWidth={1.5}/>
-
-      {/* ── Zone labels ── */}
-      <text x={18} y={255}  fill="#22c55e55" fontSize={9}  fontFamily="monospace" letterSpacing={2}>YARD</text>
-      <text x={18} y={92}   fill="#3b82f655" fontSize={9}  fontFamily="monospace" letterSpacing={2}>POOL</text>
-      <text x={498} y={92}  fill="#f59e0b66" fontSize={9}  fontFamily="monospace" letterSpacing={2}>GARAGE</text>
-      <text x={508} y={102} fill="#fbbf24"   fontSize={8}  fontFamily="monospace">↑ HIGH SHELVES</text>
-      <text x={160} y={456} fill="#0ea5e9"   fontSize={8}  fontFamily="monospace" textAnchor="middle">⚠ STORM DRAIN / FLOOD INGRESS</text>
-
-      {/* Structure perimeter */}
-      <line x1={10} y1={235} x2={485} y2={235} stroke="#334155" strokeWidth={1} strokeDasharray="6,4"/>
-      <text x={170} y={230} fill="#334155" fontSize={8} fontFamily="monospace">STRUCTURE PERIMETER</text>
-
-      {/* Driveway */}
-      <rect x={490} y={340} width={195} height={80} fill="rgba(30,30,30,0.5)" stroke="#334155" strokeWidth={1}/>
-      <text x={568} y={386} fill="#334155" fontSize={8} fontFamily="monospace" textAnchor="middle">DRIVEWAY</text>
-
-      {/* ── Flood animation overlay ── */}
-      {flooding && (
-        <>
-          <rect x={10} y={235} width={475} height={195}
-                fill="url(#floodGrad)"
-                style={{ animation:'flood-rise 2s ease-in-out' }}/>
-          {simResult.drainClogged && (
-            <text x={240} y={330} fill="#fbbf24" fontSize={14} fontFamily="monospace"
-                  textAnchor="middle" fontWeight="bold"
-                  style={{ animation:'glow-pulse 0.6s ease-in-out infinite' }}>
-              ⚠ DRAINS CLOGGED — 4.5ft FLOOD
-            </text>
-          )}
-          {/* Wave line */}
-          <line x1={10} y1={simResult.drainClogged ? 255 : 270}
-                x2={485} y2={simResult.drainClogged ? 255 : 270}
-                stroke="#60a5fa" strokeWidth={2}
-                style={{ animation:'wave-line 1s ease-in-out infinite alternate' }}/>
-        </>
-      )}
-
-      {/* ── Items ── */}
-      {positions.map(({ item, x, y }) => {
-        if (item.state === 'secured') return null  // bagged debris off-map
-        const isSel  = item.id === selectedId
-        const safe   = isSecured(item)
-        const lbl    = stateLabel(item)
+    <>
+      {sparks.map((s, i) => {
+        const px = x + Math.cos(s.angle) * s.dist
+        const py = y + Math.sin(s.angle) * s.dist
         return (
-          <g key={item.id} onClick={() => onSelect(item.id)} style={{ cursor:'pointer' }}>
-            {/* Selection ring */}
-            <circle cx={x} cy={y} r={24}
-                    fill={isSel ? 'rgba(251,191,36,0.12)' : 'rgba(0,0,0,0.25)'}
-                    stroke={isSel ? '#fbbf24' : safe ? '#22c55e55' : item.hc + '55'}
-                    strokeWidth={isSel ? 2.5 : 1.5}
-                    style={isSel ? {animation:'glow-pulse 1s ease-in-out infinite'} : {}}/>
-            {/* Icon */}
-            <text x={x} y={y+6} fontSize={20} textAnchor="middle">{item.emoji}</text>
-            {/* Status badge */}
-            <text x={x+16} y={y-13} fontSize={11}>
-              {safe ? '✅' : '⚠️'}
-            </text>
-            {/* Label below */}
-            <text x={x} y={y+30} fontSize={8} textAnchor="middle"
-                  fill={lbl.color} fontFamily="monospace">{lbl.text}</text>
-          </g>
+          <div key={i} style={{
+            position: 'absolute', left: px, top: py, width: s.size, height: s.size,
+            borderRadius: '50%', background: i % 3 === 0 ? '#fff' : '#fbbf24',
+            boxShadow: `0 0 ${s.size * 2}px ${i % 3 === 0 ? '#fff' : '#fbbf24'}`,
+            '--sx': `${s.sx}px`, '--sy': `${s.sy}px`,
+            animation: `spark ${s.dur}s ease-out ${s.delay}s infinite`,
+            pointerEvents: 'none',
+          }} />
         )
       })}
-
-      {/* Wind compass */}
-      <g transform="translate(655, 450)">
-        <circle cx={0} cy={0} r={18} fill="rgba(0,0,0,0.6)" stroke="#334155" strokeWidth={1}/>
-        <text x={-5} y={5} fontSize={14} fill="#60a5fa">↙</text>
-        <text x={-16} y={-10} fontSize={7} fill="#334155" fontFamily="monospace">80MPH</text>
-      </g>
-
-      {/* Flood depth scale */}
-      <g transform="translate(657, 100)">
-        <rect x={-8} y={-80} width={16} height={80} fill="rgba(30,64,175,0.12)" stroke="#3b82f6" strokeWidth={1}/>
-        <rect x={-7} y={-80+50} width={14} height={30} fill="rgba(59,130,246,0.45)"/>
-        <line x1={-8} y1={-80+50} x2={8} y2={-80+50} stroke="#60a5fa" strokeWidth={1.5}/>
-        <text x={0} y={8}   fontSize={7} fill="#3b82f6" textAnchor="middle" fontFamily="monospace">FLOOD</text>
-        <text x={0} y={17}  fontSize={9} fill="#60a5fa" textAnchor="middle" fontFamily="monospace" fontWeight="700">3 FT</text>
-      </g>
-    </svg>
+      {/* Wire glow zone */}
+      <div style={{
+        position: 'absolute', left: x - radius, top: y - radius,
+        width: radius * 2, height: radius * 2, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(251,191,36,0.08) 0%, transparent 70%)',
+        border: '1px dashed rgba(251,191,36,0.2)',
+        animation: 'wire-glow 1.5s ease-in-out infinite',
+        pointerEvents: 'none',
+      }} />
+    </>
   )
 }
 
-// ─── Main component ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// PROXIMITY SOUND ENGINE — Web Audio API
+// ═══════════════════════════════════════════════════════════════
+let audioCtx = null
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+  return audioCtx
+}
+
+function playBeep(freq, volume, duration = 0.08) {
+  try {
+    const ctx = getAudioCtx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = freq
+    gain.gain.value = Math.min(0.3, volume * 0.3)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start()
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration)
+    osc.stop(ctx.currentTime + duration + 0.01)
+  } catch(e) { /* audio not available */ }
+}
+
+function playShockBuzz() {
+  try {
+    const ctx = getAudioCtx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sawtooth'
+    osc.frequency.value = 120
+    gain.gain.value = 0.15
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start()
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3)
+    osc.stop(ctx.currentTime + 0.35)
+  } catch(e) {}
+}
+
+function playRescueChime() {
+  try {
+    const ctx = getAudioCtx()
+    const notes = [523, 659, 784] // C5, E5, G5
+    notes.forEach((f, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = f
+      gain.gain.value = 0.15
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime + i * 0.12)
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.25)
+      osc.stop(ctx.currentTime + i * 0.12 + 0.3)
+    })
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// VICTIM SIGNAL COMPONENT — visibility based on signal range
+// ═══════════════════════════════════════════════════════════════
+function VictimSignal({ victim, torchDist }) {
+  const range = victim.signalRange || 800
+  const visible = torchDist < range
+  const signalOpacity = visible ? Math.min(1, 1.2 - torchDist / range) : 0
+
+  if (victim.rescued) return null
+
+  const sx = victim.x, sy = victim.y - 30
+
+  switch (victim.signal) {
+    case 'fire':
+      return (<>
+        {/* Fire glow — visible from very far */}
+        <div style={{ position: 'absolute', left: sx - 20, top: sy - 20, width: 40, height: 40, borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(251,146,60,0.5) 0%, rgba(239,68,68,0.2) 40%, transparent 70%)',
+          animation: 'sos-pulse 1.5s ease-in-out infinite', opacity: signalOpacity,
+          boxShadow: '0 0 30px rgba(251,146,60,0.4), 0 0 60px rgba(239,68,68,0.2)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', left: sx - 6, top: sy - 8, fontSize: 18,
+          animation: 'flag-wave 0.6s ease-in-out infinite', opacity: signalOpacity,
+          filter: 'drop-shadow(0 0 8px #f97316)', pointerEvents: 'none' }}>🔥</div>
+      </>)
+    case 'flashlight':
+      return (
+        <div style={{ position: 'absolute', left: sx - 8, top: sy - 8, width: 16, height: 16, borderRadius: '50%',
+          background: 'radial-gradient(circle, #fff 0%, rgba(255,255,255,0.6) 40%, transparent 70%)',
+          animation: 'flashlight-flicker 2s ease-in-out infinite', opacity: signalOpacity,
+          boxShadow: '0 0 16px #fff, 0 0 32px rgba(255,255,255,0.4)', pointerEvents: 'none' }} />
+      )
+    case 'sos':
+      return (<>
+        <div style={{ position: 'absolute', left: sx - 14, top: sy - 20, background: 'rgba(239,68,68,0.9)',
+          color: '#fff', padding: '3px 8px', borderRadius: 8, fontSize: 10, fontWeight: 900,
+          animation: 'sos-pulse 1.2s ease-in-out infinite', opacity: signalOpacity,
+          letterSpacing: 2, pointerEvents: 'none' }}>SOS</div>
+        <div style={{ position: 'absolute', left: sx - 6, top: sy + 4, fontSize: 16,
+          animation: 'sos-pulse 1.2s ease-in-out infinite', opacity: signalOpacity,
+          pointerEvents: 'none' }}>🆘</div>
+      </>)
+    case 'flag':
+      return (
+        <div style={{ position: 'absolute', left: sx - 6, top: sy - 20, opacity: signalOpacity, pointerEvents: 'none' }}>
+          <div style={{ width: 2, height: 22, background: '#78350f', margin: '0 auto' }} />
+          <div style={{ width: 18, height: 10, background: '#ef4444', position: 'absolute', top: 0, left: 4,
+            transformOrigin: 'left center', animation: 'flag-wave 1s ease-in-out infinite', borderRadius: '0 3px 3px 0' }} />
+        </div>
+      )
+    case 'shout':
+      return (<>
+        {[0, 1, 2].map(i => (
+          <div key={i} style={{
+            position: 'absolute', left: sx - 20, top: sy - 20, width: 40, height: 40,
+            borderRadius: '50%', border: '2px solid rgba(251,191,36,0.4)',
+            animation: `shout-ring 2s ease-out ${i * 0.6}s infinite`, opacity: signalOpacity,
+            pointerEvents: 'none'
+          }} />
+        ))}
+        <div style={{ position: 'absolute', left: sx - 8, top: sy - 8, fontSize: 14, opacity: signalOpacity,
+          pointerEvents: 'none' }}>📢</div>
+      </>)
+    case 'phone':
+      return (
+        <div style={{ position: 'absolute', left: sx - 5, top: sy - 5, width: 10, height: 10, borderRadius: '50%',
+          background: '#fff', animation: 'phone-glow 2s ease-in-out infinite', opacity: signalOpacity,
+          pointerEvents: 'none' }} />
+      )
+    default: return null
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════
 export default function Module3_YardLockdown() {
-  const { dispatch: gd } = useGame()
-  const [s, dispatch]    = useReducer(reducer, { ...INIT, items: ITEMS_INIT.map(i=>({...i})) })
-  const [hovAction, setHovAction] = useState(null)
+  const { dispatch: gameDispatch } = useGame()
+  const [phase, setPhase] = useState('intro')
+  const [victims, setVictims] = useState(VICTIMS_INIT.map(v => ({ ...v })))
+  const [obstacles, setObstacles] = useState(OBSTACLES_INIT.map(o => ({ ...o })))
+  const [timeLeft, setTimeLeft] = useState(TIMER_START)
+  const [shockCount, setShockCount] = useState(0)
+  const [result, setResult] = useState(null)
+  const [interacting, setInteracting] = useState(null) // { type, id, start }
+  const [interactProg, setInteractProg] = useState(0)
+  const [rescueFlash, setRescueFlash] = useState(false)
+  const [shockFlash, setShockFlash] = useState(false)
+  const [rescueTip, setRescueTip] = useState(null)
+  const [shockTip, setShockTip] = useState(false)
+  const [onBoard, setOnBoard] = useState([])       // victim ids currently on raft
+  const [delivered, setDelivered] = useState([])    // victim ids safely at shelter
+  const [shelterFlash, setShelterFlash] = useState(false)
+  const [raftFullMsg, setRaftFullMsg] = useState(false)
 
-  const selected = s.items.find(i => i.id === s.selectedId) ?? null
-  const timePct  = s.timeRemaining / 120
-  const timeColor= timePct > 0.5 ? '#22c55e' : timePct > 0.25 ? '#f59e0b' : '#ef4444'
-  const secured  = s.items.filter(isSecured).length
-  const total    = s.items.length
+  const raftRef = useRef({ x: 60, y: 320, vx: 0, vy: 0, angle: 0 })
+  const keysRef = useRef({})
+  const cameraRef = useRef({ x: 0, y: 0 })
+  const worldRef = useRef(null)
+  const raftElRef = useRef(null)
+  const torchElRef = useRef(null)
+  const frameRef = useRef(null)
+  const timerRef = useRef(null)
+  const lastShockRef = useRef(0)
+  const lastBeepRef = useRef(0)
+  const victimsRef = useRef(victims)
+  const obstaclesRef = useRef(obstacles)
+  const interactRef = useRef(null)
+  const onBoardRef = useRef(onBoard)
+  const deliveredRef = useRef(delivered)
 
-  const availActions = selected
-    ? Object.entries(ACTIONS).filter(([,def]) => def.canDo(selected))
-    : []
+  useEffect(() => { victimsRef.current = victims }, [victims])
+  useEffect(() => { obstaclesRef.current = obstacles }, [obstacles])
+  useEffect(() => { interactRef.current = interacting }, [interacting])
+  useEffect(() => { onBoardRef.current = onBoard }, [onBoard])
+  useEffect(() => { deliveredRef.current = delivered }, [delivered])
 
-  function doAction(actionKey) {
-    dispatch({ type:'ACTION', itemId: selected.id, action: actionKey })
+  // Timer
+  useEffect(() => {
+    if (phase !== 'play') return
+    timerRef.current = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          clearInterval(timerRef.current)
+          endGame(deliveredRef.current.length)
+          return 0
+        }
+        return t - 1
+      })
+    }, 1000)
+    return () => clearInterval(timerRef.current)
+  }, [phase]) // eslint-disable-line
+
+  function endGame(deliveredCount) {
+    const dc = deliveredCount !== undefined ? deliveredCount : deliveredRef.current.length
+    const sc = shockCount
+    const res = computeScore(dc, sc, timeLeft)
+    setResult(res)
+    gameDispatch({ type: 'RECORD_SCORE', payload: { key: 'flood-3', result: { score: res.score, passed: res.passed } } })
+    setPhase('result')
   }
 
-  function handleSimulate() {
-    const result = simulate(s.items)
-    dispatch({ type:'SIMULATE' })
-    gd({ type:'RECORD_SCORE', payload:{ key:'flood-3', result:{ score: Math.min(100,Math.max(0,result.score)), passed: result.passed } } })
+  // Keyboard
+  useEffect(() => {
+    if (phase !== 'play') return
+    const k = keysRef.current
+    const down = (e) => {
+      const key = e.key.toLowerCase()
+      if (['arrowleft', 'a'].includes(key) || e.key === 'ArrowLeft') { k.left = true; e.preventDefault() }
+      if (['arrowright', 'd'].includes(key) || e.key === 'ArrowRight') { k.right = true; e.preventDefault() }
+      if (['arrowup', 'w'].includes(key) || e.key === 'ArrowUp') { k.up = true; e.preventDefault() }
+      if (['arrowdown', 's'].includes(key) || e.key === 'ArrowDown') { k.down = true; e.preventDefault() }
+      if (key === 'e' || key === ' ') { k.interact = true; e.preventDefault() }
+    }
+    const up = (e) => {
+      const key = e.key.toLowerCase()
+      if (['arrowleft', 'a'].includes(key) || e.key === 'ArrowLeft') k.left = false
+      if (['arrowright', 'd'].includes(key) || e.key === 'ArrowRight') k.right = false
+      if (['arrowup', 'w'].includes(key) || e.key === 'ArrowUp') k.up = false
+      if (['arrowdown', 's'].includes(key) || e.key === 'ArrowDown') k.down = false
+      if (key === 'e' || key === ' ') { k.interact = false; setInteracting(null); setInteractProg(0) }
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); keysRef.current = {} }
+  }, [phase])
+
+  // Game loop
+  useEffect(() => {
+    if (phase !== 'play') return
+    let prev = performance.now()
+
+    const loop = (now) => {
+      const dt = Math.min(0.05, (now - prev) / 1000); prev = now
+      const r = raftRef.current, k = keysRef.current, cam = cameraRef.current
+
+      // Input → acceleration
+      let ax = 0, ay = 0
+      if (k.left) ax -= RAFT_SPEED
+      if (k.right) ax += RAFT_SPEED
+      if (k.up) ay -= RAFT_SPEED
+      if (k.down) ay += RAFT_SPEED
+
+      // Normalize diagonal
+      if (ax !== 0 && ay !== 0) { ax *= 0.707; ay *= 0.707 }
+
+      r.vx += ax * dt; r.vy += ay * dt
+      r.vx *= RAFT_DRAG; r.vy *= RAFT_DRAG
+
+      // Angle toward velocity
+      if (Math.abs(r.vx) > 5 || Math.abs(r.vy) > 5) {
+        const targetAngle = Math.atan2(r.vy, r.vx) * (180 / Math.PI) + 90
+        let diff = targetAngle - r.angle
+        while (diff > 180) diff -= 360
+        while (diff < -180) diff += 360
+        r.angle += diff * 0.1
+      }
+
+      // Tentative position
+      let nx = r.x + r.vx * dt, ny = r.y + r.vy * dt
+      nx = Math.max(5, Math.min(MAP_W - RAFT_W - 5, nx))
+      ny = Math.max(5, Math.min(MAP_H - RAFT_H - 5, ny))
+
+      // Building collision
+      for (const b of BUILDINGS) {
+        if (rectCollide(nx, ny, RAFT_W, RAFT_H, b.x, b.y, b.w, b.h)) {
+          nx = r.x; ny = r.y; r.vx *= -0.3; r.vy *= -0.3; break
+        }
+      }
+
+      // Obstacle collision
+      for (const o of obstaclesRef.current) {
+        if (o.cleared) continue
+        if (rectCollide(nx, ny, RAFT_W, RAFT_H, o.x, o.y, o.w, o.h)) {
+          nx = r.x; ny = r.y; r.vx *= -0.2; r.vy *= -0.2; break
+        }
+      }
+
+      // Pole collision
+      for (const p of POLES) {
+        if (dist(nx + RAFT_W / 2, ny + RAFT_H / 2, p.x, p.y) < 18) {
+          nx = r.x; ny = r.y; r.vx *= -0.3; r.vy *= -0.3; break
+        }
+      }
+
+      r.x = nx; r.y = ny
+
+      // Hazard zone check
+      const rcx = r.x + RAFT_W / 2, rcy = r.y + RAFT_H / 2
+      for (const h of HAZARDS) {
+        if (dist(rcx, rcy, h.x, h.y) < h.radius && now - lastShockRef.current > SHOCK_COOLDOWN) {
+          lastShockRef.current = now
+          setShockCount(c => c + 1)
+          setShockFlash(true)
+          setShockTip(true)
+          playShockBuzz()
+          setTimeout(() => setShockFlash(false), 500)
+          setTimeout(() => setShockTip(false), 3000)
+        }
+      }
+
+      // Proximity sound — beep gets faster/louder near victims
+      const closestUnrescued = victimsRef.current.filter(v => !v.rescued)
+        .map(v => ({ ...v, d: dist(rcx, rcy, v.x, v.y) }))
+        .sort((a, b) => a.d - b.d)[0]
+      if (closestUnrescued) {
+        const maxRange = closestUnrescued.signalRange || 800
+        if (closestUnrescued.d < maxRange) {
+          const proximity = 1 - (closestUnrescued.d / maxRange) // 0 = far, 1 = on top
+          const beepInterval = 800 - proximity * 650 // 800ms far → 150ms close
+          if (now - lastBeepRef.current > beepInterval) {
+            lastBeepRef.current = now
+            playBeep(closestUnrescued.soundFreq || 500, proximity)
+          }
+        }
+      }
+
+      // Interact with E
+      if (k.interact) {
+        const ci = interactRef.current
+        const curOnBoard = onBoardRef.current
+        const curDelivered = deliveredRef.current
+
+        // Check if near SHELTER to drop off passengers
+        const shelterCx = SHELTER.x + SHELTER.w / 2, shelterCy = SHELTER.y + SHELTER.h / 2
+        if (curOnBoard.length > 0 && dist(rcx, rcy, shelterCx, shelterCy) < SHELTER_RANGE) {
+          if (!ci || ci.id !== 'shelter') {
+            setInteracting({ type: 'dropoff', id: 'shelter', start: now })
+          } else if (now - ci.start >= INTERACT_TIME) {
+            // Drop off all onboard victims
+            const newDelivered = [...curDelivered, ...curOnBoard]
+            setDelivered(newDelivered)
+            setOnBoard([])
+            setInteracting(null); setInteractProg(0)
+            setShelterFlash(true); setTimeout(() => setShelterFlash(false), 800)
+            playRescueChime()
+            setRescueTip({ name: `${curOnBoard.length} victim(s) delivered!`, tip: 'Always prioritize getting victims to safety shelters. NDMA recommends pre-identified safe zones in every neighborhood.', signal: 'shelter', injury: 'Safe delivery' })
+            setTimeout(() => setRescueTip(null), 4000)
+            k.interact = false
+            if (newDelivered.length >= 5) { setTimeout(() => endGame(5), 800) }
+          } else {
+            setInteractProg((now - ci.start) / INTERACT_TIME)
+          }
+        }
+        // Check nearby victim to board onto raft
+        else {
+          for (const v of victimsRef.current) {
+            if (v.rescued) continue
+            if (dist(rcx, rcy, v.x, v.y) < RESCUE_RANGE) {
+              // Check boat capacity
+              if (curOnBoard.length >= BOAT_CAPACITY) {
+                setRaftFullMsg(true); setTimeout(() => setRaftFullMsg(false), 2000)
+                k.interact = false; break
+              }
+              if (!ci || ci.id !== v.id) {
+                setInteracting({ type: 'rescue', id: v.id, start: now })
+              } else if (now - ci.start >= INTERACT_TIME) {
+                // Victim boards raft
+                setVictims(prev => prev.map(pv => pv.id === v.id ? { ...pv, rescued: true } : pv))
+                setOnBoard(prev => [...prev, v.id])
+                setInteracting(null); setInteractProg(0)
+                setRescueFlash(true); setTimeout(() => setRescueFlash(false), 600)
+                playRescueChime()
+                const victimData = VICTIMS_INIT.find(vi => vi.id === v.id)
+                if (victimData) {
+                  setRescueTip({ name: victimData.name, tip: victimData.tip, signal: victimData.signal, injury: victimData.injury })
+                  setTimeout(() => setRescueTip(null), 4500)
+                }
+                k.interact = false
+              } else {
+                setInteractProg((now - ci.start) / INTERACT_TIME)
+              }
+              break
+            }
+          }
+        // Check nearby debris
+        for (const o of obstaclesRef.current) {
+          if (o.cleared || o.type === 'car') continue
+          if (dist(rcx, rcy, o.x + o.w / 2, o.y + o.h / 2) < 60) {
+            if (!ci || ci.id !== o.id) {
+              setInteracting({ type: 'clear', id: o.id, start: now })
+            } else if (now - ci.start >= DEBRIS_CLEAR_TIME) {
+              setObstacles(prev => prev.map(po => po.id === o.id ? { ...po, cleared: true } : po))
+              setInteracting(null); setInteractProg(0)
+              k.interact = false
+            } else {
+              setInteractProg((now - ci.start) / DEBRIS_CLEAR_TIME)
+            }
+            break
+          }
+        }
+        } // close else block
+      }
+
+      // Camera
+      const vw = window.innerWidth, vh = window.innerHeight
+      const tx = rcx - vw / 2, ty = rcy - vh / 2
+      cam.x += (tx - cam.x) * CAM_LERP; cam.y += (ty - cam.y) * CAM_LERP
+      cam.x = Math.max(0, Math.min(MAP_W - vw, cam.x))
+      cam.y = Math.max(0, Math.min(MAP_H - vh, cam.y))
+
+      if (worldRef.current) worldRef.current.style.transform = `translate(${-cam.x}px,${-cam.y}px)`
+      if (raftElRef.current) {
+        raftElRef.current.style.left = `${r.x}px`
+        raftElRef.current.style.top = `${r.y}px`
+        raftElRef.current.style.transform = `rotate(${r.angle}deg)`
+      }
+      // Torch follows raft in screen space
+      if (torchElRef.current) {
+        torchElRef.current.style.left = `${rcx - cam.x}px`
+        torchElRef.current.style.top = `${rcy - cam.y}px`
+      }
+
+      frameRef.current = requestAnimationFrame(loop)
+    }
+    frameRef.current = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(frameRef.current)
+  }, [phase]) // eslint-disable-line
+
+  function retry() {
+    setVictims(VICTIMS_INIT.map(v => ({ ...v })))
+    setObstacles(OBSTACLES_INIT.map(o => ({ ...o })))
+    setTimeLeft(TIMER_START); setShockCount(0); setResult(null)
+    setInteracting(null); setInteractProg(0)
+    setOnBoard([]); setDelivered([])
+    raftRef.current = { x: 60, y: 320, vx: 0, vy: 0, angle: 0 }
+    cameraRef.current = { x: 0, y: 0 }; keysRef.current = {}
+    setPhase('intro')
   }
 
-  // ── INTRO ──────────────────────────────────────────────────────────────────
-  if (s.phase === 'intro') return null   // skip to setup directly
+  const rescued = victims.filter(v => v.rescued).length
 
-  // ── RESULT SCREEN ──────────────────────────────────────────────────────────
-  if (s.phase === 'result' && s.simResult) {
-    const r = s.simResult
-    return (
-      <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        <style>{`
-          @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
-          @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.25}}
-          @keyframes slide-up{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-          @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
-        `}</style>
+  // Find nearest target: if boat has passengers → shelter, else → nearest unrescued victim
+  const shelterCx = SHELTER.x + SHELTER.w / 2, shelterCy = SHELTER.y + SHELTER.h / 2
+  const shelterDist = dist(raftRef.current.x + RAFT_W / 2, raftRef.current.y + RAFT_H / 2, shelterCx, shelterCy)
+  const nearestVictim = onBoard.length > 0
+    ? { v: { x: shelterCx, y: shelterCy, rescued: false }, d: shelterDist, isShelter: true }
+    : victims.filter(v => !v.rescued).reduce((best, v) => {
+        const d = dist(raftRef.current.x + RAFT_W / 2, raftRef.current.y + RAFT_H / 2, v.x, v.y)
+        return !best || d < best.d ? { v, d, isShelter: false } : best
+      }, null)
 
-        {/* Header */}
-        <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 20px', gap:16, flexShrink:0 }}>
-          <div style={{ color: r.passed ? '#22c55e' : '#ef4444', fontSize:13, fontWeight:700, letterSpacing:2 }}>
-            AFTER ACTION REPORT — {r.passed ? 'PROPERTY DEFENDED' : `${r.criticals} CRITICAL · ${r.fails} FAIL`}
+  // ═══════════ INTRO ═══════════
+  if (phase === 'intro') return (
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#0a0a1a,#0d1b2a,#1b2838)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
+      <style>{KEYFRAMES}</style>
+      {/* Floating icons */}
+      {['🔦','🌊','🚣','🏚️','⚡','🆘','📢','🪵','🚗','🌳'].map((e,i) => (
+        <div key={i} style={{ position:'absolute', left:`${(i*11+4)%95}%`, top:`${(i*17+8)%80}%`, fontSize:36+(i%3)*8, opacity:0.08, animation:`bob ${3+i*0.3}s ease-in-out infinite` }}>{e}</div>
+      ))}
+      <div style={{ position:'relative', zIndex:1, maxWidth:640, width:'100%', background:'rgba(255,255,255,0.94)', borderRadius:28, padding:40, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.5)', textAlign:'center' }}>
+        <div style={{ fontSize:80, animation:'bob 2s ease-in-out infinite' }}>🔦</div>
+        <div style={{ display:'inline-block', background:'linear-gradient(135deg,#dc2626,#991b1b)', color:'#fff', padding:'6px 18px', borderRadius:999, fontWeight:800, fontSize:12, letterSpacing:2, animation:'pulse-ring 1.4s infinite', marginTop:4 }}>🌊 NIGHT RESCUE OPERATION</div>
+        <h1 style={{ fontSize:32, fontWeight:900, margin:'14px 0 4px', color:'#0f172a' }}>Flood Rescue</h1>
+        <div style={{ color:'#475569', fontSize:14, fontWeight:600, marginBottom:20 }}>NDMA · Search & Rescue Navigation</div>
+        <p style={{ color:'#334155', fontSize:15, lineHeight:1.7, marginBottom:16 }}>
+          Your raft is ready. The <strong>neighborhood is flooded</strong> and it's <strong>dark</strong>.
+          Survivors are trapped in buildings, signaling for help.
+          Navigate using your <strong>torch</strong>, avoid <strong>downed power lines</strong>, clear <strong>debris</strong>, and rescue <strong>5 victims</strong>.
+        </p>
+        <div style={{ background:'#f8fafc', border:'2px dashed #94a3b8', borderRadius:16, padding:16, textAlign:'left', marginBottom:22 }}>
+          <div style={{ color:'#0f172a', fontSize:13, lineHeight:1.9, fontWeight:600 }}>
+            <div>🔦 Use your torch to see in the dark</div>
+            <div>🚣 Arrow keys / WASD to steer the raft</div>
+            <div>🆘 Look for victim signals (lights, SOS, flags, shouting)</div>
+            <div>⚡ Avoid sparking wire zones — they shock!</div>
+            <div>🪵 Hold E near debris to clear the path</div>
+            <div>👥 Hold E near a victim to board them (max 2)</div>
+            <div>🏥 Bring victims to the SAFETY SHELTER (green building)</div>
+            <div>🔄 Raft holds 2 — make multiple trips!</div>
           </div>
-          <div style={{ marginLeft:'auto', display:'flex', gap:12 }}>
-            <button onClick={() => dispatch({ type:'RESET' })} style={{ padding:'7px 20px', borderRadius:3, fontFamily:MONO, fontSize:12, fontWeight:700, letterSpacing:2, cursor:'pointer', border:'1px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444' }}>↺ RETRY</button>
-            <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ padding:'7px 16px', borderRadius:3, fontFamily:MONO, fontSize:11, cursor:'pointer', border:'1px solid #1e2d3a', background:'transparent', color:'#334155' }}>← MODULES</button>
+        </div>
+        <div style={{ display:'flex', gap:12, justifyContent:'center' }}>
+          <button onClick={() => setPhase('play')} style={{ padding:'16px 40px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#dc2626,#991b1b)', color:'#fff', fontWeight:900, fontSize:18, letterSpacing:1, cursor:'pointer', boxShadow:'0 10px 24px rgba(220,38,38,0.5)' }}>🚣 BEGIN RESCUE</button>
+        </div>
+        <div style={{ marginTop:12 }}><button onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#94a3b8', fontSize:13, cursor:'pointer' }}>← Back to Modules</button></div>
+      </div>
+    </div>
+  )
+
+  // ═══════════ GAMEPLAY ═══════════
+  if (phase === 'play') {
+    const r = raftRef.current
+    const rcx = r.x + RAFT_W / 2, rcy = r.y + RAFT_H / 2
+
+    return (
+      <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', background: '#030810', fontFamily: "'Segoe UI',system-ui,sans-serif" }}>
+        <style>{KEYFRAMES}</style>
+
+        {/* World container */}
+        <div ref={worldRef} style={{ position: 'absolute', width: MAP_W, height: MAP_H, willChange: 'transform' }}>
+          {/* Water base */}
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,#050b18,#081020,#0a1428)' }}>
+            {/* Wave pattern */}
+            {Array.from({ length: 80 }).map((_, i) => (
+              <div key={i} style={{
+                position: 'absolute', left: (i * 131) % MAP_W, top: (i * 97 + 50) % MAP_H,
+                width: 30 + (i % 4) * 10, height: 3, borderRadius: 2, background: 'rgba(37,99,235,0.06)',
+                transform: `rotate(${(i * 17) % 30 - 15}deg)`,
+              }} />
+            ))}
+          </div>
+
+          {/* Buildings */}
+          {BUILDINGS.map((b, i) => (
+            <div key={i} style={{ position: 'absolute', left: b.x, top: b.y, width: b.w, height: b.h }}>
+              {/* Base */}
+              <div style={{ position: 'absolute', inset: 0, background: b.color, border: '2px solid #252540', borderRadius: 3, boxShadow: 'inset 0 -10px 20px rgba(0,0,0,0.4)' }}>
+                {/* Roof */}
+                <div style={{ position: 'absolute', top: -6, left: -3, right: -3, height: 10, background: b.roof, borderRadius: '3px 3px 0 0', border: '1px solid #3a3060' }} />
+                {/* Windows */}
+                {Array.from({ length: Math.floor(b.w / 35) }).map((_, wi) => (
+                  <div key={wi} style={{ position: 'absolute', left: 12 + wi * 34, top: 18, width: 14, height: 14, background: 'rgba(10,10,20,0.8)', border: '1px solid #2a2a40', borderRadius: 1 }} />
+                ))}
+                {/* Flood line */}
+                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '35%', background: 'linear-gradient(transparent, rgba(30,64,175,0.15))', borderRadius: '0 0 3px 3px' }} />
+              </div>
+            </div>
+          ))}
+
+          {/* Poles */}
+          {POLES.map((p, i) => (
+            <div key={i} style={{ position: 'absolute', left: p.x - 3, top: p.y - 20, width: 6, height: 24, background: 'linear-gradient(180deg,#3a3020,#1a1510)', borderRadius: 2, border: '1px solid #2a2010' }} />
+          ))}
+
+          {/* Obstacles */}
+          {obstacles.filter(o => !o.cleared).map(o => (
+            <div key={o.id} style={{ position: 'absolute', left: o.x, top: o.y, width: o.w, height: o.h, display: 'flex', alignItems: 'center', justifyContent: 'center', background: o.type === 'car' ? 'rgba(100,100,120,0.3)' : 'rgba(80,60,30,0.3)', border: `2px solid ${o.type === 'car' ? '#4b5563' : '#78350f'}`, borderRadius: o.type === 'tree' ? '50%' : 4, fontSize: o.type === 'tree' ? 28 : 22 }}>
+              {o.emoji}
+            </div>
+          ))}
+
+          {/* Electrical hazard zones */}
+          {HAZARDS.map(h => (
+            <SparkParticles key={h.id} x={h.x} y={h.y} radius={h.radius} />
+          ))}
+          {/* Hazard wires */}
+          <svg style={{ position: 'absolute', top: 0, left: 0, width: MAP_W, height: MAP_H, pointerEvents: 'none' }}>
+            {HAZARDS.map(h => (
+              <g key={`w${h.id}`}>
+                <line x1={h.wireX1} y1={h.wireY1} x2={h.wireX2} y2={h.wireY2}
+                  stroke="#fbbf24" strokeWidth={2} strokeDasharray="8,6" opacity={0.6}
+                  style={{ animation: 'wire-glow 1.5s ease-in-out infinite' }} />
+                {/* Ground contact point */}
+                <circle cx={h.x} cy={h.y} r={4} fill="#fbbf24" opacity={0.8}>
+                  <animate attributeName="opacity" values="0.8;0.3;0.8" dur="0.5s" repeatCount="indefinite" />
+                </circle>
+              </g>
+            ))}
+          </svg>
+
+          {/* Victim signals */}
+          {victims.map(v => (
+            <VictimSignal key={v.id} victim={v} torchDist={dist(rcx, rcy, v.x, v.y)} />
+          ))}
+
+          {/* Victim markers (bodies near buildings) */}
+          {victims.filter(v => !v.rescued).map(v => (
+            <div key={`vm${v.id}`} style={{ position: 'absolute', left: v.x - 8, top: v.y - 8, width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
+              👤
+            </div>
+          ))}
+
+          {/* Safety Shelter */}
+          <div style={{ position: 'absolute', left: SHELTER.x, top: SHELTER.y, width: SHELTER.w, height: SHELTER.h, zIndex: 15 }}>
+            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#065f46,#047857)', border: `3px solid ${shelterFlash ? '#fff' : '#22c55e'}`, borderRadius: 8, boxShadow: `0 0 30px rgba(34,197,94,0.3), 0 0 60px rgba(34,197,94,0.1)${shelterFlash ? ', 0 0 80px rgba(255,255,255,0.5)' : ''}` }}>
+              <div style={{ position:'absolute', top:-22, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color:'#22c55e', fontSize:10, fontWeight:800, letterSpacing:1, textShadow:'0 0 8px rgba(34,197,94,0.5)', animation: onBoard.length > 0 ? 'sos-pulse 1.5s infinite' : 'none' }}>🏥 SAFETY SHELTER</div>
+              <div style={{ position:'absolute', top:8, left:'50%', transform:'translateX(-50%)', fontSize:28 }}>🏥</div>
+              <div style={{ position:'absolute', bottom:8, left:'50%', transform:'translateX(-50)', color:'#d1fae5', fontSize:10, fontWeight:700 }}>{delivered.length}/5</div>
+              {/* Delivered victim icons */}
+              <div style={{ position:'absolute', bottom:-18, left:0, display:'flex', gap:2 }}>
+                {delivered.map((vid,i) => <span key={i} style={{ fontSize:10 }}>✅</span>)}
+              </div>
+            </div>
+            {/* Pulsing ring when onBoard > 0 */}
+            {onBoard.length > 0 && (
+              <div style={{ position:'absolute', inset:-10, borderRadius:12, border:'2px solid rgba(34,197,94,0.4)', animation:'shout-ring 2s ease-out infinite', pointerEvents:'none' }}/>
+            )}
+          </div>
+
+          {/* Raft */}
+          <div ref={raftElRef} style={{ position: 'absolute', width: RAFT_W, height: RAFT_H, zIndex: 20, left: 60, top: 320, transformOrigin: 'center center' }}>
+            {/* Wake trail */}
+            <div style={{ position: 'absolute', bottom: -6, left: '50%', transform: 'translateX(-50%)', width: 16, height: 8, borderRadius: '50%', background: 'rgba(147,197,253,0.15)', animation: 'wake 1s ease-out infinite' }} />
+            {/* Raft body */}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {[0, 1, 2, 3, 4].map(i => (
+                <div key={i} style={{ flex: 1, background: `linear-gradient(90deg,#5c3d1e,#8B5A2B,#5c3d1e)`, borderRadius: 2, border: '1px solid #3a2010' }} />
+              ))}
+            </div>
+            {/* Paddle */}
+            <div style={{ position: 'absolute', left: -8, top: '35%', width: RAFT_W + 16, height: 3, background: '#78350f', borderRadius: 2, transform: 'rotate(0deg)' }} />
+            {/* Person */}
+            <div style={{ position: 'absolute', top: 6, left: '50%', transform: 'translateX(-50%)' }}>
+              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fbbf24', border: '1px solid #78350f', margin: '0 auto' }} />
+              <div style={{ width: 10, height: 8, background: '#ea580c', borderRadius: '2px 2px 0 0', margin: '0 auto' }} />
+            </div>
+            {/* Passengers on raft */}
+            {onBoard.length > 0 && (
+              <div style={{ position:'absolute', bottom:2, left:'50%', transform:'translateX(-50%)', display:'flex', gap:1 }}>
+                {onBoard.map((_,i) => (
+                  <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'#86efac', border:'1px solid #166534' }}/>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
-          {/* Map with flood overlay */}
-          <div style={{ flex:1, padding:12 }}>
-            <YardMap items={s.items} selectedId={null} onSelect={()=>{}} simResult={r}/>
+        {/* TORCH / DARKNESS MASK — fixed overlay */}
+        <div ref={torchElRef} style={{
+          position: 'fixed', width: 0, height: 0, zIndex: 30, pointerEvents: 'none',
+        }}>
+          <div style={{
+            position: 'absolute', left: -MAP_W, top: -MAP_H, width: MAP_W * 2, height: MAP_H * 2,
+            background: `radial-gradient(circle ${TORCH_RADIUS}px at center, transparent 0%, rgba(0,0,0,0.15) 30%, rgba(0,0,0,0.7) 60%, rgba(2,4,10,0.92) 80%, rgba(2,4,10,0.97) 100%)`,
+          }} />
+        </div>
+
+        {/* Rescue flash */}
+        {rescueFlash && <div style={{ position: 'fixed', inset: 0, zIndex: 35, animation: 'rescue-flash 0.6s ease-out forwards', pointerEvents: 'none' }} />}
+        {/* Shock flash */}
+        {shockFlash && <div style={{ position: 'fixed', inset: 0, zIndex: 35, background: 'rgba(251,191,36,0.25)', pointerEvents: 'none' }} />}
+
+        {/* HUD */}
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40, padding: '8px 14px', display: 'flex', gap: 10, alignItems: 'center', justifyContent: 'space-between', background: 'rgba(5,10,20,0.85)', backdropFilter: 'blur(8px)', borderBottom: '2px solid rgba(220,38,38,0.4)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ background: 'linear-gradient(135deg,#dc2626,#991b1b)', color: '#fff', padding: '4px 12px', borderRadius: 999, fontWeight: 800, fontSize: 11, letterSpacing: 1 }}>🔦 RESCUE</div>
+            <div style={{ color: '#86efac', fontSize: 11, fontWeight: 700, background:'rgba(34,197,94,0.1)', padding:'3px 8px', borderRadius:999, border:'1px solid rgba(34,197,94,0.3)' }}>🚣 {onBoard.length}/{BOAT_CAPACITY}</div>
+            <div style={{ color: '#f1f5f9', fontSize: 13, fontWeight: 900 }}>🏥 {delivered.length}<span style={{ color: '#64748b', fontWeight: 400 }}>/5</span></div>
           </div>
 
-          {/* Findings panel */}
-          <div style={{ width:380, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-            {/* Score */}
-            <div style={{ padding:'16px 18px', borderBottom:'1px solid #111', textAlign:'center' }}>
-              <div style={{ fontSize:9, color:'#2a4055', letterSpacing:3, marginBottom:6 }}>SIMULATION SCORE</div>
-              <div style={{ fontSize:48, fontWeight:900, color: r.passed ? '#22c55e' : r.score > 50 ? '#f59e0b' : '#ef4444' }}>
-                {r.score}%
-              </div>
-              <div style={{ fontSize:11, color:'#334155', marginTop:4 }}>
-                Financial loss: <span style={{ color:'#ef4444', fontWeight:700 }}>${r.totalLoss.toLocaleString()}</span>
-              </div>
-              <div style={{ fontSize:10, color:'#1e3050', marginTop:2 }}>
-                Flood depth: <span style={{ color: r.drainClogged ? '#ef4444' : '#3b82f6', fontWeight:700 }}>{r.maxDepth}ft</span>
-                {r.drainClogged && <span style={{ color:'#ef4444' }}> (drains clogged)</span>}
+          {/* Compass to nearest victim / shelter */}
+          {nearestVictim && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: nearestVictim.isShelter ? 'rgba(34,197,94,0.15)' : 'rgba(251,191,36,0.1)', padding: '4px 10px', borderRadius: 999, border: `1px solid ${nearestVictim.isShelter ? 'rgba(34,197,94,0.4)' : 'rgba(251,191,36,0.3)'}` }}>
+              <span style={{ fontSize: 14, animation: 'compassPulse 2s ease-in-out infinite',
+                transform: `rotate(${Math.atan2(nearestVictim.v.y - rcy, nearestVictim.v.x - rcx) * 180 / Math.PI - 90}deg)`,
+                display: 'inline-block' }}>🧭</span>
+              <span style={{ color: nearestVictim.isShelter ? '#22c55e' : '#fbbf24', fontSize: 10, fontWeight: 700 }}>
+                {nearestVictim.isShelter ? '🏥 SHELTER' : `👤 ${Math.round(nearestVictim.d)}m`}
+              </span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {shockCount > 0 && <div style={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>⚡ {shockCount}</div>}
+            <div style={{ fontSize: 18, fontWeight: 900, color: timeLeft <= 30 ? '#ef4444' : timeLeft <= 60 ? '#f59e0b' : '#10b981', padding: '2px 10px', borderRadius: 8, background: 'rgba(0,0,0,0.4)', border: `2px solid ${timeLeft <= 30 ? '#ef4444' : timeLeft <= 60 ? '#f59e0b' : '#10b981'}` }}>⏱ {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}</div>
+          </div>
+        </div>
+
+        {/* Raft full warning */}
+        {raftFullMsg && (
+          <div style={{ position:'fixed', top:56, left:'50%', transform:'translateX(-50%)', zIndex:45, background:'rgba(120,53,15,0.95)', border:'2px solid #fbbf24', borderRadius:14, padding:'10px 18px', color:'#fef3c7', fontWeight:700, fontSize:12, animation:'fadeIn 0.2s ease-out' }}>
+            ⚠️ RAFT FULL ({BOAT_CAPACITY}/{BOAT_CAPACITY}) — Head to 🏥 Safety Shelter to drop off!
+          </div>
+        )}
+
+        {/* Interaction progress bar */}
+        {interacting && interactProg > 0 && (
+          <div style={{ position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)', zIndex: 40, width: 160, background: 'rgba(5,10,20,0.9)', borderRadius: 10, padding: 8, border: '1px solid rgba(255,255,255,0.1)' }}>
+            <div style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>{interacting.type === 'rescue' ? '🆘 BOARDING...' : interacting.type === 'dropoff' ? '🏥 DELIVERING...' : '🪵 CLEARING...'}</div>
+            <div style={{ width: '100%', height: 6, background: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', borderRadius: 3, width: `${interactProg * 100}%`, background: interacting.type === 'rescue' ? '#22c55e' : '#f59e0b', transition: 'width 0.1s' }} />
+            </div>
+          </div>
+        )}
+
+        {/* Controls */}
+        <div style={{ position: 'fixed', bottom: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 40, display: 'flex', gap: 8, background: 'rgba(5,10,20,0.85)', padding: '5px 14px', borderRadius: 10, fontSize: 10, color: '#64748b', fontWeight: 600 }}>
+          <span>↑←↓→ Move</span><span>·</span><span>E/Space Interact</span>
+        </div>
+
+        {/* Rescue Tip Popup */}
+        {rescueTip && (
+          <div style={{ position: 'fixed', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 45, width: 340, background: 'rgba(5,46,22,0.95)', border: '2px solid #22c55e', borderRadius: 16, padding: '14px 18px', backdropFilter: 'blur(8px)', animation: 'fadeIn 0.3s ease-out' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 22 }}>✅</span>
+              <div>
+                <div style={{ color: '#22c55e', fontWeight: 800, fontSize: 13 }}>RESCUED: {rescueTip.name}</div>
+                <div style={{ color: '#86efac', fontSize: 10 }}>{rescueTip.injury} · Signal: {rescueTip.signal.toUpperCase()}</div>
               </div>
             </div>
-
-            {/* Findings list */}
-            <div style={{ flex:1, overflowY:'auto', padding:'12px 14px', display:'flex', flexDirection:'column', gap:8 }}>
-              <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>FINDINGS</div>
-              {r.findings.map((f, i) => {
-                const bc = f.type==='CRITICAL' ? '#ef4444' : f.type==='FAIL' ? '#f97316' : f.type==='CASCADE' ? '#fbbf24' : '#22c55e'
-                return (
-                  <div key={i} style={{ background:'#0d0d0d', border:`1px solid ${bc}33`, borderLeft:`3px solid ${bc}`, borderRadius:4, padding:'10px 12px',
-                                        animation:`slide-up 0.3s ease-out ${i*0.06}s both` }}>
-                    <div style={{ color:bc, fontSize:11, fontWeight:700, marginBottom:5 }}>{f.title}</div>
-                    <div style={{ color:'#647a8e', fontSize:10, lineHeight:1.65 }}>{f.msg}</div>
-                    {f.loss > 0 && (
-                      <div style={{ color:'#ef4444', fontSize:10, marginTop:5, fontWeight:700 }}>
-                        💸 LOSS: ${f.loss.toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+            <div style={{ background: 'rgba(34,197,94,0.1)', borderRadius: 8, padding: '8px 10px', borderLeft: '3px solid #22c55e' }}>
+              <div style={{ color: '#bbf7d0', fontSize: 10, fontWeight: 600, marginBottom: 2 }}>💡 NDMA TIP</div>
+              <div style={{ color: '#d1fae5', fontSize: 11, lineHeight: 1.5 }}>{rescueTip.tip}</div>
             </div>
+          </div>
+        )}
 
-            {/* Key lesson */}
-            {r.simResult?.drainClogged && !r.passed && (
-              <div style={{ padding:'12px 16px', borderTop:'1px solid #111', background:'rgba(220,38,38,0.06)' }}>
-                <div style={{ color:'#fbbf24', fontSize:9, letterSpacing:2, marginBottom:5 }}>📋 KEY LESSON</div>
-                <div style={{ color:'#7a9ab8', fontSize:10, lineHeight:1.7 }}>
-                  <b style={{color:'#f87171'}}>FEMA Stormwater Mgmt:</b> "Remove all loose organic material from drainage paths before a flood event. Even small quantities of mulch and leaves can fully block residential storm drains within minutes, converting a manageable 3ft flood into an unmanageable 4.5ft event."
-                </div>
+        {/* Shock Warning Popup */}
+        {shockTip && (
+          <div style={{ position: 'fixed', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 45, width: 320, background: 'rgba(69,10,10,0.95)', border: '2px solid #fbbf24', borderRadius: 16, padding: '12px 16px', backdropFilter: 'blur(8px)', animation: 'fadeIn 0.3s ease-out' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 22 }}>⚡</span>
+              <div style={{ color: '#fbbf24', fontWeight: 800, fontSize: 13 }}>ELECTROCUTION HAZARD!</div>
+            </div>
+            <div style={{ background: 'rgba(251,191,36,0.08)', borderRadius: 8, padding: '8px 10px', borderLeft: '3px solid #fbbf24' }}>
+              <div style={{ color: '#fef3c7', fontSize: 11, lineHeight: 1.5 }}>
+                ⚠ <strong>NDMA Warning:</strong> Downed power lines energize floodwater up to 200m away. Never approach sparking wires. Report to authorities immediately.
               </div>
-            )}
+            </div>
+          </div>
+        )}
+
+        {/* Minimap */}
+        <div style={{ position: 'fixed', bottom: 50, right: 10, zIndex: 40, width: 120, height: 120, background: 'rgba(5,10,20,0.85)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', padding: 4 }}>
+          <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+            {/* Buildings on minimap */}
+            {BUILDINGS.map((b, i) => (
+              <div key={i} style={{ position: 'absolute', left: `${(b.x / MAP_W) * 100}%`, top: `${(b.y / MAP_H) * 100}%`, width: `${(b.w / MAP_W) * 100}%`, height: `${(b.h / MAP_H) * 100}%`, background: '#1a1a2e', borderRadius: 1 }} />
+            ))}
+            {/* Hazards */}
+            {HAZARDS.map(h => (
+              <div key={h.id} style={{ position: 'absolute', left: `${(h.x / MAP_W) * 100}%`, top: `${(h.y / MAP_H) * 100}%`, width: 3, height: 3, borderRadius: '50%', background: '#fbbf24' }} />
+            ))}
+            {/* Unrescued victims */}
+            {victims.filter(v => !v.rescued).map(v => (
+              <div key={v.id} style={{ position: 'absolute', left: `${(v.x / MAP_W) * 100}%`, top: `${(v.y / MAP_H) * 100}%`, width: 4, height: 4, borderRadius: '50%', background: '#ef4444', animation: 'sos-pulse 2s infinite' }} />
+            ))}
+            {/* Shelter on minimap */}
+            <div style={{ position: 'absolute', left: `${(SHELTER.x / MAP_W) * 100}%`, top: `${(SHELTER.y / MAP_H) * 100}%`, width: `${(SHELTER.w / MAP_W) * 100}%`, height: `${(SHELTER.h / MAP_H) * 100}%`, background: '#22c55e', borderRadius: 1, opacity: 0.6 }} />
+            {/* Raft position */}
+            <div style={{ position: 'absolute', left: `${(r.x / MAP_W) * 100}%`, top: `${(r.y / MAP_H) * 100}%`, width: 5, height: 5, borderRadius: '50%', background: '#22c55e', border: '1px solid #fff', zIndex: 1 }} />
           </div>
         </div>
       </div>
     )
   }
 
-  // ── SETUP / PLAY ────────────────────────────────────────────────────────────
-  return (
-    <div style={{ position:'fixed', inset:0, background:'#070707', fontFamily:MONO, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-      <style>{`
-        @keyframes flood-rise{from{opacity:0;transform:scaleY(0)}to{opacity:1;transform:scaleY(1)}}
-        @keyframes glow-pulse{0%,100%{opacity:1}50%{opacity:.22}}
-        @keyframes slide-up{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
-        @keyframes wave-line{from{transform:translateY(0)}to{transform:translateY(4px)}}
-        @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-      `}</style>
+  // ═══════════ RESULT ═══════════
+  if (phase === 'result' && result) {
+    const sc = result.passed ? '#10b981' : result.score >= 40 ? '#f59e0b' : '#ef4444'
+    return (
+      <div style={{ position:'fixed', inset:0, zIndex:100, background: result.passed ? 'linear-gradient(135deg,#064e3b,#065f46,#047857)' : 'linear-gradient(135deg,#450a0a,#7f1d1d,#991b1b)', overflowY:'auto', width:'100%' }}>
+        <style>{KEYFRAMES}</style>
+        <div style={{ maxWidth: 680, width:'100%', margin: '0 auto', padding:'24px 16px 40px' }}>
 
-      {/* ── TOP BAR ── */}
-      <div style={{ height:50, background:'#080808', borderBottom:'1px solid #111', display:'flex', alignItems:'center', padding:'0 16px', gap:16, flexShrink:0 }}>
-        <button onClick={() => gd({ type:'BACK_TO_MODULES' })} style={{ background:'none', border:'none', color:'#1e3050', fontFamily:MONO, fontSize:11, cursor:'pointer' }}>← EXIT</button>
-        <div style={{ color:'#00e5ff', fontSize:12, fontWeight:700, letterSpacing:2 }}>M3 · YARD TRIAGE</div>
-        <div style={{ fontSize:9, color:'#1e3050', letterSpacing:1 }}>SPATIAL LOGISTICS SIMULATOR · 120-MIN PRE-FLOOD WINDOW</div>
+          {/* Score Card */}
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'28px 24px', border: '3px solid #0f172a', boxShadow: '0 20px 50px rgba(0,0,0,0.4)', textAlign: 'center', marginBottom: 16 }}>
+            <div style={{ fontSize: 60, animation: 'bob 2s ease-in-out infinite' }}>{result.passed ? '🏆' : '💀'}</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: sc, letterSpacing: 1, marginTop: 4 }}>{result.headline}</div>
+            <div style={{ marginTop: 10, fontSize: 56, fontWeight: 900, color: sc }}>{result.score}<span style={{ fontSize: 22, color: '#94a3b8' }}>/100</span></div>
 
-        <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:20 }}>
-          {/* Time */}
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>⏰ TIME</span>
-            <div style={{ width:100, height:7, background:'#0a0a0a', border:'1px solid #141414', borderRadius:3, overflow:'hidden' }}>
-              <div style={{ height:'100%', borderRadius:3, width:`${timePct*100}%`, background:timeColor, transition:'width 0.3s,background 0.3s' }}/>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+              <span style={{ background: '#f0fdf4', color: '#166534', padding: '3px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>👥 {result.rescued}/5 rescued</span>
+              <span style={{ background: result.shockCount === 0 ? '#f0fdf4' : '#fef2f2', color: result.shockCount === 0 ? '#166534' : '#991b1b', padding: '3px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>⚡ {result.shockCount} shocks</span>
+              {result.noShockBonus > 0 && <span style={{ background: '#eff6ff', color: '#1e40af', padding: '3px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>🛡️ +{result.noShockBonus}</span>}
+              {result.allRescuedBonus > 0 && <span style={{ background: '#fefce8', color: '#854d0e', padding: '3px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>🏆 +{result.allRescuedBonus}</span>}
             </div>
-            <span style={{ color:timeColor, fontFamily:MONO, fontSize:13, fontWeight:700, minWidth:42 }}>{s.timeRemaining}m</span>
           </div>
-          {/* Budget */}
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ color:'#334155', fontSize:9, letterSpacing:1 }}>💰</span>
-            <span style={{ color:'#22c55e', fontFamily:MONO, fontSize:13, fontWeight:700 }}>${s.budget}</span>
+
+          {/* Rescue Report */}
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'20px 20px', border: '3px solid #0f172a', marginBottom: 16 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a', marginBottom: 10, textAlign:'center' }}>📋 Rescue Report</div>
+            <div style={{ display: 'flex', flexDirection:'column', gap: 8 }}>
+              {VICTIMS_INIT.map(v => {
+                const wasRescued = victims.find(vv => vv.id === v.id)?.rescued
+                return (
+                  <div key={v.id} style={{ padding: 12, borderRadius: 12, background: wasRescued ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1.5px solid ${wasRescued ? '#22c55e' : '#ef4444'}`, display:'flex', gap:10, alignItems:'flex-start' }}>
+                    <div style={{ fontSize:20, flexShrink:0, marginTop:2 }}>{wasRescued ? '✅' : '❌'}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: wasRescued ? '#065f46' : '#991b1b' }}>{v.name}, {v.age}</div>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 1 }}>{v.injury} · Signal: {v.signal.toUpperCase()}</div>
+                      <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, fontStyle: 'italic', lineHeight:1.5, background:'rgba(0,0,0,0.03)', padding:'4px 8px', borderRadius:6 }}>💡 {v.tip}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
-          {/* Progress */}
-          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-            <span style={{ color:'#334155', fontSize:9 }}>SECURED:</span>
-            <span style={{ color: secured===total ? '#22c55e' : '#f59e0b', fontFamily:MONO, fontSize:12, fontWeight:700 }}>{secured}/{total}</span>
-          </div>
-        </div>
-      </div>
 
-      {/* ── MAIN: Map + Ledger ── */}
-      <div style={{ flex:1, display:'flex', minHeight:0 }}>
+          {/* ═══ NDMA DISASTER LEARNING ═══ */}
 
-        {/* MAP */}
-        <div style={{ flex:1, padding:10, display:'flex', alignItems:'stretch', minWidth:0 }}>
-          <YardMap items={s.items} selectedId={s.selectedId}
-                   onSelect={id => dispatch({ type:'SELECT', id })} simResult={null}/>
-        </div>
-
-        {/* LEDGER */}
-        <div style={{ width:310, background:'#080808', borderLeft:'1px solid #111', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-
-          {/* Selected item detail */}
-          {selected ? (
-            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
-                <span style={{ fontSize:24 }}>{selected.emoji}</span>
-                <div>
-                  <div style={{ color:selected.hc, fontSize:12, fontWeight:700 }}>{selected.name}</div>
-                  <div style={{ color:stateLabel(selected).color, fontSize:9, letterSpacing:1 }}>{stateLabel(selected).text}</div>
+          {/* Signal Effectiveness Chart */}
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'20px 20px', border: '3px solid #0f172a', marginBottom: 16 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a', marginBottom: 6, textAlign:'center' }}>📡 Signal Effectiveness — NDMA Guide</div>
+            <div style={{ fontSize:11, color:'#64748b', textAlign:'center', marginBottom:12 }}>How far each distress signal can be detected during floods</div>
+            {[
+              { signal:'🔥 Fire / Bonfire', range:2000, rangeTxt:'Visible up to 5+ km at night', eff:100, color:'#f97316', note:'Most effective night signal. Use dry materials if available. Keep it burning.' },
+              { signal:'🚩 Bright Flag', range:1200, rangeTxt:'Visible up to 2 km (air + boat)', eff:75, color:'#ef4444', note:'Use bright colors (red, orange). Tie to highest point. Effective for helicopters.' },
+              { signal:'🔦 Flashlight / Torch', range:900, rangeTxt:'Visible up to 1 km at night', eff:60, color:'#fbbf24', note:'Flash in SOS pattern (3 short, 3 long, 3 short). Conserve battery.' },
+              { signal:'🆘 Mirror / SOS', range:800, rangeTxt:'Up to 10 km in daylight', eff:55, color:'#3b82f6', note:'Mirror reflects sunlight. Best in daytime. At night, use torch in SOS pattern.' },
+              { signal:'📢 Shouting / Whistle', range:500, rangeTxt:'Only 200-500m range', eff:30, color:'#8b5cf6', note:'Save energy — shouting exhausts quickly. Whistle carries 3x farther than voice.' },
+            ].map((s,i) => (
+              <div key={i} style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8, padding:'8px 10px', background:'rgba(0,0,0,0.02)', borderRadius:10 }}>
+                <div style={{ width:110, flexShrink:0, fontWeight:700, fontSize:12, color:'#1e293b' }}>{s.signal}</div>
+                <div style={{ flex:1 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
+                    <div style={{ flex:1, height:8, background:'#f1f5f9', borderRadius:4, overflow:'hidden' }}>
+                      <div style={{ height:'100%', width:`${s.eff}%`, background:s.color, borderRadius:4 }}/>
+                    </div>
+                    <span style={{ fontSize:10, color: s.color, fontWeight:700, minWidth:30 }}>{s.eff}%</span>
+                  </div>
+                  <div style={{ fontSize:9, color:'#64748b' }}>{s.rangeTxt}</div>
+                  <div style={{ fontSize:9, color:'#94a3b8', marginTop:1, fontStyle:'italic' }}>{s.note}</div>
                 </div>
               </div>
-              {/* Properties grid */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:5, marginBottom:8 }}>
+            ))}
+          </div>
+
+          {/* Flood Rescue Dos & Don'ts */}
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'20px 20px', border: '3px solid #0f172a', marginBottom: 16 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a', marginBottom: 12, textAlign:'center' }}>⚠️ Flood Rescue — NDMA Safety Guidelines</div>
+
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div>
+                <div style={{ fontWeight:800, fontSize:11, color:'#166534', marginBottom:6, letterSpacing:1 }}>✅ DO's</div>
                 {[
-                  ['WEIGHT',      `${selected.weight.toLocaleString()} lbs`],
-                  ['BUOYANCY',    `${selected.buoyancy.toLocaleString()} lbs`],
-                  ['CONTAMINANT', selected.contaminant],
-                  ['WIND DRAG',   selected.windDrag],
-                ].map(([k,v])=>(
-                  <div key={k} style={{ background:'#0d0d0d', border:'1px solid #141414', borderRadius:3, padding:'5px 8px' }}>
-                    <div style={{ color:'#2a4055', fontSize:8, letterSpacing:1 }}>{k}</div>
-                    <div style={{ color: v==='CRITICAL'?'#ef4444':v==='HIGH'?'#f97316':v==='MEDIUM'?'#f59e0b':'#22c55e',
-                                  fontSize:11, fontWeight:700, marginTop:2 }}>{v}</div>
+                  'Stay away from downed power lines — water conducts electricity',
+                  'Move to higher ground when rescue isn\'t immediate',
+                  'Use bright signals (fire, flags) to attract rescuers',
+                  'Wear a life jacket or improvised flotation device',
+                  'Keep emergency whistle ready — carries farther than voice',
+                  'Prioritize elderly, children, and injured victims',
+                  'Mark rescued buildings to avoid re-checking',
+                  'Navigate slowly to avoid hidden submerged hazards',
+                ].map((d,i) => (
+                  <div key={i} style={{ fontSize:10, color:'#334155', marginBottom:5, paddingLeft:12, position:'relative', lineHeight:1.5 }}>
+                    <span style={{ position:'absolute', left:0, color:'#22c55e', fontWeight:700 }}>✓</span>{d}
                   </div>
                 ))}
               </div>
-              <div style={{ fontSize:9.5, color:'#3a5068', lineHeight:1.65, borderTop:'1px solid #111', paddingTop:8 }}>{selected.desc}</div>
-              {/* Hazard badge */}
-              <div style={{ marginTop:8, display:'inline-block', padding:'3px 10px', borderRadius:12,
-                            background:`${selected.hc}1a`, border:`1px solid ${selected.hc}55`,
-                            color:selected.hc, fontSize:9, fontWeight:700, letterSpacing:1 }}>
-                ⚠ {selected.hazard}
+              <div>
+                <div style={{ fontWeight:800, fontSize:11, color:'#991b1b', marginBottom:6, letterSpacing:1 }}>❌ DON'Ts</div>
+                {[
+                  'Never drive or walk through flowing floodwater',
+                  'Don\'t touch metal objects in flooded areas (shock risk)',
+                  'Don\'t enter buildings with water above knee level',
+                  'Avoid areas with visible sparking or downed wires',
+                  'Don\'t overload the rescue raft beyond capacity',
+                  'Don\'t consume floodwater — it\'s contaminated',
+                  'Don\'t ignore small signals — victims may be weak',
+                  'Don\'t attempt rescue in fast-moving current alone',
+                ].map((d,i) => (
+                  <div key={i} style={{ fontSize:10, color:'#334155', marginBottom:5, paddingLeft:12, position:'relative', lineHeight:1.5 }}>
+                    <span style={{ position:'absolute', left:0, color:'#ef4444', fontWeight:700 }}>✗</span>{d}
+                  </div>
+                ))}
               </div>
             </div>
-          ) : (
-            <div style={{ padding:'14px 14px', borderBottom:'1px solid #111', flexShrink:0 }}>
-              <div style={{ color:'#1e3050', fontSize:10, textAlign:'center', marginTop:8 }}>
-                Click an item on the map to see details and available actions
-              </div>
-            </div>
-          )}
+          </div>
 
-          {/* Item list */}
-          <div style={{ flex:1, overflowY:'auto', padding:'10px 12px', display:'flex', flexDirection:'column', gap:5 }}>
-            <div style={{ fontSize:8, color:'#1e3050', letterSpacing:3, marginBottom:4 }}>ITEM LEDGER</div>
-            {s.items.map(item => {
-              const lbl  = stateLabel(item)
-              const isSel= item.id === s.selectedId
-              return (
-                <div key={item.id} onClick={() => dispatch({ type:'SELECT', id:item.id })}
-                  style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', borderRadius:4, cursor:'pointer',
-                           background: isSel ? 'rgba(251,191,36,0.06)' : '#0d0d0d',
-                           border:`1px solid ${isSel ? '#fbbf2455' : '#141414'}`,
-                           transition:'all 0.15s' }}>
-                  <span style={{ fontSize:18, flexShrink:0 }}>{item.emoji}</span>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.name}</div>
-                    <div style={{ fontSize:8, color:'#1e3050', marginTop:2 }}>{item.hazard}</div>
-                  </div>
-                  <div style={{ padding:'2px 8px', borderRadius:10, background:`${lbl.color}18`,
-                                border:`1px solid ${lbl.color}44`, color:lbl.color, fontSize:8, fontWeight:700, flexShrink:0 }}>
-                    {lbl.text}
-                  </div>
-                </div>
-              )
-            })}
+          {/* Key Facts */}
+          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'20px 20px', border: '3px solid #0f172a', marginBottom: 20 }}>
+            <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a', marginBottom: 10, textAlign:'center' }}>📊 Did You Know? — Flood Rescue Facts</div>
+            {[
+              { fact: '6 inches of moving water can knock an adult off their feet. 2 feet can float a car.', source: 'NDMA India' },
+              { fact: 'Electrocution is the #2 cause of flood deaths after drowning. Downed power lines energize water up to 200 meters away.', source: 'WHO / NDMA' },
+              { fact: 'The "Golden Hour" in flood rescue: victims\' survival rate drops 50% after the first 6 hours of being stranded.', source: 'NDRF India' },
+              { fact: 'India experiences an average of 8 major flood events per year, affecting over 75 million people annually.', source: 'NDMA India Report' },
+              { fact: 'A whistle can be heard up to 1.6 km away. Shouting carries only 200-300m. Always keep a whistle in your go-bag.', source: 'NDMA Preparedness Guide' },
+            ].map((f,i) => (
+              <div key={i} style={{ padding:'8px 12px', marginBottom:6, background:'rgba(37,99,235,0.04)', borderRadius:10, borderLeft:'3px solid #3b82f6' }}>
+                <div style={{ fontSize:11, color:'#1e293b', lineHeight:1.6 }}>{f.fact}</div>
+                <div style={{ fontSize:9, color:'#94a3b8', marginTop:2 }}>— {f.source}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Action Buttons */}
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', paddingBottom:20 }}>
+            <button onClick={retry} style={{ padding: '12px 28px', borderRadius: 999, background: '#fff', color: '#0f172a', border: '2px solid #0f172a', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>🔄 Try Again</button>
+            <button onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })} style={{ padding: '12px 28px', borderRadius: 999, border: 'none', background: 'linear-gradient(135deg,#1e40af,#1d4ed8)', color: '#fff', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>← Back to Modules</button>
           </div>
         </div>
       </div>
+    )
+  }
 
-      {/* ── ACTION DECK ── */}
-      <div style={{ background:'#080808', borderTop:'2px solid #1a2535', padding:'10px 14px', flexShrink:0 }}>
-        <div style={{ display:'flex', alignItems:'stretch', gap:10 }}>
-
-          {/* Available actions */}
-          <div style={{ flex:1, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
-            {selected ? (
-              availActions.length > 0 ? (
-                availActions.map(([key, def]) => {
-                  const canAfford = s.timeRemaining >= def.timeCost && s.budget >= def.budgetCost
-                  const isHov = hovAction === key
-                  return (
-                    <div key={key} style={{ position:'relative' }}>
-                      {/* Tooltip */}
-                      {isHov && (
-                        <div style={{ position:'absolute', bottom:'100%', left:0, marginBottom:6, width:220, background:'#0d0d0d',
-                                      border:'1px solid #1a2535', borderRadius:4, padding:'8px 10px', zIndex:10,
-                                      fontSize:9, color:'#647a8e', lineHeight:1.6 }}>
-                          {def.desc}
-                        </div>
-                      )}
-                      <button
-                        onClick={() => canAfford && doAction(key)}
-                        onMouseEnter={() => setHovAction(key)}
-                        onMouseLeave={() => setHovAction(null)}
-                        disabled={!canAfford}
-                        style={{
-                          padding:'8px 14px', borderRadius:4, fontFamily:MONO, fontSize:11, fontWeight:700,
-                          letterSpacing:1, cursor: canAfford ? 'pointer' : 'not-allowed',
-                          border:`1px solid ${canAfford ? '#00e5ff44' : '#1a2535'}`,
-                          background: canAfford ? 'rgba(0,229,255,0.05)' : 'rgba(0,0,0,0.3)',
-                          color: canAfford ? '#00e5ff' : '#2a4055',
-                          opacity: canAfford ? 1 : 0.45,
-                          transition:'all 0.15s',
-                          display:'flex', alignItems:'center', gap:6,
-                        }}>
-                        <span>{def.icon}</span>
-                        <span>{def.label}</span>
-                        <span style={{ marginLeft:4, padding:'1px 6px', borderRadius:8, background:'rgba(251,191,36,0.1)',
-                                       border:'1px solid rgba(251,191,36,0.25)', color:canAfford?'#fbbf24':'#2a4055', fontSize:9 }}>
-                          ⏰{def.timeCost}m{def.budgetCost>0?` 💰$${def.budgetCost}`:''}
-                        </span>
-                      </button>
-                    </div>
-                  )
-                })
-              ) : (
-                <div style={{ color:'#22c55e', fontSize:11, fontFamily:MONO, padding:'8px 14px',
-                              border:'1px solid #22c55e33', borderRadius:4, background:'rgba(34,197,94,0.05)' }}>
-                  ✓ {selected.name} — No further actions needed
-                </div>
-              )
-            ) : (
-              <div style={{ color:'#1e3050', fontSize:10, padding:'8px 14px' }}>
-                ← Select an item on the map to see available actions
-              </div>
-            )}
-          </div>
-
-          {/* Simulate button */}
-          <button onClick={handleSimulate}
-            style={{ padding:'10px 24px', borderRadius:4, fontFamily:MONO, fontSize:13, fontWeight:700,
-                     letterSpacing:2, cursor:'pointer', flexShrink:0, alignSelf:'center',
-                     border:'2px solid #ef4444', background:'rgba(239,68,68,0.08)', color:'#ef4444',
-                     boxShadow:'0 0 16px rgba(239,68,68,0.2)' }}>
-            ▶ SIMULATE LANDFALL
-          </button>
-        </div>
-
-        {/* Time used bar */}
-        <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:8 }}>
-          <span style={{ fontSize:8, color:'#1e3050', letterSpacing:1 }}>TIME USED</span>
-          <div style={{ flex:1, height:4, background:'#0a0a0a', border:'1px solid #141414', borderRadius:2, overflow:'hidden' }}>
-            <div style={{ height:'100%', borderRadius:2, width:`${(1-timePct)*100}%`, background:timeColor, transition:'width 0.3s' }}/>
-          </div>
-          <span style={{ color:'#2a4055', fontSize:8 }}>{120-s.timeRemaining}m used</span>
-          <span style={{ color:timeColor, fontSize:8, fontWeight:700 }}>{s.timeRemaining}m remaining</span>
-        </div>
-      </div>
-    </div>
-  )
+  return null
 }

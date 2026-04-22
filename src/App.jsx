@@ -9,8 +9,8 @@ import { getModuleSources } from './data/moduleSources'
 import GoBagModule from './modules/flood/Module1_GoBag'
 import HomeDefenseModule from './modules/flood/Module2_HomeDefense'
 import YardLockdownModule from './modules/flood/Module3_YardLockdown'
-import SinkingCarModule from './modules/flood/Module4_SinkingCar'
-import TreacherousTrekModule from './modules/flood/Module5_TreacherousTrek'
+import FieldTriageModule from './modules/flood/Module4_FieldTriage'
+import SinkingCarModule from './modules/flood/Module5_SinkingCar'
 import FirstResponderModule from './modules/flood/Module6_FirstResponder'
 import CampSafeHavenModule from './modules/flood/Module7_CampSafeHaven'
 import SOSSignalingModule from './modules/flood/Module8_SOSSignaling'
@@ -46,8 +46,8 @@ function ModuleRouter() {
       case 1:  moduleEl = <GoBagModule />;        break
       case 2:  moduleEl = <HomeDefenseModule />;   break
       case 3:  moduleEl = <YardLockdownModule />;  break
-      case 4:  moduleEl = <SinkingCarModule />;    break
-      case 5:  moduleEl = <TreacherousTrekModule />; break
+      case 4:  moduleEl = <FieldTriageModule />;    break
+      case 5:  moduleEl = <SinkingCarModule />;      break
       case 6:  moduleEl = <FirstResponderModule />; break
       case 7:  moduleEl = <CampSafeHavenModule />; break
       case 8:  moduleEl = <SOSSignalingModule />;  break
