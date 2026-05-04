@@ -5,7 +5,7 @@
  * Arrow keys / WASD to move + jump. E / Space to pick up items.
  * 60s timer, 12 kg weight limit. NDMA & IMD aligned.
  */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useGame } from '../../context/GameContext'
 import Narrator from '../../components/Narrator'
 
@@ -61,41 +61,7 @@ const WALLS_VIS = [
   { x: 1658, y: 50, w: 14, h: 670 },
 ]
 
-const FURNITURE = [
-  // ── HALL ──
-  { x: 260, y: 620, w: 100, h: 70, c: '#4a3728', b: '#2d1f14', r: 3 },   // TV stand
-  { x: 260, y: 610, w: 90, h: 12, c: '#333', b: '#111', r: 2 },   // TV base slab
-  { x: 460, y: 640, w: 80, h: 50, c: '#6B4226', b: '#3A2010', r: 3 },   // Side table (fan on top)
-  { x: 100, y: 620, w: 180, h: 70, c: '#8B4513', b: '#5C2D0E', r: 6 },   // Sofa
-  { x: 350, y: 640, w: 140, h: 50, c: '#A0522D', b: '#5C2D0E', r: 4 },   // Dining table
-  { x: 40, y: 672, w: 60, h: 22, c: '#6B4226', b: '#3A2010', r: 3 },   // Shoe rack
-  { x: 600, y: 480, w: 60, h: 210, c: '#DEB887', b: '#A0522D', r: 4 },   // Hall almirah
-  // ── KITCHEN ──
-  { x: 960, y: 650, w: 320, h: 42, c: '#888', b: '#555', r: 3 },   // Kitchen slab/counter base
-  { x: 960, y: 595, w: 320, h: 8, c: '#aaa', b: '#777', r: 1 },   // Counter top surface
-  { x: 1530, y: 500, w: 60, h: 192, c: '#E0E0E0', b: '#AAA', r: 4 },   // Fridge
-  { x: 1370, y: 645, w: 60, h: 48, c: '#C0C0C0', b: '#888', r: 4 },   // Sink
-  { x: 1440, y: 660, w: 190, h: 32, c: '#654321', b: '#3A2010', r: 3 },   // Kitchen shelf (floor, for bags)
-  // ── BEDROOM ──
-  { x: 430, y: 310, w: 200, h: 50, c: '#8B6914', b: '#5C4A0E', r: 4 },   // Bed (charpai)
-  { x: 680, y: 120, w: 50, h: 242, c: '#A0522D', b: '#5C2D0E', r: 4 },   // Wardrobe
-  { x: 680, y: 200, w: 50, h: 4, c: '#ddd', b: '#bbb', r: 1 },   // Wardrobe mirror stripe
-  { x: 410, y: 330, w: 60, h: 32, c: '#7a5c3d', b: '#5C4A0E', r: 3 },   // Bedside table
-  // ── BATHROOM ──
-  { x: 970, y: 190, w: 70, h: 120, c: '#E5E5E5', b: '#AAA', r: 4 },   // Washing machine
-  { x: 1080, y: 200, w: 80, h: 80, c: '#dce8f0', b: '#8ba5b5', r: 3 },   // Medicine cabinet
-  { x: 1080, y: 190, w: 80, h: 12, c: '#a0b4c0', b: '#7a8e9a', r: 2 },   // Cabinet top
-  { x: 1190, y: 340, w: 30, h: 24, c: '#60A5FA', b: '#2563EB', r: 3 },   // Bucket
-  // ── STORE ROOM ──
-  { x: 1290, y: 280, w: 180, h: 82, c: '#8B7355', b: '#6B5335', r: 3 },   // Large shelf unit
-  { x: 1290, y: 272, w: 180, h: 10, c: '#A08060', b: '#806040', r: 1 },   // Shelf top surface
-  { x: 1500, y: 300, w: 50, h: 62, c: '#C19A6B', b: '#8B6914', r: 3 },   // Cardboard box stack
-  { x: 1560, y: 320, w: 40, h: 42, c: '#C19A6B', b: '#8B6914', r: 3 },   // Another box
-  // ── PUJA ROOM ──
-  { x: 80, y: 300, w: 140, h: 62, c: '#A0522D', b: '#5C2D0E', r: 4 },   // Puja table / platform
-  { x: 80, y: 292, w: 140, h: 10, c: '#c77d4a', b: '#8B5A2B', r: 2 },   // Table cloth / top
-  { x: 260, y: 315, w: 60, h: 48, c: '#8B6914', b: '#5C4A0E', r: 3 },   // Small almirah for docs
-]
+// Legacy FURNITURE rectangles removed — see FURNITURE_PIECES + SVG sprites below.
 
 const DECOR = [
   // Ceiling fans
@@ -383,6 +349,153 @@ const CATALOGUE = [
     cat: 'VALUABLES', wt: 3.5, util: 15, trap: true,
     tip: '3.5 kg of steel. Insurance covers this — your life does not come back.'
   },
+
+  // ═══ FAMILY KIT — Ready.gov-inspired: pack for EVERYONE, not just yourself ═══
+  // ── BEDROOM — bedside / bed ──
+  {
+    id: 'm8', room: 'Bedroom', wx: 415, wy: 322, emoji: '👓', name: 'Spare Eyeglasses', sz: 28,
+    cat: 'MEDICAL', wt: 0.05, util: 92, trap: false, persona: 'elder',
+    tip: 'For grandparents who cannot see without them. 50 g in a hard case — losing them at a shelter is a real medical risk.'
+  },
+  {
+    id: 't9', room: 'Bedroom', wx: 600, wy: 298, emoji: '🔌', name: 'Phone Charger Cable', sz: 30,
+    cat: 'TOOLS', wt: 0.1, util: 85, trap: false,
+    tip: 'NDMA helpline 1078, emergency 112. A dead phone is a silent phone — pack the cable, not just the powerbank.'
+  },
+  {
+    id: 'p1', room: 'Bedroom', wx: 475, wy: 298, emoji: '🧸', name: "Child's Comfort Toy", sz: 32,
+    cat: 'VALUABLES', wt: 0.15, util: 68, trap: false, persona: 'child',
+    tip: 'Kids panic in shelters. A familiar teddy = sleep, calm, less crying. Tiny weight, huge psychological relief.'
+  },
+
+  // ── BATHROOM — cabinet / floor ──
+  {
+    id: 'm9', room: 'Bathroom', wx: 1083, wy: 225, emoji: '🧴', name: 'Hand Sanitizer 50 ml', sz: 28,
+    cat: 'MEDICAL', wt: 0.06, util: 78, trap: false,
+    tip: 'No clean water at relief camps for hand-washing. Sanitiser stops cholera, typhoid, hepatitis A from spreading.'
+  },
+  {
+    id: 'm10', room: 'Bathroom', wx: 1245, wy: 340, emoji: '🩸', name: 'Sanitary Pads ×10', sz: 32,
+    cat: 'MEDICAL', wt: 0.2, util: 90, trap: false, persona: 'woman',
+    tip: 'NDMA reports menstrual hygiene supplies run out within 24 h at shelters. A 5-day pack is non-negotiable for women and girls.'
+  },
+  {
+    id: 'p2', room: 'Bathroom', wx: 875, wy: 340, emoji: '🍼', name: 'Baby Diapers + Formula', sz: 36,
+    cat: 'MEDICAL', wt: 1.2, util: 95, trap: false, persona: 'infant',
+    tip: 'Infants cannot wait for relief. 24 hours of formula + diapers keeps a baby alive, dry, and quiet on the move.'
+  },
+
+  // ── STORE ROOM — shelf / boxes / floor ──
+  {
+    id: 't10', room: 'Store', wx: 1525, wy: 288, emoji: '🛠️', name: 'Multi-tool / Swiss Knife', sz: 30,
+    cat: 'TOOLS', wt: 0.18, util: 84, trap: false,
+    tip: 'Knife, screwdriver, pliers, can-opener — six tools in 180 g. NDMA shelter-kit standard for any family.'
+  },
+  {
+    id: 't11', room: 'Store', wx: 1300, wy: 255, emoji: '🔥', name: 'Waterproof Matches', sz: 26,
+    cat: 'TOOLS', wt: 0.05, util: 70, trap: false,
+    tip: 'Boil water, light a stove, signal at night. 50 g of fire — irreplaceable when the grid is gone.'
+  },
+  {
+    id: 't12', room: 'Store', wx: 1580, wy: 308, emoji: '🔋', name: 'Spare AA Batteries ×8', sz: 30,
+    cat: 'TOOLS', wt: 0.2, util: 82, trap: false,
+    tip: 'Your torch and radio die on day 2 without these. 8 AA cells = 200 g and many extra hours of light.'
+  },
+  {
+    id: 'p3', room: 'Store', wx: 1340, wy: 340, emoji: '🐕', name: 'Pet Food + Leash', sz: 34,
+    cat: 'FOOD', wt: 0.7, util: 80, trap: false, persona: 'pet',
+    tip: 'Many shelters refuse pets without a leash and food. Don\'t leave a family member behind — pack a 24 h supply.'
+  },
+
+  // ── PUJA ROOM — small almirah top ──
+  {
+    id: 'd6', room: 'Puja', wx: 290, wy: 300, emoji: '🗺️', name: 'Local Shelter Map', sz: 30,
+    cat: 'DOCS', wt: 0.05, util: 78, trap: false,
+    tip: 'NDMA shelters and high ground marked in pen. GPS dies, paper does not. Know the safe route before the road floods.'
+  },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// (Legacy game-icons.net mappings removed — items now use full-colour
+// OpenMoji SVG illustrations served from /public/assets/emoji/.)
+// ═══════════════════════════════════════════════════════════════
+
+// Per-room subtle wallpaper texture (overlaid on r.wall colour)
+const ROOM_TEX = {
+  Hall:    'repeating-linear-gradient(0deg, transparent 0 28px, rgba(120,80,30,0.07) 28px 30px)',
+  Kitchen: 'repeating-linear-gradient(90deg, transparent 0 32px, rgba(40,100,60,0.08) 32px 34px), repeating-linear-gradient(0deg, transparent 0 32px, rgba(40,100,60,0.06) 32px 34px)',
+  Puja:    'repeating-linear-gradient(0deg, transparent 0 24px, rgba(180,120,40,0.08) 24px 26px)',
+  Bedroom: 'repeating-linear-gradient(45deg, transparent 0 18px, rgba(120,80,200,0.06) 18px 20px)',
+  Bathroom:'repeating-linear-gradient(90deg, transparent 0 30px, rgba(50,120,160,0.10) 30px 32px), repeating-linear-gradient(0deg, transparent 0 30px, rgba(50,120,160,0.10) 30px 32px)',
+  Store:   'repeating-linear-gradient(0deg, transparent 0 20px, rgba(0,0,0,0.07) 20px 22px)',
+  Stairs:  'repeating-linear-gradient(0deg, #d6cfc7 0 16px, #b5a99a 16px 18px, #d6cfc7 18px 32px)',
+}
+
+// Wood-plank floor texture for the major platforms
+const WOOD_FLOOR = 'repeating-linear-gradient(90deg, rgba(0,0,0,0.22) 0 1px, transparent 1px 72px), linear-gradient(180deg, #6B4226 0%, #5C3618 100%)'
+
+// ═══════════════════════════════════════════════════════════════
+// FURNITURE — each piece is positioned by world coords, sized to its
+// rectangle, and rendered as a `kind` to a real SVG illustration.
+// (Replaces the flat colour rectangles + faint silhouette decals.)
+// ═══════════════════════════════════════════════════════════════
+const FURNITURE_PIECES = [
+  // ── HALL ──
+  { kind: 'tvStand',     x: 250,  y: 600, w: 110, h: 92 },
+  { kind: 'sideTable',   x: 460,  y: 640, w: 80,  h: 50 },
+  { kind: 'sofa',        x: 90,   y: 612, w: 200, h: 78 },
+  { kind: 'diningSet',   x: 350,  y: 620, w: 160, h: 72 },
+  { kind: 'shoeRack',    x: 38,   y: 668, w: 64,  h: 26 },
+  { kind: 'tallAlmirah', x: 595,  y: 478, w: 70,  h: 214 },
+  // ── KITCHEN ──
+  { kind: 'kitchenSlab', x: 950,  y: 588, w: 340, h: 104 },
+  { kind: 'fridge',      x: 1525, y: 498, w: 70,  h: 196 },
+  { kind: 'sink',        x: 1365, y: 638, w: 70,  h: 56 },
+  { kind: 'kitchenShelf',x: 1440, y: 656, w: 200, h: 38 },
+  // ── BEDROOM ──
+  { kind: 'bed',         x: 425,  y: 305, w: 220, h: 60 },
+  { kind: 'wardrobe',    x: 670,  y: 118, w: 62,  h: 248 },
+  { kind: 'bedsideTable',x: 405,  y: 326, w: 64,  h: 36 },
+  // ── BATHROOM ──
+  { kind: 'washingMachine', x: 968, y: 188, w: 74, h: 124 },
+  { kind: 'medCabinet',  x: 1078, y: 196, w: 84,  h: 90 },
+  { kind: 'bucket',      x: 1188, y: 336, w: 32,  h: 30 },
+  // ── STORE ──
+  { kind: 'shelfUnit',   x: 1284, y: 270, w: 188, h: 96 },
+  { kind: 'cardboardBox',x: 1498, y: 296, w: 54,  h: 68 },
+  { kind: 'cardboardBox',x: 1558, y: 318, w: 44,  h: 46 },
+  // ── PUJA ──
+  { kind: 'pujaAltar',   x: 76,   y: 286, w: 148, h: 78 },
+  { kind: 'smallAlmirah',x: 256,  y: 311, w: 66,  h: 52 },
+]
+
+// ═══════════════════════════════════════════════════════════════
+// WINDOWS, DOORS, PLANTS — atmosphere props
+// ═══════════════════════════════════════════════════════════════
+const WINDOWS = [
+  // upper-floor windows showing rainy sky outside
+  { x: 80,   y: 110, w: 60, h: 70 },
+  { x: 280,  y: 110, w: 60, h: 70 },
+  { x: 460,  y: 110, w: 60, h: 70 },
+  { x: 940,  y: 110, w: 60, h: 70 },
+  { x: 1170, y: 110, w: 60, h: 70 },
+  { x: 1335, y: 110, w: 70, h: 70 },
+  { x: 1580, y: 110, w: 60, h: 70 },
+  // hall windows
+  { x: 230,  y: 460, w: 80, h: 80 },
+  { x: 470,  y: 460, w: 80, h: 80 },
+]
+
+const PLANTS = [
+  { x: 35,   y: 678, h: 24 },
+  { x: 705,  y: 690, h: 28 },
+  { x: 920,  y: 690, h: 26 },
+  { x: 1655, y: 690, h: 22 },
+]
+
+const DOORS = [
+  // front door at the right edge of the hall
+  { x: 670, y: 590, w: 50, h: 110, label: 'EXIT' },
 ]
 
 const ESSENTIAL_IDS = ['f1', 'c3', 'm1', 't1', 'd1']
@@ -492,6 +605,432 @@ const KEYFRAMES = `
 // ═══════════════════════════════════════════════════════════════
 // SUB-COMPONENTS
 // ═══════════════════════════════════════════════════════════════
+
+// Convert an emoji like 🔦 to its OpenMoji filename code (e.g. "1F526").
+// Strips variation selector U+FE0F so codes match openmoji.org's naming.
+function emojiToCode(e) {
+  return Array.from(e || '')
+    .filter(c => c.codePointAt(0) !== 0xfe0f)
+    .map(c => c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'))
+    .join('-')
+}
+const EMOJI_BASE = '/assets/emoji'
+
+// Full-colour OpenMoji illustration of an item — proper game-art look,
+// not a platform-rendered emoji glyph.
+function ItemIcon({ item, size = 24, style = {} }) {
+  const code = emojiToCode(item.emoji)
+  return (
+    <img
+      src={`${EMOJI_BASE}/${code}.svg`}
+      alt={item.name || ''}
+      draggable={false}
+      style={{
+        width: size, height: size, display: 'inline-block',
+        verticalAlign: 'middle', userSelect: 'none', ...style,
+      }}
+    />
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SVG SPRITES — proper illustrations for furniture, windows, plants,
+// doors, stairs, and the player. Side-view, cartoon, House-of-Hazards-y.
+// Each component fills its container via 100% w/h SVG with viewBox.
+// ═══════════════════════════════════════════════════════════════
+
+// helper to render a fixed-size positioned SVG at world coords
+function Sprite({ x, y, w, h, z = 6, children, style = {} }) {
+  return (
+    <div style={{
+      position: 'absolute', left: x, top: y, width: w, height: h,
+      pointerEvents: 'none', zIndex: z, ...style,
+    }}>
+      <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h}
+           preserveAspectRatio="none"
+           style={{ display: 'block', overflow: 'visible' }}>
+        {children}
+      </svg>
+    </div>
+  )
+}
+
+// — sofa: cushion + armrests + legs
+function Sofa({ w, h }) {
+  return (
+    <>
+      <rect x="2" y={h*0.45} width={w-4} height={h*0.5} rx="8" fill="#7A4A2A" stroke="#3a1f0b" strokeWidth="2"/>
+      <rect x="2" y={h*0.20} width={w*0.18} height={h*0.7} rx="6" fill="#8B5A30" stroke="#3a1f0b" strokeWidth="2"/>
+      <rect x={w*0.82-2} y={h*0.20} width={w*0.18} height={h*0.7} rx="6" fill="#8B5A30" stroke="#3a1f0b" strokeWidth="2"/>
+      <rect x={w*0.20} y={h*0.30} width={w*0.6} height={h*0.35} rx="6" fill="#A66A3D" stroke="#3a1f0b" strokeWidth="1.5"/>
+      <line x1={w*0.5} y1={h*0.30} x2={w*0.5} y2={h*0.65} stroke="#5e3618" strokeWidth="1.5"/>
+      <rect x={w*0.18} y={h*0.92} width="6" height={h*0.10} fill="#3a1f0b"/>
+      <rect x={w*0.82-6} y={h*0.92} width="6" height={h*0.10} fill="#3a1f0b"/>
+    </>
+  )
+}
+
+// — dining table with two chairs
+function DiningSet({ w, h }) {
+  return (
+    <>
+      {/* chair behind */}
+      <rect x={w*0.72} y={h*0.05} width={w*0.10} height={h*0.55} rx="3" fill="#A0522D" stroke="#3a1f0b" strokeWidth="1.5"/>
+      {/* table top */}
+      <rect x="0" y={h*0.42} width={w} height={h*0.18} rx="4" fill="#A0522D" stroke="#3a1f0b" strokeWidth="2"/>
+      {/* table legs */}
+      <rect x={w*0.10} y={h*0.60} width="6" height={h*0.40} fill="#5C2D0E"/>
+      <rect x={w*0.85} y={h*0.60} width="6" height={h*0.40} fill="#5C2D0E"/>
+      {/* chair front */}
+      <rect x={w*0.18} y={h*0.20} width={w*0.10} height={h*0.50} rx="3" fill="#8B4513" stroke="#3a1f0b" strokeWidth="1.5"/>
+      {/* placemat + plate */}
+      <ellipse cx={w*0.5} cy={h*0.50} rx={w*0.18} ry={h*0.05} fill="#fff8e0"/>
+      <circle cx={w*0.5} cy={h*0.50} r={h*0.07} fill="#fff" stroke="#cbd5e1" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — TV stand with TV
+function TVStand({ w, h }) {
+  return (
+    <>
+      <rect x="0" y={h*0.35} width={w} height={h*0.55} rx="4" fill="#5C3618" stroke="#2d1f14" strokeWidth="2"/>
+      <rect x={w*0.05} y={h*0.55} width={w*0.45} height={h*0.30} rx="2" fill="#3a1f0b"/>
+      <rect x={w*0.55} y={h*0.55} width={w*0.40} height={h*0.30} rx="2" fill="#3a1f0b"/>
+    </>
+  )
+}
+
+// — side table
+function SideTable({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h*0.18} rx="3" fill="#8B5A2B" stroke="#3a1f0b" strokeWidth="2"/>
+      <rect x={w*0.10} y={h*0.18} width="6" height={h*0.82} fill="#5C2D0E"/>
+      <rect x={w*0.85} y={h*0.18} width="6" height={h*0.82} fill="#5C2D0E"/>
+    </>
+  )
+}
+
+// — shoe rack
+function ShoeRack({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="3" fill="#8B5A2B" stroke="#3a1f0b" strokeWidth="2"/>
+      <line x1="0" y1={h*0.5} x2={w} y2={h*0.5} stroke="#3a1f0b" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — tall almirah / wardrobe with two doors
+function TallAlmirah({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="4" fill="#A0522D" stroke="#3a1f0b" strokeWidth="2.5"/>
+      <line x1={w*0.5} y1="2" x2={w*0.5} y2={h-2} stroke="#3a1f0b" strokeWidth="2"/>
+      <circle cx={w*0.42} cy={h*0.5} r="2.5" fill="#fbbf24"/>
+      <circle cx={w*0.58} cy={h*0.5} r="2.5" fill="#fbbf24"/>
+      <rect x={w*0.10} y={h*0.10} width={w*0.30} height={h*0.30} fill="rgba(255,255,255,0.06)" stroke="#5C2D0E" strokeWidth="0.5"/>
+      <rect x={w*0.60} y={h*0.10} width={w*0.30} height={h*0.30} fill="rgba(255,255,255,0.06)" stroke="#5C2D0E" strokeWidth="0.5"/>
+    </>
+  )
+}
+
+// — kitchen counter slab with stove
+function KitchenSlab({ w, h }) {
+  return (
+    <>
+      <rect x="0" y={h*0.05} width={w} height={h*0.10} fill="#aaa" stroke="#666" strokeWidth="1.5"/>
+      <rect x="0" y={h*0.15} width={w} height={h*0.85} fill="#888" stroke="#555" strokeWidth="2"/>
+      {/* cabinet doors */}
+      <line x1={w*0.33} y1={h*0.20} x2={w*0.33} y2={h*0.95} stroke="#555" strokeWidth="1.5"/>
+      <line x1={w*0.66} y1={h*0.20} x2={w*0.66} y2={h*0.95} stroke="#555" strokeWidth="1.5"/>
+      <circle cx={w*0.30} cy={h*0.55} r="2" fill="#444"/>
+      <circle cx={w*0.63} cy={h*0.55} r="2" fill="#444"/>
+      <circle cx={w*0.96} cy={h*0.55} r="2" fill="#444"/>
+      {/* stove burners */}
+      <circle cx={w*0.10} cy={h*0.10} r="4" fill="#222" stroke="#000" strokeWidth="0.5"/>
+      <circle cx={w*0.18} cy={h*0.10} r="4" fill="#222" stroke="#000" strokeWidth="0.5"/>
+    </>
+  )
+}
+
+// — fridge
+function Fridge({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="4" fill="#E0E0E0" stroke="#777" strokeWidth="2"/>
+      <line x1="0" y1={h*0.32} x2={w} y2={h*0.32} stroke="#999" strokeWidth="1.5"/>
+      <rect x={w*0.78} y={h*0.10} width="3" height={h*0.15} fill="#666"/>
+      <rect x={w*0.78} y={h*0.40} width="3" height={h*0.40} fill="#666"/>
+      <rect x={w*0.10} y={h*0.10} width={w*0.55} height={h*0.18} rx="1" fill="#FAFAFA" stroke="#bbb" strokeWidth="0.8"/>
+      <rect x={w*0.10} y={h*0.40} width={w*0.55} height={h*0.50} rx="1" fill="#FAFAFA" stroke="#bbb" strokeWidth="0.8"/>
+    </>
+  )
+}
+
+// — kitchen sink
+function Sink({ w, h }) {
+  return (
+    <>
+      <rect x="0" y={h*0.10} width={w} height={h*0.90} rx="3" fill="#C0C0C0" stroke="#777" strokeWidth="2"/>
+      <rect x={w*0.10} y={h*0.20} width={w*0.80} height={h*0.55} rx="2" fill="#888" stroke="#555" strokeWidth="1.5"/>
+      <rect x={w*0.45} y="0" width={w*0.10} height={h*0.20} fill="#999" stroke="#555" strokeWidth="1"/>
+      <circle cx={w*0.50} cy={h*0.05} r={w*0.06} fill="#999" stroke="#555" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — wood shelf with sacks visible
+function KitchenShelf({ w, h }) {
+  return (
+    <>
+      <rect x="0" y={h*0.10} width={w} height="6" fill="#7a5c3d" stroke="#3a2510" strokeWidth="1"/>
+      <rect x="0" y={h*0.10} width={w} height={h*0.90} fill="#654321" stroke="#3a2510" strokeWidth="1.5"/>
+    </>
+  )
+}
+
+// — bed with pillow + blanket
+function Bed({ w, h }) {
+  return (
+    <>
+      {/* headboard */}
+      <rect x="0" y="0" width={w*0.10} height={h} rx="2" fill="#5C4A0E" stroke="#3a2510" strokeWidth="1.5"/>
+      {/* mattress */}
+      <rect x={w*0.10} y={h*0.10} width={w*0.90} height={h*0.65} rx="6" fill="#fef3c7" stroke="#92400e" strokeWidth="2"/>
+      {/* blanket */}
+      <rect x={w*0.45} y={h*0.10} width={w*0.55} height={h*0.65} rx="4" fill="#60a5fa" stroke="#1e40af" strokeWidth="1.5" opacity="0.85"/>
+      {/* pillow */}
+      <rect x={w*0.13} y={h*0.18} width={w*0.28} height={h*0.32} rx="4" fill="#fff" stroke="#cbd5e1" strokeWidth="1"/>
+      {/* base / legs */}
+      <rect x={w*0.10} y={h*0.75} width={w*0.90} height={h*0.20} fill="#5C4A0E" stroke="#3a2510" strokeWidth="1.5"/>
+      <rect x={w*0.12} y={h*0.95} width="5" height={h*0.05} fill="#3a2510"/>
+      <rect x={w-12}  y={h*0.95} width="5" height={h*0.05} fill="#3a2510"/>
+    </>
+  )
+}
+
+// — wardrobe with doors + handles + mirror stripe
+function Wardrobe({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="3" fill="#A0522D" stroke="#3a1f0b" strokeWidth="2.5"/>
+      <line x1={w*0.5} y1="2" x2={w*0.5} y2={h-2} stroke="#3a1f0b" strokeWidth="2"/>
+      <circle cx={w*0.40} cy={h*0.50} r="2" fill="#fbbf24"/>
+      <circle cx={w*0.60} cy={h*0.50} r="2" fill="#fbbf24"/>
+      <rect x={w*0.20} y={h*0.30} width={w*0.60} height="3" fill="#e5e7eb" opacity="0.7"/>
+    </>
+  )
+}
+
+function BedsideTable({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="3" fill="#7a5c3d" stroke="#3a2510" strokeWidth="2"/>
+      <rect x={w*0.15} y={h*0.20} width={w*0.70} height={h*0.30} fill="#5C4A0E" stroke="#3a2510" strokeWidth="1"/>
+      <circle cx={w*0.50} cy={h*0.35} r="1.5" fill="#fbbf24"/>
+    </>
+  )
+}
+
+// — washing machine: drum window
+function WashingMachine({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="4" fill="#E5E5E5" stroke="#666" strokeWidth="2"/>
+      <rect x={w*0.10} y={h*0.05} width={w*0.80} height={h*0.15} rx="2" fill="#fff" stroke="#aaa" strokeWidth="1"/>
+      <circle cx={w*0.18} cy={h*0.12} r="2" fill="#3b82f6"/>
+      <circle cx={w*0.30} cy={h*0.12} r="2" fill="#10b981"/>
+      <circle cx={w*0.50} cy={h*0.55} r={w*0.30} fill="#bfdbfe" stroke="#666" strokeWidth="2"/>
+      <circle cx={w*0.50} cy={h*0.55} r={w*0.22} fill="#dbeafe" stroke="#777" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — medicine cabinet with red cross
+function MedCabinet({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h*0.10} fill="#7a8e9a" stroke="#475569" strokeWidth="1.5"/>
+      <rect x="0" y={h*0.10} width={w} height={h*0.90} rx="3" fill="#dce8f0" stroke="#475569" strokeWidth="2"/>
+      <line x1={w*0.5} y1={h*0.10} x2={w*0.5} y2={h-2} stroke="#475569" strokeWidth="1.5"/>
+      <rect x={w*0.42} y={h*0.30} width={w*0.16} height={h*0.36} fill="#dc2626" stroke="#fff" strokeWidth="1.5"/>
+      <rect x={w*0.30} y={h*0.42} width={w*0.40} height={h*0.12} fill="#dc2626" stroke="#fff" strokeWidth="1.5"/>
+    </>
+  )
+}
+
+function Bucket({ w, h }) {
+  return (
+    <>
+      <path d={`M2 ${h*0.20} L${w-2} ${h*0.20} L${w*0.85} ${h-2} L${w*0.15} ${h-2} Z`}
+            fill="#60A5FA" stroke="#1e40af" strokeWidth="2"/>
+      <path d={`M${w*0.10} ${h*0.20} Q${w*0.5} ${-h*0.05} ${w*0.90} ${h*0.20}`}
+            fill="none" stroke="#1e40af" strokeWidth="2"/>
+    </>
+  )
+}
+
+// — store-room shelf unit (4 shelves of items implied)
+function ShelfUnit({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} fill="#8B7355" stroke="#3a2510" strokeWidth="2"/>
+      <rect x="2" y="2" width={w-4} height={h*0.32} fill="rgba(0,0,0,0.10)"/>
+      <line x1="2" y1={h*0.34} x2={w-2} y2={h*0.34} stroke="#3a2510" strokeWidth="1.5"/>
+      <line x1="2" y1={h*0.66} x2={w-2} y2={h*0.66} stroke="#3a2510" strokeWidth="1.5"/>
+      <rect x="0" y="0" width={w} height="6" fill="#A08060"/>
+    </>
+  )
+}
+
+function CardboardBox({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="2" fill="#C19A6B" stroke="#6B4226" strokeWidth="2"/>
+      <line x1={w*0.5} y1="0" x2={w*0.5} y2={h*0.18} stroke="#6B4226" strokeWidth="1.5"/>
+      <line x1="0" y1={h*0.18} x2={w} y2={h*0.18} stroke="#6B4226" strokeWidth="1.5"/>
+      <rect x={w*0.20} y={h*0.45} width={w*0.60} height="2" fill="#6B4226" opacity="0.6"/>
+    </>
+  )
+}
+
+// — puja altar: red cloth + brass bell on wooden table
+function PujaAltar({ w, h }) {
+  return (
+    <>
+      <rect x="0" y={h*0.18} width={w} height={h*0.18} fill="#c77d4a" stroke="#7a3f1a" strokeWidth="1.5"/>
+      <rect x="0" y={h*0.36} width={w} height={h*0.50} fill="#A0522D" stroke="#5C2D0E" strokeWidth="2"/>
+      {/* red ceremonial cloth */}
+      <path d={`M${w*0.10} ${h*0.18} L${w*0.90} ${h*0.18} L${w*0.85} ${h*0.30} L${w*0.15} ${h*0.30} Z`}
+            fill="#dc2626" stroke="#7f1d1d" strokeWidth="1"/>
+      {/* legs */}
+      <rect x={w*0.05} y={h*0.86} width="6" height={h*0.14} fill="#5C2D0E"/>
+      <rect x={w-11}  y={h*0.86} width="6" height={h*0.14} fill="#5C2D0E"/>
+      {/* gold edge */}
+      <line x1="0" y1={h*0.36} x2={w} y2={h*0.36} stroke="#fbbf24" strokeWidth="1.5"/>
+    </>
+  )
+}
+
+function SmallAlmirah({ w, h }) {
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} rx="3" fill="#8B6914" stroke="#3a2510" strokeWidth="2"/>
+      <line x1={w*0.5} y1="2" x2={w*0.5} y2={h-2} stroke="#3a2510" strokeWidth="1.5"/>
+      <circle cx={w*0.40} cy={h*0.50} r="2" fill="#fbbf24"/>
+      <circle cx={w*0.60} cy={h*0.50} r="2" fill="#fbbf24"/>
+    </>
+  )
+}
+
+// — door with arched glass top + handle (House-of-Hazards style)
+function DoorSprite({ w, h }) {
+  return (
+    <>
+      <path d={`M2 ${h*0.18} Q2 2 ${w*0.5} 2 Q${w-2} 2 ${w-2} ${h*0.18} L${w-2} ${h-2} L2 ${h-2} Z`}
+            fill="#8B4513" stroke="#3a1f0b" strokeWidth="2.5"/>
+      <path d={`M${w*0.15} ${h*0.20} Q${w*0.15} ${h*0.06} ${w*0.5} ${h*0.06} Q${w*0.85} ${h*0.06} ${w*0.85} ${h*0.20} Z`}
+            fill="#bfdbfe" stroke="#1e40af" strokeWidth="1.2"/>
+      <line x1={w*0.5} y1={h*0.06} x2={w*0.5} y2={h*0.20} stroke="#1e40af" strokeWidth="1"/>
+      <line x1={w*0.30} y1={h*0.13} x2={w*0.70} y2={h*0.13} stroke="#1e40af" strokeWidth="1" opacity="0.6"/>
+      <rect x={w*0.18} y={h*0.30} width={w*0.64} height={h*0.20} fill="none" stroke="#3a1f0b" strokeWidth="1.5"/>
+      <rect x={w*0.18} y={h*0.55} width={w*0.64} height={h*0.30} fill="none" stroke="#3a1f0b" strokeWidth="1.5"/>
+      <circle cx={w*0.80} cy={h*0.65} r="3" fill="#fbbf24" stroke="#92400e" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — window: rainy sky outside + frame mullions
+function WindowSprite({ w, h }) {
+  return (
+    <>
+      <defs>
+        <linearGradient id={`sky-${w}-${h}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#1e3a8a"/>
+          <stop offset="100%" stopColor="#3b82f6"/>
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width={w} height={h} fill={`url(#sky-${w}-${h})`}/>
+      {/* falling rain streaks */}
+      {[...Array(7)].map((_, k) => (
+        <line key={k}
+          x1={(k * w / 7) + 4} y1={h*0.10}
+          x2={(k * w / 7) + 0} y2={h*0.95}
+          stroke="rgba(174,194,224,0.55)" strokeWidth="1"/>
+      ))}
+      {/* frame */}
+      <rect x="0" y="0" width={w} height={h} fill="none" stroke="#5C2D0E" strokeWidth="4"/>
+      <line x1={w*0.5} y1="2" x2={w*0.5} y2={h-2} stroke="#5C2D0E" strokeWidth="2.5"/>
+      <line x1="2" y1={h*0.5} x2={w-2} y2={h*0.5} stroke="#5C2D0E" strokeWidth="2.5"/>
+      {/* sill */}
+      <rect x="-3" y={h-3} width={w+6} height="6" fill="#7a4a2a" stroke="#3a1f0b" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — potted plant
+function PlantSprite({ h }) {
+  const w = h
+  return (
+    <>
+      <path d={`M${w*0.20} ${h*0.55} L${w*0.80} ${h*0.55} L${w*0.70} ${h-2} L${w*0.30} ${h-2} Z`}
+            fill="#c2410c" stroke="#7c2d12" strokeWidth="1.5"/>
+      <ellipse cx={w*0.50} cy={h*0.40} rx={w*0.40} ry={h*0.30} fill="#16a34a" stroke="#14532d" strokeWidth="1.5"/>
+      <ellipse cx={w*0.30} cy={h*0.30} rx={w*0.18} ry={h*0.20} fill="#22c55e" stroke="#14532d" strokeWidth="1"/>
+      <ellipse cx={w*0.70} cy={h*0.30} rx={w*0.18} ry={h*0.20} fill="#22c55e" stroke="#14532d" strokeWidth="1"/>
+      <ellipse cx={w*0.50} cy={h*0.18} rx={w*0.16} ry={h*0.18} fill="#22c55e" stroke="#14532d" strokeWidth="1"/>
+    </>
+  )
+}
+
+// — proper stairs with steps + railing
+function StairsSprite({ w, h }) {
+  const steps = 8
+  const stepH = h / steps
+  return (
+    <>
+      <rect x="0" y="0" width={w} height={h} fill="#d6cfc7"/>
+      {[...Array(steps)].map((_, i) => {
+        const sy = i * stepH
+        const sx = (i % 2 === 0) ? 0 : w * 0.25
+        const sw = w * 0.75
+        return (
+          <g key={i}>
+            <rect x={sx} y={sy} width={sw} height={stepH-1} fill="#a08770" stroke="#5c3d2e" strokeWidth="1"/>
+            <rect x={sx} y={sy} width={sw} height="2" fill="#7a5c3d"/>
+          </g>
+        )
+      })}
+      <line x1={w*0.92} y1="0" x2={w*0.92} y2={h} stroke="#3a2510" strokeWidth="2"/>
+      {[...Array(steps+1)].map((_, i) => (
+        <line key={`b-${i}`} x1={w*0.92} y1={i*stepH} x2={w*0.85} y2={i*stepH+6}
+              stroke="#5c3d2e" strokeWidth="1.5"/>
+      ))}
+    </>
+  )
+}
+
+// (Player is rendered inline in the play scene so we can mutate SVG transforms
+// directly each frame; no React re-render in the game loop.)
+
+// Backpack hero icon — also OpenMoji.
+function BagIcon({ size = 40, overweight = false, style = {} }) {
+  return (
+    <img
+      src={`${EMOJI_BASE}/1F392.svg`}
+      alt="backpack"
+      draggable={false}
+      style={{
+        width: size, height: size, display: 'inline-block',
+        filter: overweight ? 'drop-shadow(0 0 6px #ef4444)' : 'none',
+        userSelect: 'none', ...style,
+      }}
+    />
+  )
+}
+
 function ItemTooltip({ item, x, y }) {
   const plate = CAT_PLATES[item.cat]
   const left = Math.min(x + 10, window.innerWidth - 280)
@@ -504,8 +1043,9 @@ function ItemTooltip({ item, x, y }) {
       boxShadow: `0 10px 24px ${plate}44`,
       animation: 'fadeIn 0.15s ease-out', pointerEvents: 'none',
     }}>
-      <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
-        <span>{item.emoji}</span><span>{item.name}</span>
+      <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 6, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <ItemIcon item={item} size={22} color={plate} />
+        <span>{item.name}</span>
       </div>
       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 6 }}>
         <span style={{ background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: 999, fontSize: 10 }}>⚖️ {item.wt} kg</span>
@@ -514,6 +1054,15 @@ function ItemTooltip({ item, x, y }) {
           ? <span style={{ background: 'rgba(239,68,68,0.35)', color: '#fecaca', padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 800 }}>⚠️ TRAP</span>
           : <span style={{ background: 'rgba(16,185,129,0.35)', color: '#d1fae5', padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 800 }}>✓ SMART</span>
         }
+        {item.persona && (
+          <span style={{ background: 'rgba(236,72,153,0.3)', color: '#fbcfe8', padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 800 }}>
+            {item.persona === 'child' ? '🧒 CHILD' :
+             item.persona === 'elder' ? '👴 ELDER' :
+             item.persona === 'infant' ? '👶 BABY' :
+             item.persona === 'woman' ? '👩 WOMEN' :
+             item.persona === 'pet' ? '🐾 PET' : ''}
+          </span>
+        )}
       </div>
       <div style={{ color: '#cbd5e1', fontSize: 11, lineHeight: 1.5 }}>{item.tip}</div>
     </div>
@@ -537,9 +1086,10 @@ function BagPanel({ bagIds, onFinish, bagRef, onDrop }) {
         textAlign: 'center', transition: 'all 0.2s',
       }}>
         <div ref={bagRef} style={{
-          fontSize: 40, display: 'inline-block', animation: 'bob 2.5s ease-in-out infinite',
-          filter: overweight ? 'hue-rotate(-30deg)' : 'none'
-        }}>🎒</div>
+          display: 'inline-block', animation: 'bob 2.5s ease-in-out infinite',
+        }}>
+          <BagIcon size={44} overweight={overweight} />
+        </div>
         <div style={{ fontSize: 10, fontWeight: 800, color: overweight ? '#ef4444' : '#0f172a', marginTop: -2 }}>
           {items.length} · {weight.toFixed(1)} kg
         </div>
@@ -570,9 +1120,10 @@ function BagPanel({ bagIds, onFinish, bagRef, onDrop }) {
       </div>
       <div style={{ textAlign: 'center', marginBottom: 8 }}>
         <div ref={bagRef} style={{
-          fontSize: 40, display: 'inline-block', animation: 'bob 2.5s ease-in-out infinite',
-          filter: overweight ? 'hue-rotate(-30deg)' : 'none'
-        }}>🎒</div>
+          display: 'inline-block', animation: 'bob 2.5s ease-in-out infinite',
+        }}>
+          <BagIcon size={48} overweight={overweight} />
+        </div>
         <div style={{ fontWeight: 900, color: '#0f172a', fontSize: 13, marginTop: -4 }}>GO-BAG</div>
         <div style={{ fontSize: 10, color: '#475569' }}>{items.length} items · {weight.toFixed(1)} kg</div>
       </div>
@@ -597,12 +1148,12 @@ function BagPanel({ bagIds, onFinish, bagRef, onDrop }) {
         <div style={{ maxHeight: 80, overflowY: 'auto', marginBottom: 8 }}>
           {items.map(i => (
             <div key={i.id} style={{
-              display: 'flex', alignItems: 'center', gap: 4, fontSize: 10,
+              display: 'flex', alignItems: 'center', gap: 6, fontSize: 10,
               padding: '2px 4px', borderRadius: 4, marginBottom: 2,
               background: i.trap ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
               animation: 'pop-in 0.25s ease-out'
             }}>
-              <span style={{ fontSize: 13 }}>{i.emoji}</span>
+              <ItemIcon item={i} size={20} />
               <span style={{ flex: 1, color: '#1e293b', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.name}</span>
               <span style={{ color: '#64748b', fontSize: 9 }}>{i.wt}kg</span>
               <button 
@@ -648,6 +1199,7 @@ export default function Module1_GoBag() {
   const hasWarnedTimeRef = useRef(false)
   const hasWarnedWeightRef = useRef(false)
   const hasPraisedRef = useRef(false)
+  const hasPraisedFamilyRef = useRef(false)
 
   const playerRef = useRef({ x: 100, y: 660, vx: 0, vy: 0, facing: 1, grounded: false })
   const keysRef = useRef({ left: false, right: false, up: false })
@@ -689,7 +1241,7 @@ export default function Module1_GoBag() {
       const toX = bagRect ? bagRect.left + bagRect.width / 2 : window.innerWidth - 100
       const toY = bagRect ? bagRect.top + bagRect.height / 2 : 80
       const fid = `${item.id}-${Date.now()}`
-      setFlying(f => [...f, { fid, emoji: item.emoji, fromX, fromY, tx: toX - fromX, ty: toY - fromY }])
+      setFlying(f => [...f, { fid, item, fromX, fromY, tx: toX - fromX, ty: toY - fromY }])
       setTimeout(() => setFlying(f => f.filter(fl => fl.fid !== fid)), 700)
       return [...prev, item.id]
     })
@@ -728,6 +1280,19 @@ export default function Module1_GoBag() {
       if (hasEssential && currentWeight <= MAX_WEIGHT) {
         hasPraisedRef.current = true
         setMidGameNarrative({ text: "Good choice. Prioritize essentials like ORS, first-aid, and flashlights.", emotion: 'neutral', characterKey: 'neighbor', visible: true })
+      }
+    }
+
+    // Praise for first family-perspective pickup
+    if (!hasPraisedFamilyRef.current) {
+      const items = CATALOGUE.filter(i => bagIds.includes(i.id))
+      const familyPick = items.find(i => i.persona && !i.trap)
+      if (familyPick) {
+        hasPraisedFamilyRef.current = true
+        setMidGameNarrative({
+          text: "Good thinking — survival isn't only about you. The kids, elders, and pets need their own kit too.",
+          emotion: 'neutral', characterKey: 'neighbor', visible: true
+        })
       }
     }
   }, [bagIds, phase])
@@ -800,15 +1365,20 @@ export default function Module1_GoBag() {
       if (playerElRef.current) {
         playerElRef.current.style.left = `${p.x}px`
         playerElRef.current.style.top = `${p.y}px`
-        playerElRef.current.style.transform = `scaleX(${p.facing})`
-        // Leg animation
-        const legs = playerElRef.current.getElementsByClassName('pleg')
-        if (legs.length === 2) {
-          const w = Math.abs(p.vx) > 0 && p.grounded
-          const t = w ? Math.sin(time * 0.014) * 4 : 0
-          legs[0].style.transform = `translateY(${t}px)`
-          legs[1].style.transform = `translateY(${-t}px)`
-        }
+        // flip the inner SVG so the shadow stays on the parent div
+        const svg = playerElRef.current.querySelector('svg.player-svg')
+        if (svg) svg.style.transform = `scaleX(${p.facing})`
+        // walk-cycle: rotate legs + arms in opposite phases
+        const walking = Math.abs(p.vx) > 0 && p.grounded
+        const swing = walking ? Math.sin(time * 0.012) * 22 : 0
+        const front = playerElRef.current.querySelector('.pleg-front')
+        const back  = playerElRef.current.querySelector('.pleg-back')
+        const armF  = playerElRef.current.querySelector('.parm-front')
+        const armB  = playerElRef.current.querySelector('.parm-back')
+        if (front) front.setAttribute('transform', `rotate(${ swing} 14 28)`)
+        if (back)  back .setAttribute('transform', `rotate(${-swing} 10 28)`)
+        if (armF)  armF .setAttribute('transform', `rotate(${-swing*0.7} 19.5 14)`)
+        if (armB)  armB .setAttribute('transform', `rotate(${ swing*0.7} 4.5 14)`)
       }
 
       // Nearby item
@@ -841,6 +1411,7 @@ export default function Module1_GoBag() {
     hasWarnedTimeRef.current = false
     hasWarnedWeightRef.current = false
     hasPraisedRef.current = false
+    hasPraisedFamilyRef.current = false
     playerRef.current = { x: 100, y: 660, vx: 0, vy: 0, facing: 1, grounded: false }
     cameraRef.current = { x: 0, y: 200 }
     currentRoomRef.current = null; nearItemRef.current = null
@@ -865,7 +1436,9 @@ export default function Module1_GoBag() {
           position: 'relative', zIndex: 1, maxWidth: 620, width: '100%', background: 'rgba(255,255,255,0.94)', borderRadius: 28, padding: 40,
           border: '4px solid #0f172a', boxShadow: '0 24px 60px rgba(0,0,0,0.35)', textAlign: 'center'
         }}>
-          <div style={{ fontSize: 80, animation: 'bob 2s ease-in-out infinite' }}>🎒</div>
+          <div style={{ display: 'inline-block', animation: 'bob 2s ease-in-out infinite' }}>
+            <BagIcon size={96} />
+          </div>
           <div style={{
             display: 'inline-block', background: 'linear-gradient(135deg,#dc2626,#991b1b)', color: '#fff',
             padding: '6px 18px', borderRadius: 999, fontWeight: 800, fontSize: 12, letterSpacing: 2,
@@ -877,6 +1450,8 @@ export default function Module1_GoBag() {
             A flash flood is <strong>{TIMER_START} seconds</strong> from your house. Explore a <strong>2-floor Indian house</strong>,
             grab only what you need, and evacuate under <strong>{MAX_WEIGHT} kg</strong>.
             Use <strong>arrow keys</strong> to move and <strong>jump between floors</strong>.
+            <br /><br />
+            <strong>Your home has children, an elder, an infant, and a pet</strong> — pack for everyone, not just yourself.
           </p>
           <div style={{ background: '#f8fafc', border: '2px dashed #94a3b8', borderRadius: 16, padding: 16, textAlign: 'left', marginBottom: 22 }}>
             <div style={{ color: '#0f172a', fontSize: 13, lineHeight: 1.9, fontWeight: 600 }}>
@@ -885,6 +1460,7 @@ export default function Module1_GoBag() {
               <div>🏠 Ground floor: Hall + Kitchen · Upper floor: Puja, Bedroom, Bathroom, Store</div>
               <div>⚖️ Max weight: <strong>{MAX_WEIGHT} kg</strong> — heavier = you cannot run</div>
               <div>🌟 Essentials: ORS · meds · torch · docs · raincoat</div>
+              <div>👨‍👩‍👧‍👦 Family kit: eyeglasses · baby formula · sanitary pads · pet food · comfort toy</div>
               <div>⚠️ Avoid: 10 kg rice, steel utensils, gold, wet-absorbing clothes</div>
             </div>
           </div>
@@ -925,13 +1501,13 @@ export default function Module1_GoBag() {
               <div style={{ color: '#065f46', fontWeight: 900, fontSize: 14, marginBottom: 10, letterSpacing: 1 }}>✅ SMART PICKS · {smart.length}</div>
               {smart.length === 0 ? <div style={{ color: '#065f46', fontSize: 12 }}>None — review the NDMA essentials.</div>
                 : smart.map(i => <div key={i.id} style={{ display: 'flex', gap: 8, marginBottom: 8, fontSize: 12, color: '#065f46', alignItems: 'center' }}>
-                  <span style={{ fontSize: 20 }}>{i.emoji}</span><div><strong>{i.name}</strong> <span style={{ color: '#047857' }}>· {i.wt} kg</span></div></div>)}
+                  <ItemIcon item={i} size={28} /><div><strong>{i.name}</strong> <span style={{ color: '#047857' }}>· {i.wt} kg</span></div></div>)}
             </div>
             <div style={{ background: 'rgba(239,68,68,0.12)', border: '2px solid #ef4444', borderRadius: 18, padding: 16 }}>
               <div style={{ color: '#991b1b', fontWeight: 900, fontSize: 14, marginBottom: 10, letterSpacing: 1 }}>❌ TRAPS · {mistakes.length}</div>
               {mistakes.length === 0 ? <div style={{ color: '#065f46', fontSize: 12, fontWeight: 600 }}>✨ Zero traps — NDMA-clean!</div>
                 : mistakes.map(i => <div key={i.id} style={{ display: 'flex', gap: 8, marginBottom: 8, fontSize: 12, color: '#991b1b', alignItems: 'center' }}>
-                  <span style={{ fontSize: 20 }}>{i.emoji}</span><div><strong>{i.name}</strong> <span style={{ color: '#b91c1c' }}>· {i.wt} kg wasted</span></div></div>)}
+                  <ItemIcon item={i} size={28} /><div><strong>{i.name}</strong> <span style={{ color: '#b91c1c' }}>· {i.wt} kg wasted</span></div></div>)}
             </div>
           </div>
           {missing.length > 0 && (
@@ -940,6 +1516,43 @@ export default function Module1_GoBag() {
               <div style={{ color: '#92400e', fontSize: 12, fontWeight: 600 }}>{missing.map(id => ESSENTIAL_LABELS[id]).join(' · ')}</div>
             </div>
           )}
+          {(() => {
+            const personas = [
+              { key: 'child', label: 'Child', emoji: '🧒' },
+              { key: 'elder', label: 'Elder', emoji: '👴' },
+              { key: 'infant', label: 'Infant', emoji: '👶' },
+              { key: 'woman', label: 'Women', emoji: '👩' },
+              { key: 'pet', label: 'Pet', emoji: '🐾' },
+            ]
+            const covered = new Set(bagItems.filter(i => i.persona && !i.trap).map(i => i.persona))
+            return (
+              <div style={{ background: 'rgba(236,72,153,0.12)', border: '2px solid #ec4899', borderRadius: 18, padding: 16, marginBottom: 20 }}>
+                <div style={{ color: '#831843', fontWeight: 900, fontSize: 13, marginBottom: 8, letterSpacing: 1 }}>
+                  👨‍👩‍👧‍👦 FAMILY COVERAGE · {covered.size}/{personas.length}
+                </div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  {personas.map(p => {
+                    const has = covered.has(p.key)
+                    return (
+                      <div key={p.key} style={{
+                        display: 'flex', alignItems: 'center', gap: 4,
+                        padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700,
+                        background: has ? 'rgba(16,185,129,0.18)' : 'rgba(148,163,184,0.18)',
+                        color: has ? '#065f46' : '#64748b',
+                        border: `1px solid ${has ? '#10b981' : '#cbd5e1'}`
+                      }}>
+                        <span style={{ fontSize: 14 }}>{p.emoji}</span>
+                        <span>{has ? '✓' : '○'} {p.label}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+                <div style={{ color: '#831843', fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+                  Disaster planning isn't only about you — NDMA's family-kit guidance covers the most vulnerable in your household first.
+                </div>
+              </div>
+            )
+          })()}
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
             <button onClick={retry} style={{ padding: '12px 28px', borderRadius: 999, background: '#fff', color: '#0f172a', border: '2px solid #0f172a', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>🔄 Try Again</button>
             <button onClick={() => gameDispatch({ type: 'BACK_TO_MODULES' })} style={{ padding: '12px 28px', borderRadius: 999, border: 'none', background: 'linear-gradient(135deg,#1e40af,#1d4ed8)', color: '#fff', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>← Back to Modules</button>
@@ -970,33 +1583,128 @@ export default function Module1_GoBag() {
         {/* Roof */}
         <div style={{ position: 'absolute', left: 6, top: 42, width: 1666, height: 24, background: '#6B3410', borderTop: '3px solid #8B4513', borderBottom: '2px solid #3A1F0B', borderRadius: '2px 2px 0 0' }} />
 
-        {/* Room backgrounds */}
-        {ROOMS.map(r => <div key={r.id} style={{ position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h, background: r.wall, borderLeft: `3px solid ${r.trim}`, borderRight: `3px solid ${r.trim}` }} />)}
+        {/* Room backgrounds — flat colour + a subtle wall texture per room */}
+        {ROOMS.map(r => (
+          <div key={r.id} style={{
+            position: 'absolute', left: r.x, top: r.y, width: r.w, height: r.h,
+            backgroundColor: r.wall,
+            backgroundImage: ROOM_TEX[r.id] || 'none',
+            borderLeft: `3px solid ${r.trim}`,
+            borderRight: `3px solid ${r.trim}`,
+            boxShadow: 'inset 0 12px 28px rgba(0,0,0,0.08)',
+          }} />
+        ))}
 
         {/* Room labels */}
         {ROOMS.filter(r => r.id !== 'Stairs').map(r => <div key={r.id + 'lbl'} style={{ position: 'absolute', left: r.x + r.w / 2, top: r.y + 16, transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.55)', color: '#fff', padding: '3px 12px', borderRadius: 10, fontSize: 10, fontWeight: 700, letterSpacing: 1, pointerEvents: 'none', opacity: 0.7 }}>{r.name.toUpperCase()}</div>)}
 
-        {/* Walls */}
-        {WALLS_VIS.map((w, i) => <div key={i} style={{ position: 'absolute', left: w.x, top: w.y, width: w.w, height: w.h, background: '#5c3d2e', border: '1px solid #3a2510' }} />)}
+        {/* Windows — show rainy sky outside */}
+        {WINDOWS.map((w, i) => (
+          <div key={`win-${i}`} style={{
+            position: 'absolute', left: w.x, top: w.y, width: w.w, height: w.h, zIndex: 1,
+          }}>
+            <svg viewBox={`0 0 ${w.w} ${w.h}`} width={w.w} height={w.h}>
+              <WindowSprite w={w.w} h={w.h} />
+            </svg>
+          </div>
+        ))}
 
-        {/* Platforms */}
-        {PLATFORMS.map((p, i) => <div key={i} style={{ position: 'absolute', left: p.x, top: p.y, width: p.w, height: p.h, background: p.h > 10 ? '#5c3d2e' : '#7a5c3d', borderTop: '3px solid #3a2510', borderRadius: p.h <= 10 ? 2 : 0 }} />)}
+        {/* Walls */}
+        {WALLS_VIS.map((w, i) => <div key={i} style={{ position: 'absolute', left: w.x, top: w.y, width: w.w, height: w.h, background: '#5c3d2e', border: '1px solid #3a2510', zIndex: 2 }} />)}
+
+        {/* Platforms — wood-plank texture for thick floors, simple shelf for thin ones */}
+        {PLATFORMS.map((p, i) => (
+          <div key={i} style={{
+            position: 'absolute', left: p.x, top: p.y, width: p.w, height: p.h,
+            ...(p.h > 10
+              ? { backgroundImage: WOOD_FLOOR }
+              : { background: '#7a5c3d' }),
+            borderTop: '3px solid #3a2510',
+            borderRadius: p.h <= 10 ? 2 : 0,
+            boxShadow: p.h > 10 ? 'inset 0 -3px 0 rgba(0,0,0,0.25)' : 'none',
+            zIndex: 3,
+          }} />
+        ))}
+
+        {/* Stairs sprite — proper steps with railing, replaces the striped band */}
+        <Sprite x={735} y={65} w={120} h={635} z={3}>
+          <StairsSprite w={120} h={635} />
+        </Sprite>
 
         {/* Foundation + flood water */}
-        <div style={{ position: 'absolute', left: 0, top: 720, width: WORLD_W, height: 230, background: 'linear-gradient(180deg,#38271a,#1a1005)' }}>
+        <div style={{ position: 'absolute', left: 0, top: 720, width: WORLD_W, height: 230, background: 'linear-gradient(180deg,#38271a,#1a1005)', zIndex: 30 }}>
           <div style={{ position: 'absolute', left: 0, bottom: 0, width: '100%', height: waterH, background: 'linear-gradient(180deg,rgba(30,100,180,0.25),rgba(20,60,120,0.5))', transition: 'height 1s ease-out', borderTop: '2px solid rgba(100,180,255,0.3)' }} />
         </div>
 
-        {/* Furniture */}
-        {FURNITURE.map((f, i) => <div key={i} style={{ position: 'absolute', left: f.x, top: f.y, width: f.w, height: f.h, background: f.c, border: `2px solid ${f.b}`, borderRadius: f.r || 0, opacity: 0.85 }} />)}
+        {/* Furniture — proper SVG illustrations per kind */}
+        {FURNITURE_PIECES.map((f, i) => {
+          const Comp = ({
+            sofa: Sofa, diningSet: DiningSet, tvStand: TVStand, sideTable: SideTable,
+            shoeRack: ShoeRack, tallAlmirah: TallAlmirah,
+            kitchenSlab: KitchenSlab, fridge: Fridge, sink: Sink, kitchenShelf: KitchenShelf,
+            bed: Bed, wardrobe: Wardrobe, bedsideTable: BedsideTable,
+            washingMachine: WashingMachine, medCabinet: MedCabinet, bucket: Bucket,
+            shelfUnit: ShelfUnit, cardboardBox: CardboardBox,
+            pujaAltar: PujaAltar, smallAlmirah: SmallAlmirah,
+          })[f.kind]
+          if (!Comp) return null
+          return (
+            <Sprite key={`furn-${i}`} x={f.x} y={f.y} w={f.w} h={f.h} z={5}>
+              <Comp w={f.w} h={f.h} />
+            </Sprite>
+          )
+        })}
 
-        {/* Decor emojis */}
-        {DECOR.map((d, i) => <div key={i} style={{ position: 'absolute', left: d.x, top: d.y, fontSize: d.s, transform: 'translate(-50%,-50%)', animation: d.spin ? 'spin 4s linear infinite' : 'bob-sm 5s ease-in-out infinite', pointerEvents: 'none', userSelect: 'none', opacity: 0.7, filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.2))' }}>{d.e}</div>)}
+        {/* Front door */}
+        {DOORS.map((d, i) => (
+          <div key={`door-${i}`} style={{ position: 'absolute', left: d.x, top: d.y, width: d.w, height: d.h, zIndex: 4 }}>
+            <svg viewBox={`0 0 ${d.w} ${d.h}`} width={d.w} height={d.h} style={{ overflow: 'visible' }}>
+              <DoorSprite w={d.w} h={d.h} label={d.label} />
+            </svg>
+            <div style={{
+              position: 'absolute', top: -16, left: '50%', transform: 'translateX(-50%)',
+              background: '#10b981', color: '#fff', fontSize: 9, fontWeight: 900,
+              letterSpacing: 1, padding: '2px 6px', borderRadius: 4,
+              border: '1px solid #064e3b', whiteSpace: 'nowrap',
+            }}>{d.label}</div>
+          </div>
+        ))}
 
-        {/* Items */}
+        {/* Potted plants */}
+        {PLANTS.map((p, i) => (
+          <div key={`plant-${i}`} style={{
+            position: 'absolute', left: p.x, top: p.y, width: p.h, height: p.h, zIndex: 6,
+          }}>
+            <svg viewBox={`0 0 ${p.h} ${p.h}`} width={p.h} height={p.h} style={{ overflow: 'visible' }}>
+              <PlantSprite h={p.h} />
+            </svg>
+          </div>
+        ))}
+
+        {/* Decor — full-colour OpenMoji SVG illustrations */}
+        {DECOR.map((d, i) => {
+          const code = emojiToCode(d.e)
+          return (
+            <img key={i}
+              src={`${EMOJI_BASE}/${code}.svg`}
+              alt=""
+              draggable={false}
+              style={{
+                position: 'absolute', left: d.x, top: d.y, width: d.s, height: d.s,
+                transform: 'translate(-50%,-50%)',
+                animation: d.spin ? 'spin 4s linear infinite' : 'bob-sm 5s ease-in-out infinite',
+                pointerEvents: 'none', userSelect: 'none', opacity: 0.92,
+                filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.25))',
+              }}
+            />
+          )
+        })}
+
+        {/* Items — full-colour OpenMoji illustrations, no flat-colour bubble in the way.
+            A soft category-tinted glow appears only when the player is in pickup range. */}
         {CATALOGUE.filter(it => !bagIds.includes(it.id)).map(it => {
           const plate = CAT_PLATES[it.cat]
-          const sz = it.sz || ITEM_SIZE
+          const sz = (it.sz || ITEM_SIZE) * 1.1
           const isNear = nearbyItem?.id === it.id
           return (
             <div key={it.id}
@@ -1005,31 +1713,79 @@ export default function Module1_GoBag() {
               onMouseLeave={() => setHoveredItem(null)}
               onClick={() => { if (nearItemRef.current?.id === it.id) pickupRef.current() }}
               style={{
-                position: 'absolute', left: it.wx, top: it.wy, width: sz, height: sz, transform: 'translate(-50%,-50%)',
-                cursor: isNear ? 'pointer' : 'default', zIndex: 10, animation: 'bob-sm 3.5s ease-in-out infinite',
-                filter: 'drop-shadow(0 3px 6px rgba(0,0,0,0.3))'
+                position: 'absolute', left: it.wx, top: it.wy, width: sz, height: sz,
+                transform: 'translate(-50%,-50%)',
+                cursor: isNear ? 'pointer' : 'default', zIndex: 10,
+                animation: 'bob-sm 3.5s ease-in-out infinite',
               }}>
-              <div style={{
-                width: sz, height: sz, borderRadius: '50%', background: `radial-gradient(circle at 35% 35%,white,${plate}88)`, border: `2px solid ${plate}`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: isNear ? `0 0 18px ${plate},0 0 36px ${plate}44` : `0 2px 8px ${plate}44`, transition: 'box-shadow 0.3s'
-              }}>
-                <div style={{ fontSize: sz * 0.58, lineHeight: 1 }}>{it.emoji}</div>
-              </div>
+              {/* category-coloured halo when nearby */}
               {isNear && <div style={{
-                position: 'absolute', top: -(sz / 2 + 8), left: '50%', transform: 'translateX(-50%)', background: 'rgba(15,23,42,0.9)', color: '#fbbf24',
-                padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap', border: '1px solid #fbbf24', animation: 'bob-sm 1.5s ease-in-out infinite'
+                position: 'absolute', inset: -6, borderRadius: '50%',
+                background: `radial-gradient(circle, ${plate}55 0%, ${plate}00 70%)`,
+                animation: 'pulse-ring 1.2s infinite', pointerEvents: 'none',
+              }} />}
+              {/* small ground shadow */}
+              <div style={{
+                position: 'absolute', left: '50%', bottom: -4,
+                transform: 'translateX(-50%)',
+                width: sz * 0.6, height: 6, borderRadius: '50%',
+                background: 'radial-gradient(ellipse, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0) 70%)',
+                pointerEvents: 'none',
+              }} />
+              {it.trap && <div style={{
+                position: 'absolute', top: -3, right: -3, width: 14, height: 14,
+                borderRadius: '50%', background: '#ef4444', color: '#fff',
+                fontSize: 9, fontWeight: 900, lineHeight: '14px', textAlign: 'center',
+                border: '1.5px solid #fff', boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                pointerEvents: 'none',
+              }}>!</div>}
+              <ItemIcon item={it} size={sz} style={{
+                filter: `drop-shadow(0 3px 4px rgba(0,0,0,0.45))${isNear ? ` drop-shadow(0 0 6px ${plate})` : ''}`,
+              }} />
+              {isNear && <div style={{
+                position: 'absolute', top: -(sz / 2 + 4), left: '50%',
+                transform: 'translateX(-50%)',
+                background: 'rgba(15,23,42,0.92)', color: '#fbbf24',
+                padding: '2px 8px', borderRadius: 6, fontSize: 10, fontWeight: 800,
+                whiteSpace: 'nowrap', border: '1px solid #fbbf24',
+                animation: 'bob-sm 1.5s ease-in-out infinite',
               }}>E / SPACE</div>}
             </div>
           )
         })}
 
-        {/* Player */}
-        <div ref={playerElRef} style={{ position: 'absolute', width: PLAYER_W, height: PLAYER_H, zIndex: 20, left: 100, top: 660 }}>
-          <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fbbf24', border: '2px solid #78350f', position: 'absolute', top: -2, left: 3, boxShadow: '0 0 8px rgba(251,191,36,0.3)' }} />
-          <div style={{ width: 22, height: 18, background: '#ea580c', border: '2px solid #9a3412', borderRadius: '3px 3px 0 0', position: 'absolute', top: 14, left: 1 }} />
-          <div className="pleg" style={{ width: 7, height: 11, background: '#1d4ed8', borderRadius: '0 0 2px 2px', position: 'absolute', top: 30, left: 3 }} />
-          <div className="pleg" style={{ width: 7, height: 11, background: '#1d4ed8', borderRadius: '0 0 2px 2px', position: 'absolute', top: 30, left: 14 }} />
+        {/* Player — full SVG cartoon character */}
+        <div ref={playerElRef} style={{
+          position: 'absolute', width: PLAYER_W, height: PLAYER_H, zIndex: 20,
+          left: 100, top: 660, filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.35))',
+        }}>
+          <svg viewBox="0 0 24 40" width={PLAYER_W} height={PLAYER_H}
+               style={{ overflow: 'visible' }}
+               className="player-svg">
+            {/* back arm */}
+            <rect x="3" y="14" width="3" height="11" rx="1.5" fill="#fdba74" className="parm parm-back"/>
+            {/* back leg */}
+            <g className="pleg pleg-back">
+              <rect x="8" y="28" width="4" height="11" rx="1.5" fill="#1d4ed8"/>
+              <rect x="7" y="37" width="6" height="3" rx="1" fill="#1f2937"/>
+            </g>
+            {/* body / shirt */}
+            <rect x="5" y="13" width="14" height="14" rx="3" fill="#ef4444" stroke="#7f1d1d" strokeWidth="0.5"/>
+            <rect x="9" y="20" width="6" height="3" fill="#fff" opacity="0.4"/>
+            {/* front leg */}
+            <g className="pleg pleg-front">
+              <rect x="12" y="28" width="4" height="11" rx="1.5" fill="#1d4ed8"/>
+              <rect x="11" y="37" width="6" height="3" rx="1" fill="#1f2937"/>
+            </g>
+            {/* head + hair */}
+            <circle cx="12" cy="8" r="6.5" fill="#fed7aa" stroke="#92400e" strokeWidth="0.6"/>
+            <path d="M5.5 6 Q6 1 12 1 Q18 1 18.5 7 Q15 4 12 5 Q9 4 5.5 6 Z" fill="#3f1d0b"/>
+            <circle cx="10.5" cy="8.5" r="0.9" fill="#0f172a"/>
+            <circle cx="14"   cy="8.5" r="0.9" fill="#0f172a"/>
+            <path d="M11 11 Q12 12 13 11" stroke="#0f172a" strokeWidth="0.6" fill="none"/>
+            {/* front arm */}
+            <rect x="18" y="14" width="3" height="11" rx="1.5" fill="#fdba74" className="parm parm-front"/>
+          </svg>
         </div>
       </div>
 
@@ -1078,10 +1834,12 @@ export default function Module1_GoBag() {
 
       {flying.map(f => (
         <div key={f.fid} style={{
-          position: 'fixed', left: f.fromX, top: f.fromY, fontSize: 38, zIndex: 1000, pointerEvents: 'none',
+          position: 'fixed', left: f.fromX, top: f.fromY, zIndex: 1000, pointerEvents: 'none',
           '--tx': `${f.tx}px`, '--ty': `${f.ty}px`, animation: 'flyToBag 0.65s cubic-bezier(.5,.2,.7,1) forwards',
           filter: 'drop-shadow(0 4px 10px rgba(0,0,0,0.35))'
-        }}>{f.emoji}</div>
+        }}>
+          <ItemIcon item={f.item} size={48} />
+        </div>
       ))}
 
       {/* In-Game Narrator */}
