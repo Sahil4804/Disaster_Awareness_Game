@@ -1,0 +1,377 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=0.72in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{xurl}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{xcolor}
+
+\definecolor{ReportBlue}{HTML}{1D4ED8}
+\definecolor{ReportCyan}{HTML}{0891B2}
+\definecolor{ReportDark}{HTML}{0F172A}
+\definecolor{ReportMuted}{HTML}{475569}
+\definecolor{ReportLight}{HTML}{EFF6FF}
+\definecolor{ReportBorder}{HTML}{CBD5E1}
+
+\hypersetup{
+  breaklinks=true,
+  colorlinks=true,
+  linkcolor=ReportBlue,
+  urlcolor=ReportCyan,
+  citecolor=ReportBlue,
+  pdftitle={Disaster Survival Simulator Project Report},
+  pdfauthor={Tanishq Agarwal, Sahil Patel, Gopal Garg}
+}
+
+\renewcommand{\familydefault}{\sfdefault}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setlist[itemize]{leftmargin=1.3em,itemsep=0.2em,topsep=0.2em}
+\setlist[enumerate]{leftmargin=1.5em,itemsep=0.2em,topsep=0.2em}
+\renewcommand{\arraystretch}{1.18}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small Disaster Survival Simulator - Project Report}
+\rhead{\small \thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\filecell}[2]{\begin{tabular}[t]{@{}l@{}}\footnotesize\code{#1}\\\footnotesize\code{#2}\end{tabular}}
+\newcommand{\sectionline}{\vspace{0.2em}{\color{ReportBlue}\hrule height 0.8pt}\vspace{0.6em}}
+\Urlmuskip=0mu plus 1mu
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  {\large Disaster Management (CE8.401)\par}
+  \vspace{1.1cm}
+  {\color{ReportBlue}\rule{\textwidth}{2pt}\par}
+  \vspace{1.25cm}
+  {\Huge\bfseries Disaster Survival Simulator\par}
+  \vspace{0.35cm}
+  {\Large A Scenario-Based Flood Preparedness and Response Learning Game\par}
+  \vspace{0.95cm}
+
+  \begin{tabularx}{\textwidth}{|L{0.27\textwidth}|Y|}
+    \hline
+    \textbf{Course} & Disaster Management (CE8.401) \\
+    \hline
+    \textbf{Project Scope} & First six flood games: Go-Bag, Build the Raft, Flood Rescue, Field Triage, Sinking Car, SOS Signaling \\
+    \hline
+    \textbf{Student Names} & Tanishq Agarwal; Sahil Patel; Gopal Garg \\
+    \hline
+    \textbf{Repository} & \url{https://github.com/Sahil4804/Disaster_Awareness_Game} \\
+    \hline
+    \textbf{Branch / Commit Reviewed} & \code{old-state / 0916f5c} \\
+    \hline
+    \textbf{Report Date} & 5 May 2026 \\
+    \hline
+  \end{tabularx}
+
+  \vspace{0.9cm}
+  \colorbox{ReportLight}{%
+    \begin{minipage}{0.94\textwidth}
+      \textbf{Project identity:} Instead of limiting the work to a planned concept or a comic-style question-answer activity, the project implements playable, pressure-based disaster scenarios. Players make choices, experience consequences, receive feedback, and see their mistakes summarized in a readiness dashboard.
+    \end{minipage}
+  }
+
+  \vfill
+  {\small Generated from the React project source files and the \code{Report\_Disaster.pdf} guidelines.\par}
+\end{titlepage}
+
+\section{Abstract}
+\sectionline
+Flood education is often delivered through posters, short videos, comics, or quiz questions. Such formats can introduce important terms, but they do not always train learners to act under time pressure, prioritize resources, or reflect on mistakes. Our project addresses this gap through a browser-based Disaster Survival Simulator built in React. The current report focuses on the first six flood games, which form one continuous story: a flash flood warning arrives, the player packs an evacuation go-bag, builds an improvised raft from garage materials, rescues stranded neighbors, triages and treats survivors at a relief shelter, escapes a sinking vehicle, and signals rescuers. The implementation combines side-scrolling exploration, top-down raft navigation, medical sorting, resource collection, quick-time escape tasks, condition-based SOS signaling, scoring, pass/fail feedback, and a readiness dashboard. The result is not only a game plan, but a playable scenario-based learning system. It helps users understand why a decision is safe or unsafe, where they lost points, and what they should improve before replaying. The dashboard converts attempts into learning evidence by showing readiness level, module progress, skill gaps, strengths, and next steps. This makes the project suitable for student learning, public awareness demonstrations, and disaster-preparedness training discussions.
+
+\section{Introduction}
+\sectionline
+\subsection{Background and Motivation}
+Floods are among the most common disaster events and can escalate quickly from warning to evacuation, road blockage, vehicle submergence, medical stress, and rescue communication. Preparedness guidance often explains what to pack, how to avoid floodwater, when to seek shelter, and how to signal for help. However, learners may still struggle when these decisions are placed in sequence. They may know that a torch is useful, but forget it while packing under time pressure. They may know that a raft requires buoyancy, but choose weak material under stress. They may know SOS exists, but not which signal works in fog, rain, sunlight, or night.
+
+The motivation of this project is to make disaster education experiential. The game turns awareness content into a sequence of playable decisions so students can practice the logic of survival before a real event. The experience is designed around mistakes as learning moments: every module gives feedback, records score data, and supports replay.
+
+\subsection{Problem Statement}
+Traditional disaster learning games are frequently story-based, comic-based, or quiz-based. These formats ask users to choose answers, but the interaction often ends after the answer is marked correct or wrong. Our project asks a broader question:
+
+\begin{quote}\small
+How can a flood-awareness game teach practical preparedness and response skills through scenario-based gameplay, measurable decisions, and dashboard feedback?
+\end{quote}
+
+\subsection{Scope}
+The repository contains a larger Disaster Survival Simulator interface with more planned flood modules and locked disaster types. This report considers only the first six implemented flood games because they form the complete story requested for evaluation:
+\begin{enumerate}
+  \item Flood is about to come, so the player prepares a go-bag.
+  \item The player collects resources in a garage and builds a raft.
+  \item The raft is used to rescue people and bring survivors to safety.
+  \item The player reaches relief and medical sources, collects medicine, and treats people.
+  \item The player follows routes to escape, but the car sinks and must be escaped.
+  \item After escaping, the player performs SOS signaling to attract rescue.
+\end{enumerate}
+
+\subsection{Target Users and Objectives}
+The target users are school or college students, community volunteers, and general citizens learning basic flood preparedness. The learning objectives are:
+\begin{itemize}
+  \item identify essential emergency supplies and avoid low-value or unsafe items;
+  \item understand improvised raft material selection and buoyancy tradeoffs;
+  \item practice rescue navigation while avoiding electrical and debris hazards;
+  \item triage survivors and match medical needs with appropriate treatment items;
+  \item follow safe behavior during route selection and sinking vehicle escape;
+  \item choose suitable SOS signals for different visibility and weather conditions;
+  \item use dashboard feedback to understand mistakes and improve across attempts.
+\end{itemize}
+
+\section{Disaster Context and Domain}
+\sectionline
+The first six games focus on flood preparedness and response. The domain content draws from standard flood-safety ideas: keeping an emergency kit, avoiding moving floodwater and submerged roads, evacuating when necessary, reducing exposure to contaminated floodwater, using safe rescue communication, and treating basic post-flood medical risks. The simulator does not claim to replace official training. Instead, it converts the logic of official guidance into interactive learning.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.24\textwidth}Y Y}
+\toprule
+\textbf{Flood Risk} & \textbf{Learning Need} & \textbf{Game Translation} \\
+\midrule
+Sudden warning and evacuation & Pack essentials quickly and avoid useless weight & Timed go-bag selection with weight and essential-item scoring \\
+Flooded streets and lost mobility & Understand makeshift flotation and material reliability & Garage collection and raft stress test \\
+Stranded people & Rescue without increasing danger & Night raft navigation, victim pickup, shelter drop-off, hazard avoidance \\
+Injured or ill survivors & Prioritize by severity and treat with correct supplies & Triage ordering, supply run, and treatment matching \\
+Submerged car & Escape before cabin flooding becomes fatal & Route choice followed by staged sinking-car escape actions \\
+Need for external rescue & Signal according to conditions & SOS rounds using mirror, flare, whistle, flag, and fire \\
+\bottomrule
+\end{tabularx}
+\caption{Flood-domain risks converted into playable learning tasks.}
+\end{table}
+
+\section{Methodology / Approach}
+\sectionline
+\subsection{Design Approach}
+The project uses a scenario-based design rather than an isolated quiz format. The six modules are connected by one flood story. Each module has a clear pressure condition, such as a countdown, weight limit, limited visibility, boat capacity, rising water level, or weather-dependent signaling. This creates active practice instead of passive reading.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.18\textwidth}Y Y}
+\toprule
+\textbf{Phase} & \textbf{Scenario Event} & \textbf{Player Work} \\
+\midrule
+Preparedness & Flood warning arrives & Pack a practical go-bag \\
+Improvisation & Garage becomes the resource area & Build a working raft \\
+Rescue & Neighborhood is flooded at night & Navigate, identify victims, and deliver survivors \\
+Medical response & Survivors reach shelter & Triage, collect supplies, and treat cases \\
+Escape & Evacuation route fails and car sinks & Escape the vehicle through ordered actions \\
+Communication & Player is outside but still needs rescue & Send the right SOS signal \\
+\bottomrule
+\end{tabularx}
+\caption{Story arc used by the first six flood games.}
+\end{table}
+
+\subsection{Technology Stack}
+The project is implemented as a Vite and React application. Important files reviewed include the app router, shared game context, the six flood module components, the module selector, the metrics dashboard, and the sources panel. The application uses browser local storage to preserve scores, completed modules, attempts, best score, and dashboard progress.
+
+\subsection{Implementation Pattern}
+Each module follows a similar structure:
+\begin{itemize}
+  \item a self-contained React component controls the gameplay state;
+  \item timed or spatial interaction creates pressure;
+  \item the module computes a numeric score and pass/fail result;
+  \item feedback explains the consequence of player choices;
+  \item the result is recorded through the shared game context;
+  \item the dashboard turns module attempts into readiness insights.
+\end{itemize}
+
+\subsection{First Six Game Modules}
+\begin{longtable}{L{0.15\textwidth}L{0.20\textwidth}L{0.31\textwidth}L{0.24\textwidth}}
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Gameplay} & \textbf{Learning Outcome} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Module} & \textbf{File} & \textbf{Gameplay} & \textbf{Learning Outcome} \\
+\midrule
+\endhead
+Go-Bag Challenge & \filecell{Module1\_}{GoBag.jsx} & Side-scrolling home exploration. The player collects emergency items under time and weight limits. & Learns essential kit selection: water, medical supplies, torch, documents, rain protection, and avoiding low-value items. \\
+Build the Raft & \filecell{Module2\_}{HomeDefense.jsx} & Garage collection and progressive raft assembly with hull, binding, deck, and propulsion choices. & Learns buoyancy, binding strength, platform stability, and paddling control. \\
+Flood Rescue & \filecell{Module3\_}{YardLockdown.jsx} & Top-down night raft navigation, survivor pickup, debris clearing, shelter drop-off, and electrical hazard avoidance. & Learns safe rescue routing, victim identification, limited capacity, and hazard awareness. \\
+Field Triage & \filecell{Module4\_}{FieldTriage.jsx} & Triage ordering, raft-based supply run to medical sources, and treatment selection. & Learns medical prioritization, supply matching, and correct treatment for dehydration, diabetes, hypothermia, fractures, and cuts. \\
+Sinking Car & \filecell{Module5\_}{SinkingCar.jsx} & Route decision followed by escape actions: calm down, unbuckle, open or break window, and swim out. & Learns that flooded roads are dangerous and that escape requires ordered action before water level rises. \\
+SOS Signaling & \filecell{Module6\_}{SOSSignaling.jsx} & Weather and visibility rounds where the player selects and performs the right signaling method. & Learns that mirror, flare, whistle, flag, and fire are condition-dependent rescue signals. \\
+\bottomrule
+\end{longtable}
+
+\section{Data Description}
+\sectionline
+This project does not use a survey dataset or machine-learning dataset. The main data are gameplay states, code-defined item lists, victim profiles, resource locations, scoring rules, and local progress records. These are meaningful because they represent the educational model of the simulator.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.27\textwidth}Y Y}
+\toprule
+\textbf{Data Type} & \textbf{Where It Appears} & \textbf{Purpose} \\
+\midrule
+Item catalogues & Go-bag and raft modules & Define correct, weak, unsafe, or low-priority choices \\
+Victim profiles & Rescue and triage modules & Represent survivor conditions and medical priority \\
+Hazard zones & Rescue, triage, and route modules & Teach avoidance of electrical, road, and floodwater danger \\
+Timers and pressure states & All six games & Simulate urgency and decision-making under stress \\
+Scores and attempts & \code{GameContext.jsx} and browser local storage & Track progress, attempts, pass counts, and best score \\
+Dashboard metadata & \code{MetricsDashboard.jsx} & Convert scores into readiness grade, skill analysis, strengths, gaps, and next steps \\
+Source metadata & \code{moduleSources.js} and \code{SourcesPanel.jsx} & Connect learning content with official disaster guidance \\
+\bottomrule
+\end{tabularx}
+\caption{Project data types observed in the source files.}
+\end{table}
+
+\section{Results and Analysis}
+\sectionline
+\subsection{Implemented Outputs}
+The project implements a playable flood-learning path instead of stopping at a conceptual plan. The first six games together cover preparedness, response, treatment, escape, and rescue communication. Each game has a scoring rule connected to safety behavior:
+\begin{itemize}
+  \item Module 1 rewards essential go-bag items and penalizes excess weight or traps.
+  \item Module 2 rewards correct raft materials and blueprint reading.
+  \item Module 3 rewards delivered survivors, avoiding shocks, and rescuing everyone in time.
+  \item Module 4 rewards correct triage, supply collection, and treatment decisions.
+  \item Module 5 measures escape success by remaining safety margin before flooding.
+  \item Module 6 rewards correct signaling tools and performance in weather-specific rounds.
+\end{itemize}
+
+\subsection{Dashboard Learning Result}
+The dashboard is one of the strongest educational parts of the project. It does not only show a final score. It converts gameplay into reflection by presenting:
+\begin{itemize}
+  \item overall readiness grade and pass rate;
+  \item active module count and completed module count;
+  \item phase-wise preparedness, response, and survival analysis;
+  \item module-by-module scores, attempts, and pass/fail status;
+  \item skill categories such as priority, protocol, hazard, resource, speed, pressure, navigation, and engineering;
+  \item strengths, weak areas, untested skills, and suggested next steps.
+\end{itemize}
+This means players can learn from mistakes after the game. For example, a low score in the go-bag module may show poor resource prioritization, while a low score in flood rescue may reveal navigation or hazard-awareness problems. The dashboard therefore turns the game into a feedback-driven learning system.
+
+\subsection{Educational Value}
+The scenario chain makes the project memorable because one mistake can be understood within a story. Packing a poor bag affects preparedness. Building a bad raft affects mobility. Missing rescue hazards affects survivor safety. Wrong treatment affects medical outcomes. Delayed car escape affects survival. Wrong SOS signaling affects rescue chances. This is stronger than a single quiz because the learner practices the action, not only the answer.
+
+\section{Comparison with Other Disaster Learning Games}
+\sectionline
+Many simple disaster-awareness games are story-based, comic-style, or question-answer activities. They are useful for introducing concepts, but they often remain close to a classroom quiz. The user reads a situation, clicks an option, and receives a correct or incorrect response. Our project improves on that model by making the learner perform decisions inside an interactive flood sequence.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.27\textwidth}Y Y}
+\toprule
+\textbf{Aspect} & \textbf{Typical Comic / Q\&A Game} & \textbf{Our Disaster Survival Simulator} \\
+\midrule
+Learning mode & Reads story panels and answers questions & Performs tasks inside playable flood scenarios \\
+Decision pressure & Usually low pressure & Timers, weight limits, visibility limits, capacity limits, and rising water \\
+Skill coverage & Often focuses on recognition of facts & Covers packing, building, navigation, rescue, triage, treatment, escape, and signaling \\
+Feedback & Correct or wrong answer feedback & Score, pass/fail, consequence text, retry, and dashboard analysis \\
+Continuity & Isolated questions or short stories & Connected story from warning to SOS rescue \\
+Reflection & Limited after-game analysis & Readiness dashboard with strengths, gaps, attempts, best scores, and next steps \\
+Practical realism & Mostly conceptual & Scenario-based practice inspired by official safety guidance \\
+\bottomrule
+\end{tabularx}
+\caption{Comparison between conventional disaster-learning games and this project.}
+\end{table}
+
+The main difference is that our project does not simply ask, "What should you do?" It asks the player to do it under simulated constraints. This makes the game more useful for learning because users can discover their own mistakes through play and then improve through the dashboard.
+
+\section{Limitations}
+\sectionline
+The project is functional and educationally strong, but it also has limitations:
+\begin{itemize}
+  \item The report considers only the first six flood games, while the interface lists additional modules and locked disaster types.
+  \item The simulation simplifies real rescue and medical decisions. It should support awareness, not replace professional training.
+  \item The dashboard measures in-game performance, but a formal user study would be needed to measure real learning gains.
+  \item Some source-panel metadata should be kept synchronized as module names and numbering evolve.
+  \item The production build passes, but Vite reports a large bundle-size warning, so future optimization or code splitting would improve delivery.
+  \item Accessibility improvements such as keyboard guidance, screen-reader labels, and adjustable difficulty would strengthen inclusivity.
+\end{itemize}
+
+\section{Code Reproducibility}
+\sectionline
+\subsection{Reviewed Repository State}
+The reviewed project is the current branch \code{old-state} at commit \code{0916f5c}. The code was inspected after pulling the latest available changes from the tracked branch.
+
+\subsection{Important Source Files}
+\begin{longtable}{L{0.43\textwidth}L{0.49\textwidth}}
+\toprule
+\textbf{File / Folder} & \textbf{Purpose} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{File / Folder} & \textbf{Purpose} \\
+\midrule
+\endhead
+\code{src/App.jsx} & Main navigation, screen selection, and module routing. \\
+\filecell{src/context/}{GameContext.jsx} & Shared game state, score recording, completed modules, and local-storage persistence. \\
+\filecell{src/components/}{ModuleSelect.jsx} & Flood module list, progress summary, and entry points. \\
+\filecell{src/components/}{MetricsDashboard.jsx} & Readiness grade, phase stats, skill analysis, module insights, and next steps. \\
+\filecell{src/components/}{SourcesPanel.jsx} & Floating official-source panel used for learning support. \\
+\filecell{src/modules/flood/}{Module1\_GoBag.jsx} & Go-bag preparation game. \\
+\filecell{src/modules/flood/}{Module2\_HomeDefense.jsx} & Garage collection and raft-building game. \\
+\filecell{src/modules/flood/}{Module3\_YardLockdown.jsx} & Flood rescue navigation game. \\
+\filecell{src/modules/flood/}{Module4\_FieldTriage.jsx} & Triage, supply run, and treatment workflow. \\
+\filecell{src/modules/flood/}{Module5\_SinkingCar.jsx} & Route decision and sinking vehicle escape. \\
+\filecell{src/modules/flood/}{Module6\_SOSSignaling.jsx} & Condition-based SOS signaling rounds. \\
+\code{public/assets} & Avatars, medical POV imagery, emoji, and icon assets. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Setup Instructions}
+\begin{verbatim}
+git clone git@github.com-personal:Sahil4804/Disaster_Awareness_Game.git
+cd Disaster_Awareness_Game
+npm install
+npm run dev
+npm run build
+\end{verbatim}
+
+\subsection{Dependencies}
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{L{0.34\textwidth}Y}
+\toprule
+\textbf{Dependency} & \textbf{Role} \\
+\midrule
+\code{react}, \code{react-dom} & Component UI and rendering \\
+\code{vite} & Development server and production build \\
+\code{@vitejs/plugin-react} & React support in Vite \\
+\code{three}, \code{@react-three/fiber}, \code{@react-three/drei} & Available for 3D modules in the broader project \\
+\code{gh-pages} & Deployment helper \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Conclusion}
+\sectionline
+The Disaster Survival Simulator successfully demonstrates how disaster management education can move beyond passive awareness. The first six games form a coherent flood-survival journey: preparation, improvised mobility, rescue, medical response, vehicle escape, and rescue communication. Each game contains actionable mechanics, scoring rules, and feedback that connect learner choices to safety consequences. The dashboard strengthens the project by making mistakes visible and useful: players can see which modules and skills they lack, retry weak areas, and understand what to improve.
+
+The main contribution is the shift from a comic or quiz-only design to a scenario-based simulator. The project does not simply ask learners what is correct; it places them inside a flood story and makes them practice the decision. This gives the system educational value for students, community awareness sessions, and disaster preparedness demonstrations.
+
+\section{References}
+\sectionline
+\begin{enumerate}
+  \item National Disaster Management Authority, Government of India. \textit{National Disaster Management Guidelines: Management of Floods}. \url{https://ndma.gov.in/images/guidelines/flood.pdf}
+  \item FEMA Ready.gov. \textit{Build A Kit}. \url{https://www.ready.gov/kit}
+  \item FEMA Ready.gov. \textit{Floods}. \url{https://www.ready.gov/floods}
+  \item American Red Cross. \textit{Survival Kit Supplies}. \url{https://www.redcross.org/get-help/how-to-prepare-for-emergencies/survival-kit-supplies.html}
+  \item NOAA / National Weather Service. \textit{Turn Around Don't Drown}. \url{https://www.weather.gov/safety/flood-turn-around-dont-drown}
+  \item Centers for Disease Control and Prevention. \textit{Safety Guidelines: Floodwater}. \url{https://www.cdc.gov/floods/safety/floodwater-after-a-disaster-or-emergency-safety.html}
+  \item Centers for Disease Control and Prevention. \textit{Floods and Your Safety}. \url{https://www.cdc.gov/floods/index.html}
+  \item World Health Organization. \textit{Floods: Health Topic}. \url{https://www.who.int/health-topics/floods}
+  \item United States Coast Guard Auxiliary. \textit{Visual Distress Signals}. \url{https://www.uscg.mil/Auxiliary/Training/AUXOP/PV/USPS-VDS.pdf}
+  \item Project source repository. \textit{Disaster\_Awareness\_Game}. \url{https://github.com/Sahil4804/Disaster_Awareness_Game}
+\end{enumerate}
+
+\end{document}
