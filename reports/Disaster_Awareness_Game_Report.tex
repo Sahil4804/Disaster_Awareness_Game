@@ -6,6 +6,8 @@
 \usepackage{booktabs}
 \usepackage{enumitem}
 \usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{graphicx}
 \usepackage{xurl}
 \usepackage{hyperref}
 \usepackage{longtable}
@@ -156,6 +158,12 @@ Need for external rescue & Signal according to conditions & SOS rounds using mir
 \subsection{Design Approach}
 The project uses a scenario-based design rather than an isolated quiz format. The six modules are connected by one flood story. Each module has a clear pressure condition, such as a countdown, weight limit, limited visibility, boat capacity, rising water level, or weather-dependent signaling. This creates active practice instead of passive reading.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.82\textwidth]{figures/main_menu.png}
+\caption{Main menu of the Disaster Survival Simulator, showing the project identity and entry points for training, dashboard review, and presentation.}
+\end{figure}
+
 \begin{table}[h]
 \centering
 \small
@@ -207,6 +215,12 @@ SOS Signaling & \filecell{Module6\_}{SOSSignaling.jsx} & Weather and visibility 
 \bottomrule
 \end{longtable}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth,height=0.74\textheight,keepaspectratio]{figures/module_progress.png}
+\caption{Flood module-selection screen with progress, score bars, pass/fail labels, attempts, and phase grouping across the scenario sequence.}
+\end{figure}
+
 \section{Data Description}
 \sectionline
 This project does not use a survey dataset or machine-learning dataset. The main data are gameplay states, code-defined item lists, victim profiles, resource locations, scoring rules, and local progress records. These are meaningful because they represent the educational model of the simulator.
@@ -255,8 +269,26 @@ The dashboard is one of the strongest educational parts of the project. It does 
 \end{itemize}
 This means players can learn from mistakes after the game. For example, a low score in the go-bag module may show poor resource prioritization, while a low score in flood rescue may reveal navigation or hazard-awareness problems. The dashboard therefore turns the game into a feedback-driven learning system.
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth,height=0.76\textheight,keepaspectratio]{figures/dashboard_overview.png}
+\caption{Readiness dashboard showing overall grade, phase-wise knowledge snapshot, module-by-module performance, failed attempts, retries, and skill-profile analysis.}
+\end{figure}
+
 \subsection{Educational Value}
 The scenario chain makes the project memorable because one mistake can be understood within a story. Packing a poor bag affects preparedness. Building a bad raft affects mobility. Missing rescue hazards affects survivor safety. Wrong treatment affects medical outcomes. Delayed car escape affects survival. Wrong SOS signaling affects rescue chances. This is stronger than a single quiz because the learner practices the action, not only the answer.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/game_gobag.png}
+\caption{Module 1 visual: the Go-Bag Challenge begins with a flash-flood warning, time pressure, weight limit, family needs, and essential-item guidance.}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/game_triage.png}
+\caption{Module 4 visual: Field Triage introduces medical prioritization, supply collection, and correct treatment decisions after survivors reach shelter.}
+\end{figure}
 
 \section{Comparison with Other Disaster Learning Games}
 \sectionline
