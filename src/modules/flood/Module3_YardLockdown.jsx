@@ -175,7 +175,91 @@ const KEYFRAMES = `
 @keyframes wake{0%{opacity:0.4;transform:scaleX(1)}100%{opacity:0;transform:scaleX(2.5) translateY(8px)}}
 @keyframes compassPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
 @keyframes interactFill{from{width:0%}to{width:100%}}
+@keyframes lightningFlash{0%,92%,100%{opacity:0}93%,95%{opacity:0.85}94%{opacity:0.3}}
+@keyframes rainFall{from{background-position:0 0}to{background-position:0 200px}}
+@keyframes cardEnter{from{opacity:0;transform:translateY(20px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes scoreCount{from{transform:scale(0.4) rotate(-10deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+@keyframes ripple{0%{transform:scale(0.8);opacity:0.6}100%{transform:scale(2.2);opacity:0}}
 `
+
+// ═══════════════════════════════════════════════════════════════
+// IMAGE ASSET LAYER — graceful fallback to emoji if PNG missing
+// Drop downloaded PNGs into /public/assets/rescue/
+// ═══════════════════════════════════════════════════════════════
+const RIMG = '/assets/rescue/'
+const SHARED_IMG = '/assets/shared/'
+
+const SCENE_IMG = {
+  floodTile: SHARED_IMG + 'floodwater_tile.png',
+  rainOverlay: SHARED_IMG + 'rain_overlay.png',
+  stormSky: SHARED_IMG + 'stormy_sky.jpg',
+  buildings: [RIMG + 'building_submerged_1.png', RIMG + 'building_submerged_2.png', RIMG + 'building_submerged_3.png'],
+  tree: RIMG + 'tree_top_down.png',
+  car: RIMG + 'car_submerged_top.png',
+  hazardPole: RIMG + 'hazard_pole_sparking.png',
+  raft: RIMG + 'raft_top_down.png',
+  shelter: RIMG + 'shelter_camp.png',
+}
+
+const VICTIM_SPRITES = {
+  v1: RIMG + 'victim_rooftop.png',
+  v2: RIMG + 'victim_rooftop.png',
+  v3: RIMG + 'victim_window.png',
+  v4: RIMG + 'victim_debris.png',
+  v5: RIMG + 'victim_rooftop.png',
+}
+
+const OBSTACLE_IMG = {
+  debris: SHARED_IMG + 'flood_debris.png',
+  tree: RIMG + 'tree_top_down.png',
+  car: RIMG + 'car_submerged_top.png',
+}
+
+// Module-level image-load cache so dozens of sprite instances share state.
+const _imgStatus = new Map() // src -> 'loaded' | 'errored'
+function useImageLoaded(src) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    if (!src || _imgStatus.has(src)) return
+    const im = new Image()
+    im.onload = () => { _imgStatus.set(src, 'loaded'); force(t => t+1) }
+    im.onerror = () => { _imgStatus.set(src, 'errored'); force(t => t+1) }
+    im.src = src
+  }, [src])
+  return _imgStatus.get(src) === 'loaded'
+}
+
+// Sprite that renders an emoji fallback until the image loads, then shows the image.
+function Sprite({ src, fallback, size = 24, style = {}, animation }) {
+  const loaded = useImageLoaded(src)
+  return (
+    <div style={{
+      width: size, height: size, position: 'relative',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      lineHeight: 1, userSelect: 'none', ...style,
+    }}>
+      {!loaded && <span style={{ fontSize: size * 0.85, lineHeight: 1, animation }}>{fallback}</span>}
+      {loaded && (
+        <img src={src} alt="" style={{
+          width: '100%', height: '100%', objectFit: 'contain',
+          filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.55))',
+          animation, pointerEvents: 'none',
+        }}/>
+      )}
+    </div>
+  )
+}
+
+// Background tile / cover image; renders only when loaded (no broken-icon).
+function ImgBg({ src, style, size = 'cover', repeat = 'no-repeat' }) {
+  const loaded = useImageLoaded(src)
+  if (!loaded) return null
+  return <div style={{
+    position: 'absolute', inset: 0,
+    backgroundImage: `url(${src})`, backgroundSize: size, backgroundRepeat: repeat,
+    backgroundPosition: 'center', pointerEvents: 'none', ...style,
+  }}/>
+}
 
 // ═══════════════════════════════════════════════════════════════
 // COLLISION HELPERS
@@ -408,6 +492,9 @@ export default function Module3_YardLockdown() {
   useEffect(() => { interactRef.current = interacting }, [interacting])
   useEffect(() => { onBoardRef.current = onBoard }, [onBoard])
   useEffect(() => { deliveredRef.current = delivered }, [delivered])
+
+  // Hoisted image-load checks (must be called unconditionally on every render)
+  const raftImgLoaded = useImageLoaded(SCENE_IMG.raft)
 
   // Timer
   useEffect(() => {
@@ -678,11 +765,17 @@ export default function Module3_YardLockdown() {
   if (phase === 'intro') return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#0a0a1a,#0d1b2a,#1b2838)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
       <style>{KEYFRAMES}</style>
+      {/* Storm sky backdrop */}
+      <ImgBg src={SCENE_IMG.stormSky} style={{ opacity: 0.5, filter: 'brightness(0.45) saturate(1.2)' }}/>
+      {/* CSS rain overlay */}
+      <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 20px, rgba(180,210,255,0.08) 20px 22px)', backgroundSize:'100% 130px', animation:'rainFall 0.4s linear infinite', pointerEvents:'none', mixBlendMode:'screen' }}/>
+      {/* Lightning flash */}
+      <div style={{ position:'absolute', inset:0, background:'rgba(180,200,255,0.6)', animation:'lightningFlash 8s linear infinite', pointerEvents:'none' }}/>
       {/* Floating icons */}
       {['🔦','🌊','🚣','🏚️','⚡','🆘','📢','🪵','🚗','🌳'].map((e,i) => (
-        <div key={i} style={{ position:'absolute', left:`${(i*11+4)%95}%`, top:`${(i*17+8)%80}%`, fontSize:36+(i%3)*8, opacity:0.08, animation:`bob ${3+i*0.3}s ease-in-out infinite` }}>{e}</div>
+        <div key={i} style={{ position:'absolute', left:`${(i*11+4)%95}%`, top:`${(i*17+8)%80}%`, fontSize:36+(i%3)*8, opacity:0.1, animation:`bob ${3+i*0.3}s ease-in-out infinite`, filter:'drop-shadow(0 4px 8px rgba(0,0,0,0.5))' }}>{e}</div>
       ))}
-      <div style={{ position:'relative', zIndex:1, maxWidth:640, width:'100%', background:'rgba(255,255,255,0.94)', borderRadius:28, padding:40, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.5)', textAlign:'center' }}>
+      <div style={{ position:'relative', zIndex:1, maxWidth:640, width:'100%', background:'rgba(255,255,255,0.94)', borderRadius:28, padding:40, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.4) inset', textAlign:'center', backdropFilter:'blur(8px)' }}>
         <div style={{ fontSize:80, animation:'bob 2s ease-in-out infinite' }}>🔦</div>
         <div style={{ display:'inline-block', background:'linear-gradient(135deg,#dc2626,#991b1b)', color:'#fff', padding:'6px 18px', borderRadius:999, fontWeight:800, fontSize:12, letterSpacing:2, animation:'pulse-ring 1.4s infinite', marginTop:4 }}>🌊 NIGHT RESCUE OPERATION</div>
         <h1 style={{ fontSize:32, fontWeight:900, margin:'14px 0 4px', color:'#0f172a' }}>Flood Rescue</h1>
@@ -730,46 +823,72 @@ export default function Module3_YardLockdown() {
         <div ref={worldRef} style={{ position: 'absolute', width: MAP_W, height: MAP_H, willChange: 'transform' }}>
           {/* Water base */}
           <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg,#050b18,#081020,#0a1428)' }}>
+            {/* Tileable flood texture (loads if asset present) */}
+            <ImgBg src={SCENE_IMG.floodTile} size="512px" repeat="repeat" style={{ opacity: 0.4, mixBlendMode: 'overlay' }}/>
             {/* Wave pattern */}
             {Array.from({ length: 80 }).map((_, i) => (
               <div key={i} style={{
                 position: 'absolute', left: (i * 131) % MAP_W, top: (i * 97 + 50) % MAP_H,
-                width: 30 + (i % 4) * 10, height: 3, borderRadius: 2, background: 'rgba(37,99,235,0.06)',
+                width: 30 + (i % 4) * 10, height: 3, borderRadius: 2, background: 'rgba(37,99,235,0.08)',
                 transform: `rotate(${(i * 17) % 30 - 15}deg)`,
+              }} />
+            ))}
+            {/* Subtle drifting ripples */}
+            {Array.from({ length: 30 }).map((_, i) => (
+              <div key={`r${i}`} style={{
+                position: 'absolute', left: (i * 211) % MAP_W, top: (i * 167 + 30) % MAP_H,
+                width: 12, height: 12, borderRadius: '50%',
+                border: '1px solid rgba(147,197,253,0.18)',
+                animation: `ripple ${2 + (i%4)*0.5}s ease-out ${(i%5)*0.4}s infinite`,
               }} />
             ))}
           </div>
 
           {/* Buildings */}
-          {BUILDINGS.map((b, i) => (
-            <div key={i} style={{ position: 'absolute', left: b.x, top: b.y, width: b.w, height: b.h }}>
-              {/* Base */}
-              <div style={{ position: 'absolute', inset: 0, background: b.color, border: '2px solid #252540', borderRadius: 3, boxShadow: 'inset 0 -10px 20px rgba(0,0,0,0.4)' }}>
-                {/* Roof */}
-                <div style={{ position: 'absolute', top: -6, left: -3, right: -3, height: 10, background: b.roof, borderRadius: '3px 3px 0 0', border: '1px solid #3a3060' }} />
-                {/* Windows */}
-                {Array.from({ length: Math.floor(b.w / 35) }).map((_, wi) => (
-                  <div key={wi} style={{ position: 'absolute', left: 12 + wi * 34, top: 18, width: 14, height: 14, background: 'rgba(10,10,20,0.8)', border: '1px solid #2a2a40', borderRadius: 1 }} />
-                ))}
-                {/* Flood line */}
-                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '35%', background: 'linear-gradient(transparent, rgba(30,64,175,0.15))', borderRadius: '0 0 3px 3px' }} />
+          {BUILDINGS.map((b, i) => {
+            const bImg = SCENE_IMG.buildings[i % SCENE_IMG.buildings.length]
+            return (
+              <div key={i} style={{ position: 'absolute', left: b.x, top: b.y, width: b.w, height: b.h }}>
+                {/* Base */}
+                <div style={{ position: 'absolute', inset: 0, background: b.color, border: '2px solid #252540', borderRadius: 3, boxShadow: 'inset 0 -10px 20px rgba(0,0,0,0.4), 0 6px 20px rgba(0,0,0,0.5)', overflow: 'hidden' }}>
+                  {/* Top-down photo overlay (loads if asset present) */}
+                  <ImgBg src={bImg} style={{ opacity: 0.85, mixBlendMode: 'normal' }}/>
+                  {/* Roof */}
+                  <div style={{ position: 'absolute', top: -6, left: -3, right: -3, height: 10, background: b.roof, borderRadius: '3px 3px 0 0', border: '1px solid #3a3060', zIndex: 1 }} />
+                  {/* Windows */}
+                  {Array.from({ length: Math.floor(b.w / 35) }).map((_, wi) => (
+                    <div key={wi} style={{ position: 'absolute', left: 12 + wi * 34, top: 18, width: 14, height: 14, background: 'rgba(10,10,20,0.8)', border: '1px solid #2a2a40', borderRadius: 1, boxShadow: 'inset 0 0 4px rgba(0,0,0,0.6)' }} />
+                  ))}
+                  {/* Flood line */}
+                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '35%', background: 'linear-gradient(transparent, rgba(30,64,175,0.25))', borderRadius: '0 0 3px 3px' }} />
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
 
           {/* Poles */}
           {POLES.map((p, i) => (
-            <div key={i} style={{ position: 'absolute', left: p.x - 3, top: p.y - 20, width: 6, height: 24, background: 'linear-gradient(180deg,#3a3020,#1a1510)', borderRadius: 2, border: '1px solid #2a2010' }} />
+            <div key={i} style={{ position: 'absolute', left: p.x - 3, top: p.y - 20, width: 6, height: 24, background: 'linear-gradient(180deg,#3a3020,#1a1510)', borderRadius: 2, border: '1px solid #2a2010', boxShadow: '0 4px 8px rgba(0,0,0,0.5)' }} />
           ))}
 
           {/* Obstacles */}
-          {obstacles.filter(o => !o.cleared).map(o => (
-            <div key={o.id} style={{ position: 'absolute', left: o.x, top: o.y, width: o.w, height: o.h, display: 'flex', alignItems: 'center', justifyContent: 'center', background: o.type === 'car' ? 'rgba(100,100,120,0.3)' : 'rgba(80,60,30,0.3)', border: `2px solid ${o.type === 'car' ? '#4b5563' : '#78350f'}`, borderRadius: o.type === 'tree' ? '50%' : 4, fontSize: o.type === 'tree' ? 28 : 22 }}>
-              {o.emoji}
-            </div>
-          ))}
+          {obstacles.filter(o => !o.cleared).map(o => {
+            const sz = o.type === 'tree' ? Math.max(o.w, o.h) : Math.max(o.w, o.h) * 1.05
+            const cx = o.x + o.w/2 - sz/2
+            const cy = o.y + o.h/2 - sz/2
+            return (
+              <div key={o.id} style={{ position: 'absolute', left: cx, top: cy, width: sz, height: sz, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.6))' }}>
+                <Sprite src={OBSTACLE_IMG[o.type]} fallback={o.emoji} size={sz}/>
+              </div>
+            )
+          })}
 
           {/* Electrical hazard zones */}
+          {HAZARDS.map(h => (
+            <div key={`hzimg-${h.id}`} style={{ position:'absolute', left: h.x - 24, top: h.y - 24, width: 48, height: 48, zIndex: 6 }}>
+              <Sprite src={SCENE_IMG.hazardPole} fallback="⚡" size={48} animation="wire-glow 1.5s ease-in-out infinite"/>
+            </div>
+          ))}
           {HAZARDS.map(h => (
             <SparkParticles key={h.id} x={h.x} y={h.y} radius={h.radius} />
           ))}
@@ -795,17 +914,21 @@ export default function Module3_YardLockdown() {
 
           {/* Victim markers (bodies near buildings) */}
           {victims.filter(v => !v.rescued).map(v => (
-            <div key={`vm${v.id}`} style={{ position: 'absolute', left: v.x - 8, top: v.y - 8, width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14 }}>
-              👤
+            <div key={`vm${v.id}`} style={{ position: 'absolute', left: v.x - 18, top: v.y - 18, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 11 }}>
+              {/* Pulsing aura */}
+              <div style={{ position:'absolute', inset:-4, borderRadius:'50%', background:'radial-gradient(circle, rgba(239,68,68,0.35), transparent 70%)', animation:'sos-pulse 1.6s ease-in-out infinite', pointerEvents:'none' }}/>
+              <Sprite src={VICTIM_SPRITES[v.id]} fallback="👤" size={32}/>
             </div>
           ))}
 
           {/* Safety Shelter */}
           <div style={{ position: 'absolute', left: SHELTER.x, top: SHELTER.y, width: SHELTER.w, height: SHELTER.h, zIndex: 15 }}>
-            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#065f46,#047857)', border: `3px solid ${shelterFlash ? '#fff' : '#22c55e'}`, borderRadius: 8, boxShadow: `0 0 30px rgba(34,197,94,0.3), 0 0 60px rgba(34,197,94,0.1)${shelterFlash ? ', 0 0 80px rgba(255,255,255,0.5)' : ''}` }}>
+            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(135deg,#065f46,#047857)', border: `3px solid ${shelterFlash ? '#fff' : '#22c55e'}`, borderRadius: 8, boxShadow: `0 0 30px rgba(34,197,94,0.4), 0 0 60px rgba(34,197,94,0.15), 0 8px 20px rgba(0,0,0,0.6)${shelterFlash ? ', 0 0 80px rgba(255,255,255,0.5)' : ''}`, overflow:'hidden' }}>
+              {/* Camp photo overlay */}
+              <ImgBg src={SCENE_IMG.shelter} style={{ opacity: 0.85 }}/>
               <div style={{ position:'absolute', top:-22, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color:'#22c55e', fontSize:10, fontWeight:800, letterSpacing:1, textShadow:'0 0 8px rgba(34,197,94,0.5)', animation: onBoard.length > 0 ? 'sos-pulse 1.5s infinite' : 'none' }}>🏥 SAFETY SHELTER</div>
-              <div style={{ position:'absolute', top:8, left:'50%', transform:'translateX(-50%)', fontSize:28 }}>🏥</div>
-              <div style={{ position:'absolute', bottom:8, left:'50%', transform:'translateX(-50)', color:'#d1fae5', fontSize:10, fontWeight:700 }}>{delivered.length}/5</div>
+              <div style={{ position:'absolute', top:8, left:'50%', transform:'translateX(-50%)', fontSize:28, filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.6))' }}>🏥</div>
+              <div style={{ position:'absolute', bottom:8, left:'50%', transform:'translateX(-50%)', color:'#d1fae5', fontSize:11, fontWeight:800, background:'rgba(0,0,0,0.5)', padding:'2px 8px', borderRadius:6 }}>{delivered.length}/5</div>
               {/* Delivered victim icons */}
               <div style={{ position:'absolute', bottom:-18, left:0, display:'flex', gap:2 }}>
                 {delivered.map((vid,i) => <span key={i} style={{ fontSize:10 }}>✅</span>)}
@@ -818,27 +941,33 @@ export default function Module3_YardLockdown() {
           </div>
 
           {/* Raft */}
-          <div ref={raftElRef} style={{ position: 'absolute', width: RAFT_W, height: RAFT_H, zIndex: 20, left: 60, top: 320, transformOrigin: 'center center' }}>
-            {/* Wake trail */}
-            <div style={{ position: 'absolute', bottom: -6, left: '50%', transform: 'translateX(-50%)', width: 16, height: 8, borderRadius: '50%', background: 'rgba(147,197,253,0.15)', animation: 'wake 1s ease-out infinite' }} />
-            {/* Raft body */}
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {[0, 1, 2, 3, 4].map(i => (
-                <div key={i} style={{ flex: 1, background: `linear-gradient(90deg,#5c3d1e,#8B5A2B,#5c3d1e)`, borderRadius: 2, border: '1px solid #3a2010' }} />
-              ))}
-            </div>
-            {/* Paddle */}
-            <div style={{ position: 'absolute', left: -8, top: '35%', width: RAFT_W + 16, height: 3, background: '#78350f', borderRadius: 2, transform: 'rotate(0deg)' }} />
-            {/* Person */}
-            <div style={{ position: 'absolute', top: 6, left: '50%', transform: 'translateX(-50%)' }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fbbf24', border: '1px solid #78350f', margin: '0 auto' }} />
-              <div style={{ width: 10, height: 8, background: '#ea580c', borderRadius: '2px 2px 0 0', margin: '0 auto' }} />
-            </div>
-            {/* Passengers on raft */}
+          <div ref={raftElRef} style={{ position: 'absolute', width: RAFT_W, height: RAFT_H, zIndex: 20, left: 60, top: 320, transformOrigin: 'center center', filter: 'drop-shadow(0 6px 8px rgba(0,0,0,0.7))' }}>
+            {/* Wake trail (multi-ring) */}
+            <div style={{ position: 'absolute', bottom: -6, left: '50%', transform: 'translateX(-50%)', width: 16, height: 8, borderRadius: '50%', background: 'rgba(147,197,253,0.18)', animation: 'wake 1s ease-out infinite' }} />
+            <div style={{ position: 'absolute', bottom: -10, left: '50%', transform: 'translateX(-50%)', width: 24, height: 10, borderRadius: '50%', background: 'rgba(147,197,253,0.1)', animation: 'wake 1.4s ease-out 0.3s infinite' }} />
+            {/* Top-down raft photo overlay (when present, replaces planks) */}
+            {raftImgLoaded ? (
+              <img src={SCENE_IMG.raft} alt="" style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'contain', pointerEvents:'none' }}/>
+            ) : (<>
+              {/* Raft body */}
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {[0, 1, 2, 3, 4].map(i => (
+                  <div key={i} style={{ flex: 1, background: `linear-gradient(90deg,#5c3d1e,#8B5A2B,#5c3d1e)`, borderRadius: 2, border: '1px solid #3a2010' }} />
+                ))}
+              </div>
+              {/* Paddle */}
+              <div style={{ position: 'absolute', left: -8, top: '35%', width: RAFT_W + 16, height: 3, background: '#78350f', borderRadius: 2 }} />
+              {/* Person */}
+              <div style={{ position: 'absolute', top: 6, left: '50%', transform: 'translateX(-50%)' }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#fbbf24', border: '1px solid #78350f', margin: '0 auto' }} />
+                <div style={{ width: 10, height: 8, background: '#ea580c', borderRadius: '2px 2px 0 0', margin: '0 auto' }} />
+              </div>
+            </>)}
+            {/* Passengers on raft (always shown over the image too) */}
             {onBoard.length > 0 && (
               <div style={{ position:'absolute', bottom:2, left:'50%', transform:'translateX(-50%)', display:'flex', gap:1 }}>
                 {onBoard.map((_,i) => (
-                  <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'#86efac', border:'1px solid #166534' }}/>
+                  <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:'#86efac', border:'1px solid #166534', boxShadow:'0 0 6px rgba(134,239,172,0.6)' }}/>
                 ))}
               </div>
             )}
@@ -854,6 +983,15 @@ export default function Module3_YardLockdown() {
             background: `radial-gradient(circle ${TORCH_RADIUS}px at center, transparent 0%, rgba(0,0,0,0.15) 30%, rgba(0,0,0,0.7) 60%, rgba(2,4,10,0.92) 80%, rgba(2,4,10,0.97) 100%)`,
           }} />
         </div>
+
+        {/* Heavier rain overlay (above torch mask, fixed to viewport) */}
+        <div style={{ position:'fixed', inset:0, zIndex:31, pointerEvents:'none', background:'repeating-linear-gradient(8deg, transparent 0 18px, rgba(174,194,224,0.07) 18px 20px)', backgroundSize:'100% 130px', animation:'rainFall 0.3s linear infinite', mixBlendMode:'screen' }}/>
+
+        {/* Lightning flash */}
+        <div style={{ position:'fixed', inset:0, zIndex:32, pointerEvents:'none', background:'rgba(180,200,255,0.45)', animation:'lightningFlash 11s linear infinite' }}/>
+
+        {/* Edge vignette */}
+        <div style={{ position:'fixed', inset:0, zIndex:33, pointerEvents:'none', boxShadow:'inset 0 0 240px 50px rgba(0,0,0,0.65)' }}/>
 
         {/* Rescue flash */}
         {rescueFlash && <div style={{ position: 'fixed', inset: 0, zIndex: 35, animation: 'rescue-flash 0.6s ease-out forwards', pointerEvents: 'none' }} />}
@@ -971,13 +1109,15 @@ export default function Module3_YardLockdown() {
     return (
       <div style={{ position:'fixed', inset:0, zIndex:100, background: result.passed ? 'linear-gradient(135deg,#064e3b,#065f46,#047857)' : 'linear-gradient(135deg,#450a0a,#7f1d1d,#991b1b)', overflowY:'auto', width:'100%' }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ maxWidth: 680, width:'100%', margin: '0 auto', padding:'24px 16px 40px' }}>
+        {/* Atmospheric backdrop */}
+        <ImgBg src={SCENE_IMG.stormSky} style={{ opacity: result.passed ? 0.18 : 0.32, filter: result.passed ? 'brightness(1.1) hue-rotate(80deg)' : 'brightness(0.5)' }}/>
+        <div style={{ maxWidth: 680, width:'100%', margin: '0 auto', padding:'24px 16px 40px', position:'relative', zIndex:1 }}>
 
           {/* Score Card */}
-          <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'28px 24px', border: '3px solid #0f172a', boxShadow: '0 20px 50px rgba(0,0,0,0.4)', textAlign: 'center', marginBottom: 16 }}>
-            <div style={{ fontSize: 60, animation: 'bob 2s ease-in-out infinite' }}>{result.passed ? '🏆' : '💀'}</div>
+          <div style={{ background: 'rgba(255,255,255,0.96)', borderRadius: 24, padding:'28px 24px', border: '3px solid #0f172a', boxShadow: '0 20px 50px rgba(0,0,0,0.55)', textAlign: 'center', marginBottom: 16 }}>
+            <div style={{ fontSize: 60, animation: result.passed ? 'bob 2s ease-in-out infinite' : 'sos-pulse 1.2s ease-in-out infinite', filter:'drop-shadow(0 6px 10px rgba(0,0,0,0.4))' }}>{result.passed ? '🏆' : '💀'}</div>
             <div style={{ fontSize: 20, fontWeight: 900, color: sc, letterSpacing: 1, marginTop: 4 }}>{result.headline}</div>
-            <div style={{ marginTop: 10, fontSize: 56, fontWeight: 900, color: sc }}>{result.score}<span style={{ fontSize: 22, color: '#94a3b8' }}>/100</span></div>
+            <div style={{ marginTop: 10, fontSize: 64, fontWeight: 900, color: sc, animation:'scoreCount 0.8s cubic-bezier(.34,1.56,.64,1) 0.3s both', textShadow:`0 4px 12px ${sc}55` }}>{result.score}<span style={{ fontSize: 22, color: '#94a3b8' }}>/100</span></div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
               <span style={{ background: '#f0fdf4', color: '#166534', padding: '3px 12px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}>👥 {result.rescued}/5 rescued</span>
@@ -991,15 +1131,19 @@ export default function Module3_YardLockdown() {
           <div style={{ background: 'rgba(255,255,255,0.95)', borderRadius: 24, padding:'20px 20px', border: '3px solid #0f172a', marginBottom: 16 }}>
             <div style={{ fontWeight: 800, fontSize: 14, color: '#0f172a', marginBottom: 10, textAlign:'center' }}>📋 Rescue Report</div>
             <div style={{ display: 'flex', flexDirection:'column', gap: 8 }}>
-              {VICTIMS_INIT.map(v => {
+              {VICTIMS_INIT.map((v, idx) => {
                 const wasRescued = victims.find(vv => vv.id === v.id)?.rescued
                 return (
-                  <div key={v.id} style={{ padding: 12, borderRadius: 12, background: wasRescued ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border: `1.5px solid ${wasRescued ? '#22c55e' : '#ef4444'}`, display:'flex', gap:10, alignItems:'flex-start' }}>
-                    <div style={{ fontSize:20, flexShrink:0, marginTop:2 }}>{wasRescued ? '✅' : '❌'}</div>
+                  <div key={v.id} style={{ padding: 12, borderRadius: 12, background: wasRescued ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', border: `1.5px solid ${wasRescued ? '#22c55e' : '#ef4444'}`, display:'flex', gap:12, alignItems:'flex-start', animation:`cardEnter 0.5s ease-out ${idx*0.1}s both` }}>
+                    {/* Victim portrait thumbnail */}
+                    <div style={{ flexShrink: 0, width: 52, height: 52, borderRadius: 10, background: wasRescued ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.12)', border: `1.5px solid ${wasRescued ? '#22c55e' : '#ef4444'}`, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', position:'relative' }}>
+                      <Sprite src={VICTIM_SPRITES[v.id]} fallback="👤" size={44}/>
+                      <div style={{ position:'absolute', bottom:-2, right:-2, fontSize:14, background:'#fff', borderRadius:'50%', width:18, height:18, display:'flex', alignItems:'center', justifyContent:'center', border:`1.5px solid ${wasRescued ? '#22c55e' : '#ef4444'}` }}>{wasRescued ? '✅' : '❌'}</div>
+                    </div>
                     <div style={{ flex:1 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: wasRescued ? '#065f46' : '#991b1b' }}>{v.name}, {v.age}</div>
+                      <div style={{ fontWeight: 800, fontSize: 13, color: wasRescued ? '#065f46' : '#991b1b' }}>{v.name}, {v.age}</div>
                       <div style={{ fontSize: 11, color: '#6b7280', marginTop: 1 }}>{v.injury} · Signal: {v.signal.toUpperCase()}</div>
-                      <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, fontStyle: 'italic', lineHeight:1.5, background:'rgba(0,0,0,0.03)', padding:'4px 8px', borderRadius:6 }}>💡 {v.tip}</div>
+                      <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, fontStyle: 'italic', lineHeight:1.5, background:'rgba(0,0,0,0.04)', padding:'4px 8px', borderRadius:6 }}>💡 {v.tip}</div>
                     </div>
                   </div>
                 )

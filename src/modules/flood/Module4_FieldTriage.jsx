@@ -142,7 +142,109 @@ const KEYFRAMES = `
 @keyframes xraySweep{0%{opacity:0;transform:translateX(-100%)}50%{opacity:1}100%{opacity:0;transform:translateX(100%)}}
 @keyframes drip{0%{transform:translateY(0);opacity:1}100%{transform:translateY(20px);opacity:0}}
 @keyframes bpPump{0%,100%{transform:scaleY(1)}50%{transform:scaleY(1.15)}}
+@keyframes lightningFlash{0%,92%,100%{opacity:0}93%,95%{opacity:0.85}94%{opacity:0.3}}
+@keyframes rainFall{from{background-position:0 0}to{background-position:0 200px}}
+@keyframes cardEnter{from{opacity:0;transform:translateY(20px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes scoreCount{from{transform:scale(0.4) rotate(-10deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+@keyframes ripple{0%{transform:scale(0.8);opacity:0.6}100%{transform:scale(2.2);opacity:0}}
 `
+
+// ═══════════════════════════════════════════════════════════════
+// IMAGE ASSET LAYER — graceful fallback to emoji if PNG missing
+// Drop downloaded PNGs into /public/assets/triage/ + /assets/rescue/
+// ═══════════════════════════════════════════════════════════════
+const TIMG = '/assets/triage/'
+const RIMG = '/assets/rescue/'
+const SHARED_IMG = '/assets/shared/'
+
+const TRIAGE_IMG = {
+  tent: TIMG + 'triage_tent_bg.jpg',
+  ambulance: TIMG + 'ambulance_interior.jpg',
+  pharmacy: TIMG + 'pharmacy_top_down.png',
+  clinic: TIMG + 'clinic_top_down.png',
+  stormSky: SHARED_IMG + 'stormy_sky.jpg',
+  floodTile: SHARED_IMG + 'floodwater_tile.png',
+  raft: RIMG + 'raft_top_down.png',
+  shelterCamp: RIMG + 'shelter_camp.png',
+}
+
+const VICTIM_PORTRAITS = {
+  v1: TIMG + 'portrait_pregnant_woman.png',
+  v2: TIMG + 'portrait_elderly_woman.png',
+  v3: TIMG + 'portrait_pregnant_woman.png',
+  v4: TIMG + 'portrait_man_leg_injury.png',
+  v5: TIMG + 'portrait_unconscious_man.png',
+}
+
+const ITEM_IMG = {
+  ors: TIMG + 'med_ors.png',
+  clean_water: TIMG + 'med_water.png',
+  electrolyte: TIMG + 'med_electrolyte.png',
+  glucose: TIMG + 'med_glucose.png',
+  blanket: TIMG + 'med_blanket.png',
+  warm_drink: TIMG + 'med_warm_drink.png',
+  dry_clothes: TIMG + 'med_dry_clothes.png',
+  splint: TIMG + 'med_splint.png',
+  bandage: TIMG + 'med_bandage.png',
+  paracetamol: TIMG + 'med_paracetamol.png',
+  antiseptic: TIMG + 'med_antiseptic.png',
+  tweezers: TIMG + 'med_tweezers.png',
+}
+
+const SHOP_IMG = {
+  med1: TIMG + 'clinic_top_down.png',
+  med2: TIMG + 'clinic_top_down.png',
+  pharm1: TIMG + 'pharmacy_top_down.png',
+  pharm2: TIMG + 'pharmacy_top_down.png',
+  gen1: RIMG + 'shelter_camp.png',
+  gen2: RIMG + 'shelter_camp.png',
+}
+
+// Module-level cache for image-load status
+const _imgStatus = new Map()
+function useImageLoaded(src) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    if (!src || _imgStatus.has(src)) return
+    const im = new Image()
+    im.onload = () => { _imgStatus.set(src, 'loaded'); force(t => t+1) }
+    im.onerror = () => { _imgStatus.set(src, 'errored'); force(t => t+1) }
+    im.src = src
+  }, [src])
+  return _imgStatus.get(src) === 'loaded'
+}
+
+// Sprite — emoji while loading/errored, image when loaded.
+function Sprite({ src, fallback, size = 24, style = {}, animation, dropShadow = true }) {
+  const loaded = useImageLoaded(src)
+  return (
+    <div style={{
+      width: size, height: size, position: 'relative',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      lineHeight: 1, userSelect: 'none', ...style,
+    }}>
+      {!loaded && <span style={{ fontSize: size * 0.85, lineHeight: 1, animation, filter: dropShadow ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.4))' : 'none' }}>{fallback}</span>}
+      {loaded && (
+        <img src={src} alt="" style={{
+          width: '100%', height: '100%', objectFit: 'contain',
+          filter: dropShadow ? 'drop-shadow(0 3px 5px rgba(0,0,0,0.55))' : 'none',
+          animation, pointerEvents: 'none',
+        }}/>
+      )}
+    </div>
+  )
+}
+
+// Background image; only renders when loaded.
+function ImgBg({ src, style, size = 'cover', repeat = 'no-repeat' }) {
+  const loaded = useImageLoaded(src)
+  if (!loaded) return null
+  return <div style={{
+    position: 'absolute', inset: 0,
+    backgroundImage: `url(${src})`, backgroundSize: size, backgroundRepeat: repeat,
+    backgroundPosition: 'center', pointerEvents: 'none', ...style,
+  }}/>
+}
 
 function dist(x1, y1, x2, y2) { return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2) }
 function rectCollide(ax, ay, aw, ah, bx, by, bw, bh) { return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by }
@@ -198,6 +300,9 @@ export default function Module4_SinkingCar() {
       setTriageOrder(shuffled.map(v => v.id))
     }
   }, [phase])
+
+  // Hoisted image-load check (must be unconditional)
+  const raftImgLoaded = useImageLoaded(TRIAGE_IMG.raft)
 
   function handleDragStart(idx) { setDragIdx(idx) }
   function handleDragOver(e, idx) {
@@ -511,10 +616,15 @@ export default function Module4_SinkingCar() {
   if (phase === 'intro') return (
     <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#0a0a1a,#1a1a2e,#16213e)', display:'flex', alignItems:'center', justifyContent:'center', padding:24, position:'relative', overflow:'hidden', fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
       <style>{KEYFRAMES}</style>
+      {/* Triage tent backdrop */}
+      <ImgBg src={TRIAGE_IMG.tent} style={{ opacity: 0.4, filter: 'brightness(0.5) saturate(1.1) blur(2px)' }}/>
+      <ImgBg src={TRIAGE_IMG.stormSky} style={{ opacity: 0.25, filter: 'brightness(0.5)', mixBlendMode: 'multiply' }}/>
+      {/* Subtle rain */}
+      <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 22px, rgba(180,210,255,0.06) 22px 24px)', backgroundSize:'100% 140px', animation:'rainFall 0.5s linear infinite', pointerEvents:'none', mixBlendMode:'screen' }}/>
       {['🩹','💊','🏥','🩺','💉','🧴','🩼','🧣','💧','🪡'].map((e,i) => (
-        <div key={i} style={{ position:'absolute', left:`${(i*11+5)%95}%`, top:`${(i*17+8)%80}%`, fontSize:32+(i%3)*8, opacity:0.06, animation:`bob ${3+i*0.3}s ease-in-out infinite` }}>{e}</div>
+        <div key={i} style={{ position:'absolute', left:`${(i*11+5)%95}%`, top:`${(i*17+8)%80}%`, fontSize:32+(i%3)*8, opacity:0.08, animation:`bob ${3+i*0.3}s ease-in-out infinite`, filter:'drop-shadow(0 4px 8px rgba(0,0,0,0.5))' }}>{e}</div>
       ))}
-      <div style={{ position:'relative', zIndex:1, maxWidth:660, width:'100%', background:'rgba(255,255,255,0.95)', borderRadius:28, padding:36, border:'3px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.5)', textAlign:'center' }}>
+      <div style={{ position:'relative', zIndex:1, maxWidth:660, width:'100%', background:'rgba(255,255,255,0.96)', borderRadius:28, padding:36, border:'3px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.4) inset', textAlign:'center', backdropFilter:'blur(6px)' }}>
         <div style={{ fontSize:56, marginBottom:8, animation:'bob 2s ease-in-out infinite' }}>🩺</div>
         <div style={{ fontSize:24, fontWeight:900, color:'#0f172a' }}>Field Triage</div>
         <div style={{ fontSize:13, color:'#64748b', fontWeight:600, marginBottom:20 }}>Emergency Medical Response — NDMA Protocol</div>
@@ -552,9 +662,10 @@ export default function Module4_SinkingCar() {
   if (phase === 'triage') {
     const orderedVictims = triageOrder.map(id => VICTIMS.find(v => v.id === id)).filter(Boolean)
     return (
-      <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#0a0a1a,#1a1a2e)', padding:20, fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
+      <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#0a0a1a,#1a1a2e)', padding:20, fontFamily:"'Segoe UI',system-ui,sans-serif", position:'relative' }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ maxWidth:900, margin:'0 auto' }}>
+        <ImgBg src={TRIAGE_IMG.tent} style={{ opacity: 0.18, filter: 'brightness(0.6) blur(3px)' }}/>
+        <div style={{ maxWidth:900, margin:'0 auto', position:'relative', zIndex:1 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
             <div>
               <div style={{ color:'#ef4444', fontSize:11, fontWeight:800, letterSpacing:2 }}>PHASE 1</div>
@@ -567,10 +678,13 @@ export default function Module4_SinkingCar() {
             <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
               {orderedVictims.map((v, idx) => (
                 <div key={v.id} draggable onDragStart={() => handleDragStart(idx)} onDragOver={(e) => handleDragOver(e, idx)} onDragEnd={handleDragEnd}
-                  style={{ padding:14, borderRadius:14, cursor:'grab', background: dragIdx === idx ? 'rgba(37,99,235,0.15)' : 'rgba(255,255,255,0.05)', border:`2px solid ${dragIdx === idx ? '#3b82f6' : SEVERITY_COLORS[v.severity]+'40'}`, userSelect:'none', transition:'border-color 0.2s' }}>
+                  style={{ padding:14, borderRadius:14, cursor:'grab', background: dragIdx === idx ? 'rgba(37,99,235,0.18)' : 'linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02))', border:`2px solid ${dragIdx === idx ? '#3b82f6' : SEVERITY_COLORS[v.severity]+'55'}`, userSelect:'none', transition:'all 0.2s', boxShadow: dragIdx === idx ? `0 8px 24px ${SEVERITY_COLORS[v.severity]}55` : '0 4px 10px rgba(0,0,0,0.3)', animation:`cardEnter 0.4s ease-out ${idx*0.07}s both` }}>
                   <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
-                    <div style={{ fontSize:10, fontWeight:900, color:'#fff', background:SEVERITY_COLORS[v.severity], width:26, height:26, borderRadius:7, display:'flex', alignItems:'center', justifyContent:'center' }}>{idx+1}</div>
-                    <span style={{ fontSize:26 }}>{v.emoji}</span>
+                    <div style={{ fontSize:11, fontWeight:900, color:'#fff', background:SEVERITY_COLORS[v.severity], width:28, height:28, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`0 0 10px ${SEVERITY_COLORS[v.severity]}88` }}>{idx+1}</div>
+                    {/* Portrait thumbnail with severity ring */}
+                    <div style={{ width:48, height:48, borderRadius:12, background:`radial-gradient(circle at 30% 30%, ${SEVERITY_COLORS[v.severity]}33, ${SEVERITY_COLORS[v.severity]}08)`, border:`2px solid ${SEVERITY_COLORS[v.severity]}66`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`inset 0 2px 4px rgba(255,255,255,0.1), 0 4px 10px ${SEVERITY_COLORS[v.severity]}33`, overflow:'hidden' }}>
+                      <Sprite src={VICTIM_PORTRAITS[v.id]} fallback={v.emoji} size={42}/>
+                    </div>
                     <div><div style={{ color:'#f1f5f9', fontWeight:800, fontSize:13 }}>{v.name}, {v.age}</div>
                     <div style={{ color:SEVERITY_COLORS[v.severity], fontSize:10, fontWeight:700 }}>{v.severity} — {v.injury}</div></div>
                     <div style={{ marginLeft:'auto', color:'#475569', fontSize:16 }}>⠿</div>
@@ -711,25 +825,33 @@ export default function Module4_SinkingCar() {
         <div ref={worldRef} style={{ position:'absolute', width:SUPPLY_MAP_W, height:SUPPLY_MAP_H, willChange:'transform' }}>
           {/* Water */}
           <div style={{ position:'absolute', inset:0, background:'linear-gradient(180deg,#050b18,#081020,#0a1428)' }}>
+            {/* Tileable flood texture */}
+            <ImgBg src={TRIAGE_IMG.floodTile} size="512px" repeat="repeat" style={{ opacity: 0.4, mixBlendMode: 'overlay' }}/>
             {Array.from({ length: 40 }).map((_,i) => (
-              <div key={i} style={{ position:'absolute', left:(i*131)%SUPPLY_MAP_W, top:(i*97+50)%SUPPLY_MAP_H, width:30+(i%4)*10, height:3, borderRadius:2, background:'rgba(37,99,235,0.06)', transform:`rotate(${(i*17)%30-15}deg)` }}/>
+              <div key={i} style={{ position:'absolute', left:(i*131)%SUPPLY_MAP_W, top:(i*97+50)%SUPPLY_MAP_H, width:30+(i%4)*10, height:3, borderRadius:2, background:'rgba(37,99,235,0.08)', transform:`rotate(${(i*17)%30-15}deg)` }}/>
+            ))}
+            {/* Drifting ripples */}
+            {Array.from({ length: 22 }).map((_,i) => (
+              <div key={`r${i}`} style={{ position:'absolute', left:(i*191)%SUPPLY_MAP_W, top:(i*157+40)%SUPPLY_MAP_H, width:12, height:12, borderRadius:'50%', border:'1px solid rgba(147,197,253,0.18)', animation:`ripple ${2+(i%4)*0.5}s ease-out ${(i%5)*0.4}s infinite` }}/>
             ))}
           </div>
 
           {/* Obstacle buildings */}
           {SUPPLY_BUILDINGS.map((b,i) => (
             <div key={i} style={{ position:'absolute', left:b.x, top:b.y, width:b.w, height:b.h }}>
-              <div style={{ position:'absolute', inset:0, background:b.color, border:'2px solid #252540', borderRadius:3 }}>
-                <div style={{ position:'absolute', top:-6, left:-3, right:-3, height:10, background:b.roof, borderRadius:'3px 3px 0 0' }}/>
+              <div style={{ position:'absolute', inset:0, background:b.color, border:'2px solid #252540', borderRadius:3, overflow:'hidden', boxShadow:'inset 0 -10px 20px rgba(0,0,0,0.4), 0 6px 16px rgba(0,0,0,0.5)' }}>
+                <ImgBg src={`/assets/rescue/building_submerged_${(i%3)+1}.png`} style={{ opacity: 0.85 }}/>
+                <div style={{ position:'absolute', top:-6, left:-3, right:-3, height:10, background:b.roof, borderRadius:'3px 3px 0 0', zIndex:1 }}/>
               </div>
             </div>
           ))}
 
           {/* Shelter */}
           <div style={{ position:'absolute', left:SHELTER_POS.x, top:SHELTER_POS.y, width:SHELTER_POS.w, height:SHELTER_POS.h, zIndex:15 }}>
-            <div style={{ position:'absolute', inset:0, background:'linear-gradient(135deg,#065f46,#047857)', border:'3px solid #22c55e', borderRadius:8, boxShadow:'0 0 30px rgba(34,197,94,0.3)' }}>
-              <div style={{ position:'absolute', top:-20, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color:'#22c55e', fontSize:9, fontWeight:800, letterSpacing:1 }}>🏥 SAFETY SHELTER</div>
-              <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', fontSize:28 }}>🏥</div>
+            <div style={{ position:'absolute', inset:0, background:'linear-gradient(135deg,#065f46,#047857)', border:'3px solid #22c55e', borderRadius:8, boxShadow:'0 0 30px rgba(34,197,94,0.4), 0 8px 20px rgba(0,0,0,0.6)', overflow:'hidden' }}>
+              <ImgBg src={TRIAGE_IMG.shelterCamp} style={{ opacity: 0.85 }}/>
+              <div style={{ position:'absolute', top:-20, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color:'#22c55e', fontSize:9, fontWeight:800, letterSpacing:1, textShadow:'0 0 6px rgba(34,197,94,0.5)' }}>🏥 SAFETY SHELTER</div>
+              <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', fontSize:28, filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.6))' }}>🏥</div>
             </div>
             {allCollected && <div style={{ position:'absolute', inset:-8, borderRadius:12, border:'2px solid rgba(34,197,94,0.4)', animation:'shout-ring 2s ease-out infinite', pointerEvents:'none' }}/>}
           </div>
@@ -748,12 +870,13 @@ export default function Module4_SinkingCar() {
                     <div style={{ position:'absolute', top:-40, left:'50%', transform:'translateX(-50)', whiteSpace:'nowrap', background:'rgba(59,130,246,0.95)', color:'#fff', padding:'2px 8px', borderRadius:6, fontSize:8, fontWeight:800, zIndex:25, animation:'bob 1s ease-in-out infinite' }}>📍 SELECTED</div>
                   </>
                 )}
-                <div style={{ position:'absolute', inset:0, background: visited ? '#1a2e1a' : shop.color, border:`3px solid ${visited ? '#22c55e' : hasNeeded ? '#fbbf24' : '#475569'}`, borderRadius:6, boxShadow: hasNeeded ? '0 0 20px rgba(251,191,36,0.3)' : 'none', transition:'all 0.3s' }}>
-                  <div style={{ position:'absolute', top:-6, left:-3, right:-3, height:10, background:shop.roof, borderRadius:'3px 3px 0 0' }}/>
-                  <div style={{ position:'absolute', top:-22, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color: visited ? '#22c55e' : '#fbbf24', fontSize:9, fontWeight:800, letterSpacing:1, animation: hasNeeded ? 'pulse 1.5s infinite' : 'none' }}>
+                <div style={{ position:'absolute', inset:0, background: visited ? '#1a2e1a' : shop.color, border:`3px solid ${visited ? '#22c55e' : hasNeeded ? '#fbbf24' : '#475569'}`, borderRadius:6, boxShadow: hasNeeded ? '0 0 24px rgba(251,191,36,0.45), 0 6px 14px rgba(0,0,0,0.55)' : '0 4px 12px rgba(0,0,0,0.5)', transition:'all 0.3s', overflow:'hidden' }}>
+                  <ImgBg src={SHOP_IMG[shop.id]} style={{ opacity: visited ? 0.45 : 0.8, filter: visited ? 'grayscale(0.5)' : 'none' }}/>
+                  <div style={{ position:'absolute', top:-6, left:-3, right:-3, height:10, background:shop.roof, borderRadius:'3px 3px 0 0', zIndex:1 }}/>
+                  <div style={{ position:'absolute', top:-22, left:'50%', transform:'translateX(-50%)', whiteSpace:'nowrap', color: visited ? '#22c55e' : '#fbbf24', fontSize:9, fontWeight:800, letterSpacing:1, animation: hasNeeded ? 'pulse 1.5s infinite' : 'none', textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
                     {shop.emoji} {shop.name} {visited ? '✓' : ''}
                   </div>
-                  <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', fontSize:24 }}>{shop.emoji}</div>
+                  <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', fontSize:24, filter:'drop-shadow(0 2px 4px rgba(0,0,0,0.7))' }}>{shop.emoji}</div>
                   {/* Item icons */}
                   <div style={{ position:'absolute', bottom:-18, left:0, right:0, display:'flex', justifyContent:'center', gap:2 }}>
                     {shop.items.filter(i => neededItems.includes(i)).map(itemId => {
@@ -782,16 +905,21 @@ export default function Module4_SinkingCar() {
           ))}
 
           {/* Raft */}
-          <div ref={raftElRef} style={{ position:'absolute', width:RAFT_W, height:RAFT_H, zIndex:20, left:300, top:250, transformOrigin:'center center' }}>
-            <div style={{ position:'absolute', bottom:-6, left:'50%', transform:'translateX(-50%)', width:16, height:8, borderRadius:'50%', background:'rgba(147,197,253,0.15)', animation:'wake 1s ease-out infinite' }}/>
-            <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1 }}>
-              {[0,1,2,3,4].map(i => (<div key={i} style={{ flex:1, background:'linear-gradient(90deg,#5c3d1e,#8B5A2B,#5c3d1e)', borderRadius:2, border:'1px solid #3a2010' }}/>))}
-            </div>
-            <div style={{ position:'absolute', left:-8, top:'35%', width:RAFT_W+16, height:3, background:'#78350f', borderRadius:2 }}/>
-            <div style={{ position:'absolute', top:6, left:'50%', transform:'translateX(-50%)' }}>
-              <div style={{ width:8, height:8, borderRadius:'50%', background:'#fbbf24', border:'1px solid #78350f', margin:'0 auto' }}/>
-              <div style={{ width:10, height:8, background:'#ea580c', borderRadius:'2px 2px 0 0', margin:'0 auto' }}/>
-            </div>
+          <div ref={raftElRef} style={{ position:'absolute', width:RAFT_W, height:RAFT_H, zIndex:20, left:300, top:250, transformOrigin:'center center', filter:'drop-shadow(0 6px 8px rgba(0,0,0,0.7))' }}>
+            <div style={{ position:'absolute', bottom:-6, left:'50%', transform:'translateX(-50%)', width:16, height:8, borderRadius:'50%', background:'rgba(147,197,253,0.18)', animation:'wake 1s ease-out infinite' }}/>
+            <div style={{ position:'absolute', bottom:-10, left:'50%', transform:'translateX(-50%)', width:24, height:10, borderRadius:'50%', background:'rgba(147,197,253,0.1)', animation:'wake 1.4s ease-out 0.3s infinite' }}/>
+            {raftImgLoaded ? (
+              <img src={TRIAGE_IMG.raft} alt="" style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'contain', pointerEvents:'none' }}/>
+            ) : (<>
+              <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:1 }}>
+                {[0,1,2,3,4].map(i => (<div key={i} style={{ flex:1, background:'linear-gradient(90deg,#5c3d1e,#8B5A2B,#5c3d1e)', borderRadius:2, border:'1px solid #3a2010' }}/>))}
+              </div>
+              <div style={{ position:'absolute', left:-8, top:'35%', width:RAFT_W+16, height:3, background:'#78350f', borderRadius:2 }}/>
+              <div style={{ position:'absolute', top:6, left:'50%', transform:'translateX(-50%)' }}>
+                <div style={{ width:8, height:8, borderRadius:'50%', background:'#fbbf24', border:'1px solid #78350f', margin:'0 auto' }}/>
+                <div style={{ width:10, height:8, background:'#ea580c', borderRadius:'2px 2px 0 0', margin:'0 auto' }}/>
+              </div>
+            </>)}
           </div>
         </div>
 
@@ -800,6 +928,13 @@ export default function Module4_SinkingCar() {
           <div style={{ position:'absolute', left:-SUPPLY_MAP_W, top:-SUPPLY_MAP_H, width:SUPPLY_MAP_W*2, height:SUPPLY_MAP_H*2,
             background:`radial-gradient(circle ${TORCH_RADIUS}px at center, transparent 0%, rgba(0,0,0,0.12) 30%, rgba(0,0,0,0.6) 60%, rgba(2,4,10,0.88) 80%, rgba(2,4,10,0.95) 100%)` }}/>
         </div>
+
+        {/* Heavier rain overlay */}
+        <div style={{ position:'fixed', inset:0, zIndex:31, pointerEvents:'none', background:'repeating-linear-gradient(8deg, transparent 0 18px, rgba(174,194,224,0.06) 18px 20px)', backgroundSize:'100% 130px', animation:'rainFall 0.35s linear infinite', mixBlendMode:'screen' }}/>
+        {/* Lightning flash */}
+        <div style={{ position:'fixed', inset:0, zIndex:32, pointerEvents:'none', background:'rgba(180,200,255,0.4)', animation:'lightningFlash 12s linear infinite' }}/>
+        {/* Edge vignette */}
+        <div style={{ position:'fixed', inset:0, zIndex:33, pointerEvents:'none', boxShadow:'inset 0 0 220px 50px rgba(0,0,0,0.6)' }}/>
 
         {/* Collect flash */}
         {collectFlash && <div style={{ position:'fixed', inset:0, zIndex:35, background:'rgba(34,197,94,0.15)', pointerEvents:'none', animation:'fadeIn 0.2s' }}/>}
@@ -1058,9 +1193,12 @@ export default function Module4_SinkingCar() {
             {/* LEFT COLUMN — Patient + Vitals + NDMA */}
             <div style={{ display:'flex', flexDirection:'column', gap:8, overflowY:'auto' }}>
               {/* Patient card */}
-              <div style={{ background:'rgba(5,15,30,0.95)', borderRadius:12, padding:12, border:`2px solid ${SEVERITY_COLORS[victim.severity]}25` }}>
-                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-                  <span style={{ fontSize:32 }}>{victim.emoji}</span>
+              <div style={{ background:'rgba(5,15,30,0.95)', borderRadius:12, padding:12, border:`2px solid ${SEVERITY_COLORS[victim.severity]}55`, boxShadow:`0 0 24px ${SEVERITY_COLORS[victim.severity]}22` }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:8 }}>
+                  {/* Portrait */}
+                  <div style={{ width:54, height:54, borderRadius:12, background:`radial-gradient(circle at 30% 30%, ${SEVERITY_COLORS[victim.severity]}33, ${SEVERITY_COLORS[victim.severity]}10)`, border:`2px solid ${SEVERITY_COLORS[victim.severity]}77`, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', flexShrink:0, boxShadow:`inset 0 2px 4px rgba(255,255,255,0.1), 0 4px 10px ${SEVERITY_COLORS[victim.severity]}33` }}>
+                    <Sprite src={VICTIM_PORTRAITS[victim.id]} fallback={victim.emoji} size={48}/>
+                  </div>
                   <div>
                     <div style={{ color:'#f1f5f9', fontWeight:800, fontSize:14 }}>{victim.name}, {victim.age}</div>
                     <div style={{ color:SEVERITY_COLORS[victim.severity], fontWeight:700, fontSize:10 }}>{victim.severity} — {victim.injury}</div>
@@ -1227,13 +1365,15 @@ export default function Module4_SinkingCar() {
                       const sel = selectedItems.includes(item.id)
                       return (
                         <div key={item.id} onClick={() => setSelectedItems(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : prev.length < 4 ? [...prev, item.id] : prev)}
-                          style={{ padding:'5px 8px', borderRadius:6, cursor:'pointer', background: sel ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.02)', border:`2px solid ${sel ? '#22c55e' : 'rgba(255,255,255,0.04)'}`, transition:'all 0.2s', display:'flex', alignItems:'center', gap:6 }}>
-                          <span style={{ fontSize:16 }}>{item.emoji}</span>
+                          style={{ padding:'6px 8px', borderRadius:8, cursor:'pointer', background: sel ? 'linear-gradient(180deg, rgba(34,197,94,0.18), rgba(34,197,94,0.05))' : 'rgba(255,255,255,0.03)', border:`2px solid ${sel ? '#22c55e' : 'rgba(255,255,255,0.06)'}`, transition:'all 0.2s', display:'flex', alignItems:'center', gap:8, boxShadow: sel ? '0 4px 12px rgba(34,197,94,0.25)' : 'none' }}>
+                          <div style={{ width:30, height:30, borderRadius:8, background: sel ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.06)', border:`1px solid ${sel ? '#22c55e55' : 'rgba(255,255,255,0.08)'}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                            <Sprite src={ITEM_IMG[item.id]} fallback={item.emoji} size={24}/>
+                          </div>
                           <div style={{ flex:1 }}>
-                            <div style={{ fontSize:10, color: sel ? '#22c55e' : '#e2e8f0', fontWeight:600 }}>{item.name}</div>
+                            <div style={{ fontSize:10, color: sel ? '#22c55e' : '#e2e8f0', fontWeight:700 }}>{item.name}</div>
                             <div style={{ fontSize:7, color:'#64748b' }}>{item.desc}</div>
                           </div>
-                          {sel && <div style={{ width:14, height:14, borderRadius:3, background:'#22c55e', display:'flex', alignItems:'center', justifyContent:'center', fontSize:8, color:'#fff' }}>✓</div>}
+                          {sel && <div style={{ width:16, height:16, borderRadius:4, background:'#22c55e', display:'flex', alignItems:'center', justifyContent:'center', fontSize:9, color:'#fff', boxShadow:'0 2px 6px rgba(34,197,94,0.5)' }}>✓</div>}
                         </div>
                       )
                     })}
@@ -1273,11 +1413,12 @@ export default function Module4_SinkingCar() {
     return (
       <div style={{ position:'fixed', inset:0, zIndex:100, background: result.passed ? 'linear-gradient(135deg,#064e3b,#065f46)' : 'linear-gradient(135deg,#450a0a,#7f1d1d)', overflowY:'auto', fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ maxWidth:680, width:'100%', margin:'0 auto', padding:'24px 16px 40px' }}>
-          <div style={{ background:'rgba(255,255,255,0.95)', borderRadius:24, padding:'28px 24px', border:'3px solid #0f172a', textAlign:'center', marginBottom:16, boxShadow:'0 20px 50px rgba(0,0,0,0.4)' }}>
-            <div style={{ fontSize:56, animation:'bob 2s infinite' }}>{result.passed ? '🏆' : '💀'}</div>
+        <ImgBg src={TRIAGE_IMG.stormSky} style={{ opacity: result.passed ? 0.18 : 0.32, filter: result.passed ? 'brightness(1.1) hue-rotate(80deg)' : 'brightness(0.5)' }}/>
+        <div style={{ maxWidth:680, width:'100%', margin:'0 auto', padding:'24px 16px 40px', position:'relative', zIndex:1 }}>
+          <div style={{ background:'rgba(255,255,255,0.96)', borderRadius:24, padding:'28px 24px', border:'3px solid #0f172a', textAlign:'center', marginBottom:16, boxShadow:'0 20px 50px rgba(0,0,0,0.55)' }}>
+            <div style={{ fontSize:60, animation: result.passed ? 'bob 2s infinite' : 'pulse 1.4s infinite', filter:'drop-shadow(0 6px 10px rgba(0,0,0,0.4))' }}>{result.passed ? '🏆' : '💀'}</div>
             <div style={{ fontSize:20, fontWeight:900, color:sc, marginTop:4 }}>{result.passed ? 'FIELD TRIAGE COMPLETE!' : 'TREATMENT INCOMPLETE'}</div>
-            <div style={{ fontSize:52, fontWeight:900, color:sc, marginTop:8 }}>{result.score}<span style={{ fontSize:20, color:'#94a3b8' }}>/100</span></div>
+            <div style={{ fontSize:60, fontWeight:900, color:sc, marginTop:8, animation:'scoreCount 0.8s cubic-bezier(.34,1.56,.64,1) 0.3s both', textShadow:`0 4px 12px ${sc}55` }}>{result.score}<span style={{ fontSize:22, color:'#94a3b8' }}>/100</span></div>
             <div style={{ display:'flex', gap:6, justifyContent:'center', marginTop:10, flexWrap:'wrap' }}>
               <span style={{ background:'#eff6ff', color:'#1e40af', padding:'3px 10px', borderRadius:999, fontSize:10, fontWeight:700 }}>🔍 Triage: {result.triageScore}/20</span>
               <span style={{ background:'#f0fdf4', color:'#166534', padding:'3px 10px', borderRadius:999, fontSize:10, fontWeight:700 }}>🏪 Supplies: {result.itemScore}/30</span>
@@ -1289,14 +1430,20 @@ export default function Module4_SinkingCar() {
             {sortedVictims.map((v,i) => {
               const t = result.treatedVictims[v.id]
               return (
-                <div key={v.id} style={{ padding:10, borderRadius:10, marginBottom:6, background: t?.correct ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)', border:`1.5px solid ${t?.correct ? '#22c55e' : '#ef4444'}` }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:6 }}>
-                    <span style={{ fontSize:10, fontWeight:900, background:SEVERITY_COLORS[v.severity], color:'#fff', width:18, height:18, borderRadius:5, display:'flex', alignItems:'center', justifyContent:'center' }}>{i+1}</span>
-                    <span style={{ fontSize:16 }}>{v.emoji}</span>
-                    <div><div style={{ fontWeight:700, fontSize:12, color: t?.correct ? '#065f46' : '#991b1b' }}>{t?.correct ? '✅' : '⚠️'} {v.name}</div>
-                    <div style={{ fontSize:9, color:'#6b7280' }}>{v.injury}</div></div>
+                <div key={v.id} style={{ padding:10, borderRadius:12, marginBottom:8, background: t?.correct ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', border:`1.5px solid ${t?.correct ? '#22c55e' : '#ef4444'}`, animation:`cardEnter 0.5s ease-out ${i*0.1}s both`, display:'flex', gap:10, alignItems:'flex-start' }}>
+                  {/* Portrait thumbnail */}
+                  <div style={{ flexShrink:0, width:44, height:44, borderRadius:10, background:`radial-gradient(circle at 30% 30%, ${SEVERITY_COLORS[v.severity]}33, ${SEVERITY_COLORS[v.severity]}10)`, border:`1.5px solid ${SEVERITY_COLORS[v.severity]}`, display:'flex', alignItems:'center', justifyContent:'center', overflow:'hidden', position:'relative' }}>
+                    <Sprite src={VICTIM_PORTRAITS[v.id]} fallback={v.emoji} size={38}/>
+                    <div style={{ position:'absolute', bottom:-2, right:-2, fontSize:11, background:'#fff', borderRadius:'50%', width:16, height:16, display:'flex', alignItems:'center', justifyContent:'center', border:`1.5px solid ${t?.correct ? '#22c55e' : '#ef4444'}` }}>{t?.correct ? '✓' : '!'}</div>
                   </div>
-                  <div style={{ fontSize:9, color:'#64748b', padding:'3px 6px', background:'rgba(0,0,0,0.03)', borderRadius:5, marginTop:4, lineHeight:1.5 }}>💡 {v.ndmaTip}</div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:2 }}>
+                      <span style={{ fontSize:10, fontWeight:900, background:SEVERITY_COLORS[v.severity], color:'#fff', padding:'1px 6px', borderRadius:4 }}>#{i+1} {v.severity}</span>
+                    </div>
+                    <div style={{ fontWeight:800, fontSize:12, color: t?.correct ? '#065f46' : '#991b1b' }}>{t?.correct ? '✅' : '⚠️'} {v.name}</div>
+                    <div style={{ fontSize:9, color:'#6b7280' }}>{v.injury}</div>
+                    <div style={{ fontSize:9, color:'#64748b', padding:'3px 6px', background:'rgba(0,0,0,0.04)', borderRadius:5, marginTop:4, lineHeight:1.5 }}>💡 {v.ndmaTip}</div>
+                  </div>
                 </div>
               )
             })}

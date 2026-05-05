@@ -1,24 +1,64 @@
 import { useState, useMemo } from 'react'
 import { useGame } from '../context/GameContext'
 
-// ─── Static data ────────────────────────────────────────────────────────────
+// ─── Static data — only the 6 active games ─────────────────────────────────
 
 const ALL_MODULES = {
   flood: [
-    { id: 1,  title: 'The 60-Second Go-Bag', phase: 'Preparedness', icon: '🎒', topic: 'Emergency packing & item prioritization' },
-    { id: 2,  title: 'Home Defense',          phase: 'Preparedness', icon: '🏠', topic: 'Utility shut-off & sandbag placement' },
-    { id: 3,  title: 'Yard Lockdown',         phase: 'Preparedness', icon: '⛓️', topic: 'Securing outdoor hazards' },
-    { id: 4,  title: 'The Sinking Car',       phase: 'Response',     icon: '🚗', topic: 'Vehicle escape protocol (SWOC method)' },
-    { id: 5,  title: 'Treacherous Trek',      phase: 'Response',     icon: '🚶', topic: 'Safe navigation in floodwater' },
-    { id: 6,  title: 'First Responder',       phase: 'Survival',     icon: '🩹', topic: 'Triage & wound care in flood conditions' },
-    { id: 7,  title: 'Camp Safe Haven',       phase: 'Survival',     icon: '⛺', topic: 'Temporary shelter construction order' },
-    { id: 8,  title: 'SOS Signaling',         phase: 'Survival',     icon: '🪞', topic: 'Condition-based rescue signaling' },
-    { id: 9,  title: 'Toxic Cleanup',         phase: 'Recovery',     icon: '☣️', topic: 'Post-flood CO, water & mold hazards' },
-    { id: 10, title: 'Invisible Trap',        phase: 'Recovery',     icon: '⚡', topic: 'Submerged power line detection' },
-    { id: 11, title: 'Toxic Soup',            phase: 'Recovery',     icon: '🧪', topic: 'Chemical contamination identification' },
-    { id: 12, title: 'Wall of Water',         phase: 'Recovery',     icon: '🌊', topic: 'Flash flood rapid escape decisions' },
-    { id: 13, title: 'Calm Mind',             phase: 'Recovery',     icon: '🧠', topic: 'Psychological first aid & de-escalation' },
-    { id: 14, title: 'The Swarm',             phase: 'Recovery',     icon: '🦟', topic: 'Vector-borne disease prevention' },
+    {
+      id: 1, title: 'The 60-Second Go-Bag', phase: 'Preparedness', icon: '🎒', color: '#3b82f6',
+      topic: 'Emergency packing & item prioritization',
+      skills: ['priority', 'resource', 'speed', 'protocol'],
+      whatYouLearn: ['Pick critical items in 60s', 'Manage backpack weight', 'Recognize NDMA-recommended go-bag list'],
+      tipsLow:  ['Re-read the blueprint before exploring', 'Never skip water, ID, medicine, light', 'Watch the weight gauge — heavy ≠ safer'],
+      tipsMid:  ['Aim to fill the bag in under 90s', 'Drop sentimental items before food/medicine', 'Try the speed-run with shorter timer next'],
+      tipsHigh: ['Try other bag-loadout scenarios for new disasters', 'Help peers — explain why each item matters'],
+    },
+    {
+      id: 2, title: 'Build the Raft', phase: 'Response', icon: '🛶', color: '#f59e0b',
+      topic: 'Improvised flotation engineering (NDRF method)',
+      skills: ['priority', 'protocol', 'resource', 'engineering'],
+      whatYouLearn: ['4-component raft anatomy', 'Why sealed drums + bamboo + nylon + paddle works', 'Spotting bad materials (cardboard, jute, electrical wire)'],
+      tipsLow:  ['Always read the blueprint first (+5 bonus)', 'Sealed drums for hull — never wood/metal', 'Nylon rope > jute. Synthetic stays strong wet'],
+      tipsMid:  ['Use a bamboo deck — light & water-resistant', 'Pick a flat-blade paddle, not a steel rod', 'Watch the stress test to learn why a part failed'],
+      tipsHigh: ['Try with no blueprint and beat 30s', 'Memorize the 4-component checklist for real life'],
+    },
+    {
+      id: 3, title: 'Flood Rescue', phase: 'Response', icon: '🔦', color: '#ef4444',
+      topic: 'Night raft rescue & hazard navigation',
+      skills: ['hazard', 'navigation', 'pressure', 'protocol'],
+      whatYouLearn: ['Identify distress signals (fire/flag/torch/SOS/shout)', 'Avoid live-wire shock zones', 'Boat capacity & multi-trip planning'],
+      tipsLow:  ['Listen for victim audio cues — closer = faster beep', 'Stay 20m+ away from sparking poles', 'Drop off at shelter before picking up more'],
+      tipsMid:  ['Plan a route through fewer hazard zones', 'Clear debris before retrying same lane', 'Shouting victims need to be reached quickly'],
+      tipsHigh: ['No-shock perfect run? Try going faster next time', 'Mentor: explain why fire signals beat shouting'],
+    },
+    {
+      id: 4, title: 'Field Triage', phase: 'Survival', icon: '🩺', color: '#22c55e',
+      topic: 'START triage, supply run & treatment (ABCs)',
+      skills: ['priority', 'protocol', 'resource', 'pressure'],
+      whatYouLearn: ['START method: CRITICAL → HIGH → MEDIUM → LOW', 'Treat dehydration, hypothermia, fractures, cuts', 'Choose right govt resource location'],
+      tipsLow:  ['Pregnant/child = always CRITICAL first', 'Use the body diagram + X-ray during examine', 'Match treatment items to injury (ORS for dehydration)'],
+      tipsMid:  ['Compare shop safety + stock before route choice', 'Avoid pharm2 — it has a live-wire zone nearby', 'Read NDMA tip on each card before treating'],
+      tipsHigh: ['Run a perfect triage with no wrong items', 'Practice ABCs (Airway, Breathing, Circulation)'],
+    },
+    {
+      id: 5, title: 'The Sinking Car', phase: 'Survival', icon: '🚗', color: '#a855f7',
+      topic: 'Vehicle escape — Calm, Unbuckle, Window, Break, Swim',
+      skills: ['pressure', 'speed', 'protocol', 'navigation'],
+      whatYouLearn: ['"Turn Around, Don\'t Drown" route choice', 'Why doors won\'t open underwater (~600 lbs/sqft)', 'Strike CORNERS of side windows, not windshield'],
+      tipsLow:  ['Choose elevated routes (State Road over highway)', 'Calm breathing FIRST — panic burns oxygen', 'Use headrest spike on side window corner'],
+      tipsMid:  ['Keep cabin water under 70% to avoid failure', 'Window before break — try the switch first', 'Escape upward — never re-enter floodwater'],
+      tipsHigh: ['Beat the run with cabin water under 30%', 'Memorize the 5-step CUWBS sequence cold'],
+    },
+    {
+      id: 6, title: 'SOS Signaling', phase: 'Survival', icon: '🪞', color: '#06b6d4',
+      topic: 'Condition-based rescue signaling',
+      skills: ['hazard', 'protocol', 'priority', 'pressure'],
+      whatYouLearn: ['Match signal to weather (mirror/fire/flag/whistle/SOS)', 'Day vs night signal effectiveness', 'Persist with the right pattern (3-3-3 SOS)'],
+      tipsLow:  ['Read conditions before grabbing a signal', 'Mirror only works in sunlight — not at night', 'Whistle carries 3x farther than shouting'],
+      tipsMid:  ['Fire is the king of night signals — visible 5+ km', 'Bright flag for day — orange/red on highest point', 'Use SOS rhythm (3 short, 3 long, 3 short)'],
+      tipsHigh: ['Practice signaling at maximum range / lowest visibility', 'Teach others the day vs night decision tree'],
+    },
   ],
 }
 
@@ -26,7 +66,20 @@ const PHASES = [
   { key: 'Preparedness', emoji: '🛡️', color: '#3b82f6', grad: 'linear-gradient(135deg,#1d4ed8,#3b82f6)', bg: 'rgba(59,130,246,0.08)',  border: 'rgba(59,130,246,0.22)'  },
   { key: 'Response',     emoji: '🚨', color: '#f59e0b', grad: 'linear-gradient(135deg,#b45309,#f59e0b)', bg: 'rgba(245,158,11,0.08)',  border: 'rgba(245,158,11,0.22)'  },
   { key: 'Survival',     emoji: '⛺', color: '#22c55e', grad: 'linear-gradient(135deg,#15803d,#22c55e)', bg: 'rgba(34,197,94,0.08)',   border: 'rgba(34,197,94,0.22)'   },
-  { key: 'Recovery',     emoji: '🔧', color: '#a855f7', grad: 'linear-gradient(135deg,#7e22ce,#a855f7)', bg: 'rgba(168,85,247,0.08)',  border: 'rgba(168,85,247,0.22)'  },
+]
+
+// ─── Skill dimensions — cross-cut every module ─────────────────────────────
+// Each module is tagged with which skills it tests. Skill score = avg of
+// scores from modules tagged with that skill (only counting attempted ones).
+const SKILL_DIMENSIONS = [
+  { key: 'priority',    label: 'Priority Decisions',  icon: '🧠', desc: 'Choosing what matters first when seconds count.' },
+  { key: 'protocol',    label: 'NDMA Knowledge',      icon: '📋', desc: 'Following established disaster-response protocols.' },
+  { key: 'hazard',      label: 'Hazard Awareness',    icon: '⚠️', desc: 'Spotting and avoiding dangers (live wires, deep water, debris).' },
+  { key: 'resource',    label: 'Resource Management', icon: '📦', desc: 'Using limited supplies and capacity wisely.' },
+  { key: 'speed',       label: 'Time Management',     icon: '⏱️', desc: 'Acting fast under shrinking time windows.' },
+  { key: 'pressure',    label: 'Calm Under Pressure', icon: '😤', desc: 'Steady decision-making when panic would lose lives.' },
+  { key: 'navigation',  label: 'Navigation',          icon: '🧭', desc: 'Routing safely through flooded, hazardous terrain.' },
+  { key: 'engineering', label: 'Improvised Engineering', icon: '🔧', desc: 'Building a working solution from what\'s on hand.' },
 ]
 
 const DISASTERS = [
@@ -91,6 +144,61 @@ function CircleGauge({ score = 0, color = '#3b82f6', size = 130 }) {
         <span style={{ fontSize: Math.round(size * 0.09), color: '#64748b', lineHeight: 1.4 }}>score</span>
       </div>
     </div>
+  )
+}
+
+function SkillRadar({ skills, size = 280 }) {
+  const center = size / 2
+  const radius = size * 0.38
+  const n = skills.length
+  // Polygon points for given value-fraction (0..1) per skill
+  const polyPoints = (frac) => skills.map((_, i) => {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n
+    const r = radius * (typeof frac === 'function' ? frac(i) : frac)
+    return [center + r * Math.cos(angle), center + r * Math.sin(angle)]
+  })
+  // Background gridlines (4 levels)
+  const grid = [0.25, 0.5, 0.75, 1].map(f => polyPoints(f).map(([x,y]) => `${x},${y}`).join(' '))
+  // Score polygon — clamp very low values to a small visible minimum so untested isn't invisible
+  const scoreFracs = skills.map(s => s.attempted > 0 ? Math.max(0.04, s.avg / 100) : 0.04)
+  const scorePoly = polyPoints((i) => scoreFracs[i]).map(([x,y]) => `${x},${y}`).join(' ')
+  // Spokes
+  const spokes = skills.map((_, i) => {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n
+    return { x1: center, y1: center, x2: center + radius * Math.cos(angle), y2: center + radius * Math.sin(angle) }
+  })
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: 'block' }}>
+      {/* Grid polygons */}
+      {grid.map((pts, i) => (
+        <polygon key={i} points={pts} fill="none" stroke="rgba(148,163,184,0.15)" strokeWidth={1} />
+      ))}
+      {/* Spokes */}
+      {spokes.map((s, i) => (
+        <line key={i} {...s} stroke="rgba(148,163,184,0.18)" strokeWidth={1} />
+      ))}
+      {/* Score polygon */}
+      <polygon points={scorePoly} fill="rgba(96,165,250,0.25)" stroke="#60a5fa" strokeWidth={2} />
+      {/* Score dots */}
+      {polyPoints((i) => scoreFracs[i]).map(([x,y], i) => (
+        <circle key={i} cx={x} cy={y} r={4} fill={skills[i].attempted ? skills[i].levelColor : '#334155'} stroke="#0b1120" strokeWidth={1.5} />
+      ))}
+      {/* Labels */}
+      {skills.map((s, i) => {
+        const angle = -Math.PI / 2 + (i * 2 * Math.PI) / n
+        const lx = center + (radius + 28) * Math.cos(angle)
+        const ly = center + (radius + 28) * Math.sin(angle)
+        return (
+          <g key={i}>
+            <text x={lx} y={ly - 4} textAnchor="middle" fill="#cbd5e1" fontSize={11} fontWeight={700}>{s.icon}</text>
+            <text x={lx} y={ly + 8} textAnchor="middle" fill="#94a3b8" fontSize={9} fontWeight={600}>{s.label.split(' ')[0]}</text>
+            <text x={lx} y={ly + 20} textAnchor="middle" fill={s.attempted ? s.levelColor : '#475569'} fontSize={10} fontWeight={800}>
+              {s.attempted ? `${s.avg}%` : '—'}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
@@ -178,11 +286,126 @@ export default function MetricsDashboard() {
     // Total attempts across all modules
     const totalAttempts = mods.reduce((sum, m) => sum + (state.scores[`${dis}-${m.id}`]?.attempts || 0), 0)
 
+    // ─── Skill dimensions: compute avg score per skill across tagged modules ───
+    const skillStats = SKILL_DIMENSIONS.map(skill => {
+      const tagged = mods.filter(m => m.skills?.includes(skill.key))
+      const attemptedTagged = tagged.filter(m => !!state.scores[`${dis}-${m.id}`])
+      const avg = attemptedTagged.length
+        ? Math.round(attemptedTagged.reduce((s, m) => s + (state.scores[`${dis}-${m.id}`]?.score || 0), 0) / attemptedTagged.length)
+        : 0
+      let level = 'Untested'
+      let levelColor = '#475569'
+      if (attemptedTagged.length > 0) {
+        if (avg >= 85)      { level = 'Mastered';   levelColor = '#22c55e' }
+        else if (avg >= 70) { level = 'Strong';     levelColor = '#84cc16' }
+        else if (avg >= 55) { level = 'Developing'; levelColor = '#facc15' }
+        else if (avg >= 35) { level = 'Lacking';    levelColor = '#fb923c' }
+        else                { level = 'Critical Gap'; levelColor = '#ef4444' }
+      }
+      return {
+        ...skill,
+        avg, level, levelColor,
+        modules: tagged,
+        attempted: attemptedTagged.length,
+        total: tagged.length,
+        weakModule: attemptedTagged.length
+          ? [...attemptedTagged].sort((a,b) => (state.scores[`${dis}-${a.id}`]?.score || 0) - (state.scores[`${dis}-${b.id}`]?.score || 0))[0]
+          : null,
+      }
+    })
+
+    const masteredSkills = skillStats.filter(s => s.attempted > 0 && s.avg >= 70)
+    const lackingSkills  = skillStats.filter(s => s.attempted > 0 && s.avg < 55)
+    const untestedSkills = skillStats.filter(s => s.attempted === 0)
+
+    // ─── Personalized "Next 3 Steps" recommendations ───
+    const nextSteps = []
+
+    // Step 1: lowest-scoring tried module → retry it
+    const triedSorted = mods
+      .map(m => ({ m, s: state.scores[`${dis}-${m.id}`] }))
+      .filter(x => x.s)
+      .sort((a, b) => (a.s.score || 0) - (b.s.score || 0))
+    if (triedSorted.length && triedSorted[0].s.score < 75) {
+      const t = triedSorted[0]
+      nextSteps.push({
+        kind: 'retry',
+        title: `Retry "${t.m.title}"`,
+        why:   `Your current best is ${t.s.bestScore || t.s.score}%. This is your weakest tried module.`,
+        action: t.m.tipsLow?.[0] || 'Re-read the blueprint and focus on the basics.',
+        moduleId: t.m.id,
+        color: t.m.color,
+      })
+    }
+
+    // Step 2: untried module relevant to weakest skill (or any untried)
+    const untried = mods.filter(m => !state.scores[`${dis}-${m.id}`])
+    if (untried.length) {
+      let pick = untried[0]
+      if (lackingSkills.length) {
+        const skillKey = lackingSkills[0].key
+        const skillMatch = untried.find(m => m.skills?.includes(skillKey))
+        if (skillMatch) pick = skillMatch
+      }
+      nextSteps.push({
+        kind: 'untried',
+        title: `Try "${pick.title}"`,
+        why:   `You haven't attempted this yet. It builds: ${pick.skills?.map(k => SKILL_DIMENSIONS.find(s => s.key === k)?.label).filter(Boolean).join(', ')}.`,
+        action: pick.whatYouLearn?.[0] || 'Start with the intro and read the blueprint.',
+        moduleId: pick.id,
+        color: pick.color,
+      })
+    }
+
+    // Step 3: If a skill is critical gap, point at the strongest module that builds it
+    if (lackingSkills.length && nextSteps.length < 3) {
+      const skill = lackingSkills.sort((a,b) => a.avg - b.avg)[0]
+      // The module that would help build this skill the most: highest-tagged untested or lowest tried
+      const candidates = skill.modules.filter(m => !nextSteps.some(ns => ns.moduleId === m.id))
+      if (candidates.length) {
+        const target = candidates[0]
+        nextSteps.push({
+          kind: 'skill',
+          title: `Build "${skill.label}" via ${target.title}`,
+          why:   `Your ${skill.label} score is ${skill.avg}% — ${skill.level}. ${skill.desc}`,
+          action: target.tipsLow?.[0] || `Practice the ${skill.label} fundamentals in this module.`,
+          moduleId: target.id,
+          color: target.color,
+        })
+      }
+    }
+
+    // Build per-module insight (used in Deep Analysis section)
+    const moduleInsights = mods.map(m => {
+      const s = state.scores[`${dis}-${m.id}`]
+      const score = s?.score ?? null
+      const tried = !!s
+      let bucket = 'untried' // untried | low | mid | high
+      let tips = []
+      let verdict = 'Not yet attempted — start here to assess.'
+      if (tried) {
+        if (score >= 80) { bucket = 'high'; tips = m.tipsHigh || []; verdict = `You\'ve got this dialled in (${score}%). Keep your edge sharp.` }
+        else if (score >= 60) { bucket = 'mid'; tips = m.tipsMid || []; verdict = `Solid foundation (${score}%). A focused retry can push you to mastery.` }
+        else { bucket = 'low'; tips = m.tipsLow || []; verdict = `Critical gap (${score}%). Review the blueprint and protocols before retrying.` }
+      } else {
+        tips = m.tipsLow || []
+      }
+      return {
+        ...m, score, tried, bucket, tips, verdict,
+        attempts: s?.attempts || 0,
+        bestScore: s?.bestScore ?? null,
+        improving: s?.bestScore != null && s?.attempts > 1 && s.bestScore > (s.score || 0) ? false
+                  : s?.attempts > 1 && (s.bestScore || 0) >= (s.score || 0) ? true : null,
+      }
+    })
+
     return {
       mods, phaseStats,
       overallScore, overallGrade: getGrade(overallScore, allAttempted.length),
       totalAttempted: allAttempted.length, totalPassed, totalModules: mods.length,
       passRate, strengths, gaps, bestPhase, weakestPhase, totalAttempts,
+      skillStats, masteredSkills, lackingSkills, untestedSkills,
+      nextSteps, moduleInsights,
     }
   }, [activeDisaster, state.scores, state.completedModules])
 
@@ -466,32 +689,64 @@ export default function MetricsDashboard() {
             </div>
           ))}
 
-          {/* ══ RECOMMENDATIONS ══ */}
-          <SectionTitle>🎯 Personalized Recommendations</SectionTitle>
+          {/* ══ SKILL PROFILE — radar + skill strip ══ */}
+          <SectionTitle>🧭 Skill Profile</SectionTitle>
+          <div style={st.skillBlock}>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minWidth: 280 }}>
+              <SkillRadar skills={metrics.skillStats} size={300}/>
+            </div>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <p style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.65, marginBottom: 14 }}>
+                Each module trains a mix of skills. Your level in a skill = average of scores across all modules that test it.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {metrics.skillStats.map(s => (
+                  <div key={s.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', background: 'rgba(255,255,255,0.025)', borderRadius: 8, border: `1px solid ${s.attempted ? s.levelColor + '33' : 'rgba(255,255,255,0.05)'}` }}>
+                    <span style={{ fontSize: 18, width: 22, textAlign: 'center' }}>{s.icon}</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 700 }}>{s.label}</div>
+                      <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.4, marginTop: 1 }}>{s.desc}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', minWidth: 70 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: s.attempted ? s.levelColor : '#475569' }}>
+                        {s.attempted ? `${s.avg}%` : '—'}
+                      </div>
+                      <div style={{ fontSize: 9, color: s.attempted ? s.levelColor : '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                        {s.level}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ══ WHAT YOU MASTER vs WHAT'S LACKING ══ */}
+          <SectionTitle>📊 What You Master vs What's Lacking</SectionTitle>
           <div style={st.recoGrid}>
 
-            {/* Strengths */}
-            <div style={st.recoCard}>
-              <h3 style={{ color: '#4ade80', fontSize: 14, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-                💪 Your Strengths
-                <span style={{ fontSize: 12, color: '#4ade8066', fontWeight: 500 }}>({metrics.strengths.length} modules ≥75%)</span>
+            {/* Mastered skills */}
+            <div style={{ ...st.recoCard, borderColor: 'rgba(74,222,128,0.25)' }}>
+              <h3 style={{ color: '#4ade80', fontSize: 14, fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                💪 What You're NOT Lacking
+                <span style={{ fontSize: 11, color: '#4ade8088', fontWeight: 600 }}>({metrics.masteredSkills.length} skills ≥70%)</span>
               </h3>
-              {metrics.strengths.length === 0 ? (
+              {metrics.masteredSkills.length === 0 ? (
                 <p style={{ color: '#475569', fontSize: 13, lineHeight: 1.6 }}>
-                  Score ≥75% on any module to see your strengths here. Keep training!
+                  Reach 70% average in any skill to see your mastery here. Keep training!
                 </p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {metrics.strengths.map(m => (
-                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 20 }}>{m.icon}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{m.title}</div>
-                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>{m.topic}</div>
+                  {metrics.masteredSkills.map(s => (
+                    <div key={s.key} style={{ padding: 10, borderRadius: 10, background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.18)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 18 }}>{s.icon}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: '#bbf7d0' }}>{s.label}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, color: s.levelColor }}>{s.avg}%</span>
                       </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: '#4ade80' }}>{m.score}%</div>
-                        <div style={{ fontSize: 10, color: '#64748b' }}>{m.attempts} {m.attempts === 1 ? 'try' : 'tries'}</div>
+                      <div style={{ fontSize: 10, color: '#86efac', lineHeight: 1.5 }}>
+                        {s.level === 'Mastered' ? '✅ ' : '👍 '}
+                        {s.desc} You’ve demonstrated this across {s.attempted}/{s.total} modules.
                       </div>
                     </div>
                   ))}
@@ -499,45 +754,150 @@ export default function MetricsDashboard() {
               )}
             </div>
 
-            {/* Gaps */}
-            <div style={st.recoCard}>
-              <h3 style={{ color: '#f87171', fontSize: 14, fontWeight: 700, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-                ⚠️ Focus Areas
-                <span style={{ fontSize: 12, color: '#f8717166', fontWeight: 500 }}>({metrics.gaps.length} modules need work)</span>
+            {/* Lacking skills */}
+            <div style={{ ...st.recoCard, borderColor: 'rgba(248,113,113,0.25)' }}>
+              <h3 style={{ color: '#f87171', fontSize: 14, fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                ⚠️ What You're Lacking
+                <span style={{ fontSize: 11, color: '#f8717188', fontWeight: 600 }}>({metrics.lackingSkills.length} skills &lt;55%, {metrics.untestedSkills.length} untested)</span>
               </h3>
-              {metrics.gaps.length === 0 ? (
+              {metrics.lackingSkills.length === 0 && metrics.untestedSkills.length === 0 ? (
                 <p style={{ color: '#4ade80', fontSize: 13 }}>
-                  🎉 No critical gaps! You are well-prepared across all modules.
+                  🎉 No critical skill gaps. You are evenly trained across all dimensions.
                 </p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {metrics.gaps.slice(0, 7).map(m => (
-                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ fontSize: 20 }}>{m.icon}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 600 }}>{m.title}</div>
-                        <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>
-                          {m.tried
-                            ? `Score: ${m.score}% · ${m.attempts} ${m.attempts === 1 ? 'attempt' : 'attempts'}`
-                            : 'Not yet attempted'}
-                        </div>
+                  {metrics.lackingSkills.map(s => (
+                    <div key={s.key} style={{ padding: 10, borderRadius: 10, background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 18 }}>{s.icon}</span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: '#fecaca' }}>{s.label}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, color: s.levelColor }}>{s.avg}%</span>
                       </div>
-                      <button
-                        style={{ ...st.playBtn, fontSize: 12, padding: '4px 10px' }}
-                        onClick={() => dispatch({ type: 'PLAY_MODULE', payload: { disaster: activeDisaster, module: m.id } })}
-                      >
-                        {m.tried ? '↩ Retry' : '▶ Start'}
-                      </button>
+                      <div style={{ fontSize: 11, color: '#fca5a5', lineHeight: 1.5, marginBottom: 6 }}>
+                        {s.desc}
+                      </div>
+                      {s.weakModule && (
+                        <button
+                          style={{ ...st.playBtn, fontSize: 11, padding: '4px 10px' }}
+                          onClick={() => dispatch({ type: 'PLAY_MODULE', payload: { disaster: activeDisaster, module: s.weakModule.id } })}
+                        >
+                          ↩ Retry {s.weakModule.title}
+                        </button>
+                      )}
                     </div>
                   ))}
-                  {metrics.gaps.length > 7 && (
-                    <p style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>
-                      +{metrics.gaps.length - 7} more areas to review
-                    </p>
-                  )}
+                  {metrics.untestedSkills.map(s => (
+                    <div key={s.key} style={{ padding: 10, borderRadius: 10, background: 'rgba(100,116,139,0.06)', border: '1px solid rgba(100,116,139,0.2)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <span style={{ fontSize: 18, opacity: 0.6 }}>{s.icon}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>{s.label}</span>
+                        <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5 }}>Untested</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.5 }}>
+                        Play any module that builds this skill to assess.
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
+          </div>
+
+          {/* ══ HOW TO BECOME BETTER — Personalized next steps ══ */}
+          {metrics.nextSteps.length > 0 && (
+            <>
+              <SectionTitle>🚀 How to Become Better — Your Next {metrics.nextSteps.length} Step{metrics.nextSteps.length === 1 ? '' : 's'}</SectionTitle>
+              <div style={st.nextStepsGrid}>
+                {metrics.nextSteps.map((step, i) => (
+                  <div key={i} style={{ ...st.nextStepCard, borderColor: step.color + '55', background: `linear-gradient(180deg, ${step.color}11, rgba(255,255,255,0.02))` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: 8, background: step.color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 14 }}>{i+1}</div>
+                      <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, color: step.color, textTransform: 'uppercase' }}>
+                        {step.kind === 'retry' ? 'Retry to improve' : step.kind === 'untried' ? 'New challenge' : 'Build skill'}
+                      </span>
+                    </div>
+                    <h4 style={{ fontSize: 15, color: '#f1f5f9', fontWeight: 800, marginBottom: 6 }}>{step.title}</h4>
+                    <p style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.55, marginBottom: 8 }}>{step.why}</p>
+                    <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 8, padding: '7px 10px', borderLeft: `3px solid ${step.color}`, marginBottom: 12 }}>
+                      <div style={{ color: step.color, fontSize: 9, fontWeight: 800, marginBottom: 2, letterSpacing: 1 }}>💡 ACTION</div>
+                      <div style={{ color: '#cbd5e1', fontSize: 11, lineHeight: 1.55 }}>{step.action}</div>
+                    </div>
+                    <button
+                      style={{ ...st.playBtn, width: '100%', padding: '8px', fontSize: 12, background: `${step.color}22`, borderColor: step.color, color: step.color }}
+                      onClick={() => dispatch({ type: 'PLAY_MODULE', payload: { disaster: activeDisaster, module: step.moduleId } })}
+                    >
+                      {step.kind === 'untried' ? '▶ Start now' : '↩ Open module'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* ══ DEEP ANALYSIS — per-module verdict + tips ══ */}
+          <SectionTitle>🔍 Deep Analysis — Per Module</SectionTitle>
+          <div style={st.deepGrid}>
+            {metrics.moduleInsights.map(m => {
+              const bucketColor = m.bucket === 'high' ? '#22c55e' : m.bucket === 'mid' ? '#facc15' : m.bucket === 'low' ? '#ef4444' : '#64748b'
+              const bucketLabel = m.bucket === 'high' ? 'STRONG' : m.bucket === 'mid' ? 'OK' : m.bucket === 'low' ? 'WEAK' : 'UNTRIED'
+              return (
+                <div key={m.id} style={{ ...st.deepCard, borderColor: m.color + '44' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 44, height: 44, borderRadius: 11, background: `${m.color}22`, border: `1.5px solid ${m.color}66`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24 }}>{m.icon}</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 14, fontWeight: 800, color: '#f1f5f9' }}>{m.title}</div>
+                      <div style={{ fontSize: 10, color: '#64748b' }}>Mod {m.id} · {m.topic}</div>
+                    </div>
+                    <div style={{ background: bucketColor + '22', color: bucketColor, padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 800, letterSpacing: 1 }}>{bucketLabel}</div>
+                  </div>
+
+                  {/* Score line */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <div style={{ flex: 1 }}><ScoreBar pct={m.score || 0} color={m.tried ? bucketColor : '#334155'} h={8}/></div>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: m.tried ? bucketColor : '#475569', minWidth: 44, textAlign: 'right' }}>
+                      {m.tried ? `${m.score}%` : '—'}
+                    </span>
+                  </div>
+
+                  {/* Verdict */}
+                  <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6, marginBottom: 8 }}>{m.verdict}</div>
+
+                  {/* Skills tested */}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+                    {m.skills?.map(skKey => {
+                      const sk = SKILL_DIMENSIONS.find(x => x.key === skKey)
+                      return sk ? (
+                        <span key={skKey} style={{ fontSize: 9, color: '#94a3b8', background: 'rgba(255,255,255,0.04)', padding: '2px 7px', borderRadius: 4, fontWeight: 600 }}>
+                          {sk.icon} {sk.label}
+                        </span>
+                      ) : null
+                    })}
+                  </div>
+
+                  {/* Tips */}
+                  {m.tips.length > 0 && (
+                    <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: 8, padding: '8px 10px', borderLeft: `3px solid ${m.color}` }}>
+                      <div style={{ fontSize: 9, fontWeight: 800, color: m.color, letterSpacing: 1, marginBottom: 4 }}>
+                        {m.bucket === 'high' ? '🏆 KEEP THE EDGE' : m.bucket === 'mid' ? '🎯 PUSH TO MASTERY' : m.bucket === 'low' ? '🛠 FOCUS ON' : '📋 START WITH'}
+                      </div>
+                      {m.tips.slice(0, 3).map((t, i) => (
+                        <div key={i} style={{ fontSize: 10, color: '#cbd5e1', lineHeight: 1.5, marginBottom: 2, display: 'flex', gap: 5 }}>
+                          <span style={{ color: m.color }}>•</span>
+                          <span>{t}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    style={{ ...st.playBtn, width: '100%', marginTop: 10, padding: '7px', fontSize: 12, background: `${m.color}22`, borderColor: m.color, color: m.color }}
+                    onClick={() => dispatch({ type: 'PLAY_MODULE', payload: { disaster: activeDisaster, module: m.id } })}
+                  >
+                    {m.tried ? `↩ Retry · best ${m.bestScore || m.score}%` : '▶ Start module'}
+                  </button>
+                </div>
+              )
+            })}
           </div>
 
           {/* ══ SUMMARY STATS FOOTER BAR ══ */}
@@ -708,12 +1068,33 @@ const st = {
     whiteSpace: 'nowrap',
   },
   recoGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 36,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 20, marginBottom: 36,
   },
   recoCard: {
     background: 'rgba(255,255,255,0.03)',
     border: '1px solid rgba(255,255,255,0.07)',
     borderRadius: 14, padding: 22,
+  },
+  skillBlock: {
+    display: 'flex', flexWrap: 'wrap', gap: 24, alignItems: 'center',
+    background: 'linear-gradient(135deg, rgba(96,165,250,0.06), rgba(167,139,250,0.04))',
+    border: '1px solid rgba(96,165,250,0.18)',
+    borderRadius: 18, padding: 24, marginBottom: 36,
+  },
+  nextStepsGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16, marginBottom: 36,
+  },
+  nextStepCard: {
+    border: '1.5px solid', borderRadius: 14, padding: 18,
+    boxShadow: '0 6px 18px rgba(0,0,0,0.25)',
+  },
+  deepGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(290px, 1fr))', gap: 16, marginBottom: 36,
+  },
+  deepCard: {
+    background: 'rgba(255,255,255,0.025)',
+    border: '1.5px solid', borderRadius: 14, padding: 16,
+    boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
   },
   statsBar: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-around',

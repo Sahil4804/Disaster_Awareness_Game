@@ -516,9 +516,12 @@ function InternalEscapeGame() {
 
       {/* Result Overlays */}
       {gameState === 'failed' && (
-        <div style={{ position:'absolute', inset:0, zIndex:50, background:'rgba(0,0,0,0.95)', display:'flex', alignItems:'center', justifyContent:'center', padding:40, textAlign:'center', pointerEvents:'auto' }}>
-          <div style={{ background:'linear-gradient(135deg,#7f1d1d,#450a0a)', padding:48, borderRadius:24, border:'3px solid #ef4444', maxWidth:640, boxShadow:'0 30px 80px rgba(239,68,68,0.4)' }}>
-            <div style={{ fontSize:72, marginBottom:20 }}>💀</div>
+        <div style={{ position:'absolute', inset:0, zIndex:50, background:'rgba(0,0,0,0.95)', display:'flex', alignItems:'center', justifyContent:'center', padding:40, textAlign:'center', pointerEvents:'auto', overflow:'hidden' }}>
+          {/* Mournful rain overlay */}
+          <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 22px, rgba(140,170,210,0.07) 22px 24px)', backgroundSize:'100% 140px', animation:'rainFall 0.45s linear infinite', mixBlendMode:'screen', pointerEvents:'none' }}/>
+          <style>{`@keyframes rainFall { from{background-position:0 0} to{background-position:0 200px} }`}</style>
+          <div style={{ background:'linear-gradient(135deg,#7f1d1d,#450a0a)', padding:48, borderRadius:24, border:'3px solid #ef4444', maxWidth:640, boxShadow:'0 30px 80px rgba(239,68,68,0.5)', position:'relative', zIndex:1 }}>
+            <div style={{ fontSize:80, marginBottom:20, animation:'bob 1.5s ease-in-out infinite', filter:'drop-shadow(0 8px 16px rgba(0,0,0,0.5))' }}>💀</div>
             <div style={{ color:'#fff', fontSize:36, fontWeight:900, letterSpacing:3, marginBottom:20 }}>CABIN FLOODED</div>
             <div style={{ color:'#fca5a5', fontSize:18, lineHeight:1.7, marginBottom:32 }}>
               You failed to escape before the water completely filled the vehicle.
@@ -534,11 +537,21 @@ function InternalEscapeGame() {
       )}
 
       {gameState === 'escaped' && (
-        <div style={{ position:'absolute', inset:0, zIndex:50, background:'rgba(0,0,0,0.92)', display:'flex', alignItems:'center', justifyContent:'center', padding:40, textAlign:'center', pointerEvents:'auto' }}>
-          <div style={{ background:'linear-gradient(135deg,#166534,#064e3b)', padding:48, borderRadius:24, border:'3px solid #22c55e', maxWidth:640, boxShadow:'0 30px 80px rgba(34,197,94,0.4)' }}>
-            <div style={{ fontSize:72, marginBottom:20 }}>🏊</div>
-            <div style={{ color:'#fff', fontSize:36, fontWeight:900, letterSpacing:3, marginBottom:10 }}>ESCAPE SUCCESSFUL</div>
-            <div style={{ color:'#4ade80', fontSize:28, fontWeight:900, marginBottom:32 }}>SCORE: {Math.floor(100 - waterLevel)}</div>
+        <div style={{ position:'absolute', inset:0, zIndex:50, background:'rgba(0,0,0,0.92)', display:'flex', alignItems:'center', justifyContent:'center', padding:40, textAlign:'center', pointerEvents:'auto', overflow:'hidden' }}>
+          {/* Confetti rain */}
+          {Array.from({length:32}).map((_,i)=>(
+            <div key={i} style={{
+              position:'absolute', left:`${(i*7+3)%97}%`, top:`-${10+(i%5)*8}px`,
+              width:8, height:14, borderRadius:2,
+              background:['#fbbf24','#34d399','#60a5fa','#f472b6','#a78bfa'][i%5],
+              animation:`confettiFall ${3+i*0.12}s ease-in ${i*0.08}s infinite`,
+              opacity:0.9,
+            }}/>
+          ))}
+          <div style={{ background:'linear-gradient(135deg,#166534,#064e3b)', padding:48, borderRadius:24, border:'3px solid #22c55e', maxWidth:640, boxShadow:'0 30px 80px rgba(34,197,94,0.5)', position:'relative', zIndex:1, animation:'fadeIn 0.5s ease-out' }}>
+            <div style={{ fontSize:80, marginBottom:20, filter:'drop-shadow(0 8px 16px rgba(0,0,0,0.5))', animation:'bob 2s ease-in-out infinite' }}>🏊</div>
+            <div style={{ color:'#fff', fontSize:36, fontWeight:900, letterSpacing:3, marginBottom:10, textShadow:'0 4px 12px rgba(0,0,0,0.5)' }}>ESCAPE SUCCESSFUL</div>
+            <div style={{ color:'#4ade80', fontSize:32, fontWeight:900, marginBottom:32, textShadow:'0 4px 12px rgba(74,222,128,0.4)' }}>SCORE: {Math.floor(100 - waterLevel)}</div>
             <div style={{ color:'#bbf7d0', fontSize:18, lineHeight:1.7, marginBottom:32 }}>
               You successfully followed NDMA guidelines to escape the sinking vehicle!
               <br/><br/>
@@ -569,8 +582,21 @@ export default function Module5_SinkingCar() {
 
   if (storyPhase === 'expertBrief') {
     return (
-      <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#050a15,#0a1628,#050a15)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
-        <div style={{ textAlign:'center', maxWidth:600, padding:40, animation:'fadeIn 1s ease-out' }}>
+      <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#050a15,#0a1628,#050a15)', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Segoe UI',system-ui,sans-serif", position:'relative', overflow:'hidden' }}>
+        {/* Storm sky atmospheric backdrop */}
+        <div style={{ position:'absolute', inset:0, backgroundImage:'url(/assets/shared/stormy_sky.jpg)', backgroundSize:'cover', backgroundPosition:'center', opacity:0.35, filter:'brightness(0.45) saturate(1.2)', pointerEvents:'none' }}/>
+        {/* Rain */}
+        <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 22px, rgba(180,210,255,0.08) 22px 24px)', backgroundSize:'100% 140px', animation:'rainFall 0.4s linear infinite', pointerEvents:'none', mixBlendMode:'screen' }}/>
+        {/* Lightning */}
+        <div style={{ position:'absolute', inset:0, background:'rgba(180,200,255,0.5)', animation:'lightningFlash 9s linear infinite', pointerEvents:'none' }}/>
+        {/* Vignette */}
+        <div style={{ position:'absolute', inset:0, boxShadow:'inset 0 0 240px 60px rgba(0,0,0,0.7)', pointerEvents:'none' }}/>
+        <style>{`
+          @keyframes rainFall { from{background-position:0 0} to{background-position:0 200px} }
+          @keyframes lightningFlash { 0%,92%,100%{opacity:0} 93%,95%{opacity:0.85} 94%{opacity:0.3} }
+          @keyframes confettiFall { 0%{transform:translateY(-20px) rotate(0);opacity:1} 100%{transform:translateY(100vh) rotate(720deg);opacity:0} }
+        `}</style>
+        <div style={{ textAlign:'center', maxWidth:600, padding:40, animation:'fadeIn 1s ease-out', position:'relative', zIndex:1 }}>
           <div style={{ fontSize:14, color:'#ef4444', fontWeight:800, letterSpacing:4, marginBottom:6, animation:'pulse 2s infinite' }}>🚨 CRITICAL ESCALATION</div>
           <div style={{ fontSize:32, color:'#f1f5f9', fontWeight:900, marginBottom:8 }}>Trauma Specialist Required</div>
           <div style={{ color:'#94a3b8', fontSize:13, marginBottom:24, lineHeight:1.7 }}>

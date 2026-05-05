@@ -247,7 +247,100 @@ const KEYFRAMES = `
 @keyframes successGlow{0%,100%{filter:drop-shadow(0 0 8px rgba(34,197,94,0.3))}50%{filter:drop-shadow(0 0 20px rgba(34,197,94,0.6))}}
 @keyframes tiltRock{0%,100%{transform:rotate(0deg)}25%{transform:rotate(4deg)}75%{transform:rotate(-4deg)}}
 @keyframes crackSpread{from{width:0}to{width:100%}}
+@keyframes lightningFlash{0%,92%,100%{opacity:0}93%,95%{opacity:0.9}94%{opacity:0.3}}
+@keyframes flicker{0%,100%{opacity:0.85}50%{opacity:1}}
+@keyframes drift{0%{transform:translateX(0)}100%{transform:translateX(-200px)}}
+@keyframes sparkle{0%,100%{opacity:0;transform:scale(0)}50%{opacity:1;transform:scale(1)}}
+@keyframes hoverLift{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+@keyframes scoreCount{from{transform:scale(0.4) rotate(-10deg);opacity:0}to{transform:scale(1) rotate(0);opacity:1}}
+@keyframes cardEnter{from{opacity:0;transform:translateY(20px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes vignettePulse{0%,100%{box-shadow:inset 0 0 200px rgba(0,0,0,0.6)}50%{box-shadow:inset 0 0 240px rgba(0,0,0,0.75)}}
 `
+
+// ═══════════════════════════════════════════════════════════════
+// IMAGE ASSET LAYER — graceful fallback to emoji if PNG missing
+// Drop downloaded PNGs into /public/assets/raft/ and they auto-load.
+// ═══════════════════════════════════════════════════════════════
+const IMG_BASE = '/assets/raft/'
+const SHARED_BASE = '/assets/shared/'
+
+const ITEM_IMG = {
+  hull1: 'item_plastic_drum.png',
+  hull2: 'item_wooden_crate.png',
+  hull3: 'item_steel_drum.png',
+  hull4: 'item_cardboard.png',
+  bind1: 'item_rope_coil.png',
+  bind2: 'item_jute_rope.png',
+  bind3: 'item_wire.png',
+  bind4: 'item_duct_tape.png',
+  deck1: 'item_bamboo_bundle.png',
+  deck2: 'item_planks.png',
+  deck3: 'item_iron_rods.png',
+  deck4: 'item_mattress.png',
+  prop1: 'item_paddle.png',
+  prop2: 'item_umbrella.png',
+  prop3: 'item_steel_rod.png',
+  prop4: 'item_chair_leg.png',
+}
+
+const SCENE_IMG = {
+  garageBg: IMG_BASE + 'garage_bg.jpg',
+  shelf: IMG_BASE + 'shelf_unit.png',
+  raftFinished: IMG_BASE + 'raft_complete.png',
+  stormSky: SHARED_BASE + 'stormy_sky.jpg',
+  rainOverlay: SHARED_BASE + 'rain_overlay.png',
+  floodTile: SHARED_BASE + 'floodwater_tile.png',
+}
+
+// Renders item emoji with image overlay that fades in once loaded.
+function ItemArt({ item, size = 48, dropShadow = true }) {
+  const filename = ITEM_IMG[item.id]
+  const [loaded, setLoaded] = useState(false)
+  const [errored, setErrored] = useState(false)
+  return (
+    <div style={{
+      position: 'relative', width: size, height: size,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      lineHeight: 1, userSelect: 'none',
+    }}>
+      <span style={{
+        fontSize: size * 0.7, lineHeight: 1,
+        opacity: loaded ? 0 : 1, transition: 'opacity 0.2s',
+        filter: dropShadow ? 'drop-shadow(0 2px 4px rgba(0,0,0,0.35))' : 'none',
+      }}>{item.emoji}</span>
+      {filename && !errored && (
+        <img src={IMG_BASE + filename} alt=""
+          onLoad={() => setLoaded(true)}
+          onError={() => setErrored(true)}
+          style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%',
+            objectFit: 'contain',
+            filter: dropShadow ? 'drop-shadow(0 3px 6px rgba(0,0,0,0.45))' : 'none',
+            opacity: loaded ? 1 : 0, transition: 'opacity 0.25s ease-out',
+            pointerEvents: 'none',
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Renders a background image only after it loads (no broken-icon flash).
+function SceneBackdrop({ src, style, blend = 'normal' }) {
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => {
+    const img = new Image()
+    img.onload = () => setLoaded(true)
+    img.src = src
+  }, [src])
+  if (!loaded) return null
+  return <div style={{
+    position: 'absolute', inset: 0,
+    backgroundImage: `url(${src})`, backgroundSize: 'cover', backgroundPosition: 'center',
+    mixBlendMode: blend, pointerEvents: 'none',
+    ...style,
+  }}/>
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MATERIAL VISUAL CONFIGS — what each item looks like on the raft
@@ -680,10 +773,18 @@ export default function Module2_HomeDefense() {
   if (phase === 'intro') return (
     <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg,#1a1a2e,#16213e,#0f3460)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative', overflow: 'hidden' }}>
       <style>{KEYFRAMES}</style>
+      {/* Storm sky backdrop (loads only if asset present) */}
+      <SceneBackdrop src={SCENE_IMG.stormSky} style={{ opacity: 0.55, filter: 'brightness(0.6) saturate(1.1)' }}/>
+      {/* Animated rain overlay — pure CSS so always visible */}
+      <div style={{ position:'absolute', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 22px, rgba(180,210,255,0.07) 22px 24px)', backgroundSize:'100% 140px', animation:'rainAnim 0.4s linear infinite', pointerEvents:'none', mixBlendMode:'screen' }}/>
+      {/* Lightning flash */}
+      <div style={{ position:'absolute', inset:0, background:'rgba(180,200,255,0.7)', animation:'lightningFlash 7s linear infinite', pointerEvents:'none' }}/>
+      {/* Floating ambient emoji */}
       {['🏚️','🌊','🛶','🪵','🔧','🛢️','🪢','🏏','⚙️','🔩'].map((e,i)=>(
-        <div key={i} style={{ position:'absolute', left:`${(i*11+4)%95}%`, top:`${(i*17+8)%80}%`, fontSize:40+(i%3)*8, opacity:0.15, animation:`bob ${3+i*0.3}s ease-in-out infinite` }}>{e}</div>
+        <div key={i} style={{ position:'absolute', left:`${(i*11+4)%95}%`, top:`${(i*17+8)%80}%`, fontSize:40+(i%3)*8, opacity:0.13, animation:`bob ${3+i*0.3}s ease-in-out infinite`, filter:'drop-shadow(0 4px 8px rgba(0,0,0,0.4))' }}>{e}</div>
       ))}
-      <div style={{ position:'relative', zIndex:1, maxWidth:640, width:'100%', background:'rgba(255,255,255,0.94)', borderRadius:28, padding:40, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.35)', textAlign:'center' }}>
+      {/* Glassmorphism card */}
+      <div style={{ position:'relative', zIndex:1, maxWidth:640, width:'100%', background:'rgba(255,255,255,0.94)', borderRadius:28, padding:40, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.5) inset', textAlign:'center', backdropFilter:'blur(8px)' }}>
         <div style={{ fontSize:80, animation:'bob 2s ease-in-out infinite' }}>🛶</div>
         <div style={{ display:'inline-block', background:'linear-gradient(135deg,#dc2626,#991b1b)', color:'#fff', padding:'6px 18px', borderRadius:999, fontWeight:800, fontSize:12, letterSpacing:2, animation:'pulse-ring 1.4s infinite', marginTop:4 }}>🌊 FLOOD WATER RISING</div>
         <h1 style={{ fontSize:34, fontWeight:900, margin:'14px 0 4px', color:'#0f172a' }}>Build the Raft</h1>
@@ -714,9 +815,12 @@ export default function Module2_HomeDefense() {
 
   // ═══════════ BLUEPRINT ═══════════
   if (phase === 'blueprint') return (
-    <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#0f172a,#1e293b)', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+    <div style={{ minHeight:'100vh', background:'linear-gradient(135deg,#0f172a,#1e293b)', display:'flex', alignItems:'center', justifyContent:'center', padding:24, position:'relative', overflow:'hidden' }}>
       <style>{KEYFRAMES}</style>
-      <div style={{ maxWidth:720, width:'100%', background:'rgba(255,255,255,0.96)', borderRadius:28, padding:36, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.35)' }}>
+      {/* Subtle blueprint grid backdrop */}
+      <div style={{ position:'absolute', inset:0, backgroundImage:'linear-gradient(rgba(96,165,250,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(96,165,250,0.06) 1px, transparent 1px)', backgroundSize:'40px 40px', pointerEvents:'none' }}/>
+      <SceneBackdrop src={SCENE_IMG.stormSky} style={{ opacity: 0.18, filter: 'brightness(0.5)' }}/>
+      <div style={{ maxWidth:720, width:'100%', background:'rgba(255,255,255,0.97)', borderRadius:28, padding:36, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.4) inset', position:'relative', zIndex:1 }}>
         <div style={{ textAlign:'center', marginBottom:24 }}>
           <div style={{ fontSize:48, marginBottom:8 }}>📋</div>
           <h2 style={{ fontSize:26, fontWeight:900, color:'#0f172a', margin:0 }}>Raft Blueprint</h2>
@@ -761,9 +865,18 @@ export default function Module2_HomeDefense() {
     return (
       <div style={{ position:'fixed', inset:0, overflow:'hidden', background:'linear-gradient(180deg,#1a1a2e,#2d2d44)', fontFamily:"'Segoe UI',system-ui,sans-serif" }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ position:'fixed', inset:0, background:'repeating-linear-gradient(0deg,transparent 0px,transparent 18px,rgba(174,194,224,0.06) 18px,rgba(174,194,224,0.06) 20px)', backgroundSize:'100% 120px', animation:'rainAnim 0.25s linear infinite', pointerEvents:'none', zIndex:50 }}/>
+        {/* Heavier rain overlay */}
+        <div style={{ position:'fixed', inset:0, background:'repeating-linear-gradient(8deg, transparent 0 20px, rgba(174,194,224,0.08) 20px 22px)', backgroundSize:'100% 130px', animation:'rainAnim 0.3s linear infinite', pointerEvents:'none', zIndex:50, mixBlendMode:'screen' }}/>
+        {/* Lightning flash overlay */}
+        <div style={{ position:'fixed', inset:0, background:'rgba(180,200,255,0.55)', animation:'lightningFlash 9s linear infinite', pointerEvents:'none', zIndex:51 }}/>
+        {/* Edge vignette for atmospheric depth */}
+        <div style={{ position:'fixed', inset:0, boxShadow:'inset 0 0 220px 40px rgba(0,0,0,0.7)', pointerEvents:'none', zIndex:52 }}/>
 
         <div ref={worldElRef} style={{ position:'absolute', width:WORLD_W, height:WORLD_H, willChange:'transform' }}>
+          {/* Garage photo backdrop (loads if asset present) */}
+          <div style={{ position:'absolute', left:GARAGE_BG.x, top:GARAGE_BG.y, width:GARAGE_BG.w, height:GARAGE_BG.h, overflow:'hidden' }}>
+            <SceneBackdrop src={SCENE_IMG.garageBg} style={{ opacity: 0.55, filter: 'brightness(0.6) contrast(1.1)' }}/>
+          </div>
           <div style={{ position:'absolute', left:0, top:0, width:WORLD_W, height:60, background:'#2d2d44' }}/>
           <div style={{ position:'absolute', left:8, top:45, width:1484, height:18, background:'#5c4a3a', borderTop:'3px solid #7a6855', borderBottom:'2px solid #3a2820', borderRadius:'2px 2px 0 0' }}/>
           <div style={{ position:'absolute', left:GARAGE_BG.x, top:GARAGE_BG.y, width:GARAGE_BG.w, height:GARAGE_BG.h, background:GARAGE_BG.wall, borderLeft:`3px solid ${GARAGE_BG.trim}`, borderRight:`3px solid ${GARAGE_BG.trim}` }}/>
@@ -791,21 +904,36 @@ export default function Module2_HomeDefense() {
                 onMouseMove={e=>setHoverPos({x:e.clientX,y:e.clientY})}
                 onMouseLeave={()=>setHoveredItem(null)}
                 onClick={()=>{if(nearItemRef.current?.id===it.id) pickupRef.current()}}
-                style={{ position:'absolute', left:it.wx, top:it.wy, width:sz, height:sz, transform:'translate(-50%,-50%)', cursor:isNear?'pointer':'default', zIndex:10, animation:'bob-sm 3.5s ease-in-out infinite', filter:'drop-shadow(0 3px 6px rgba(0,0,0,0.3))' }}>
-                <div style={{ width:sz, height:sz, borderRadius:'50%', background:`radial-gradient(circle at 35% 35%,white,${sc}88)`, border:`2px solid ${sc}`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:isNear?`0 0 18px ${sc},0 0 36px ${sc}44`:`0 2px 8px ${sc}44`, transition:'box-shadow 0.3s' }}>
-                  <div style={{ fontSize:sz*0.55, lineHeight:1 }}>{it.emoji}</div>
+                style={{ position:'absolute', left:it.wx, top:it.wy, width:sz, height:sz, transform:'translate(-50%,-50%)', cursor:isNear?'pointer':'default', zIndex:10, animation:'bob-sm 3.5s ease-in-out infinite' }}>
+                {/* Glow halo when nearby */}
+                {isNear && <div style={{ position:'absolute', inset:-12, borderRadius:'50%', background:`radial-gradient(circle, ${sc}55, transparent 70%)`, animation:'pulse-ring 1.5s ease-in-out infinite', pointerEvents:'none' }}/>}
+                {/* Item disc */}
+                <div style={{ width:sz, height:sz, borderRadius:'50%', background:`radial-gradient(circle at 35% 35%, rgba(255,255,255,0.95), ${sc}aa 60%, ${sc} 100%)`, border:`2px solid ${sc}`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:isNear?`0 0 24px ${sc}, 0 0 48px ${sc}66, inset 0 -4px 8px ${sc}44`:`0 4px 12px rgba(0,0,0,0.4), inset 0 -3px 6px ${sc}33`, transition:'box-shadow 0.3s', position:'relative', overflow:'hidden' }}>
+                  {/* Inner shine */}
+                  <div style={{ position:'absolute', top:'8%', left:'18%', width:'30%', height:'25%', borderRadius:'50%', background:'rgba(255,255,255,0.5)', filter:'blur(3px)', pointerEvents:'none' }}/>
+                  <ItemArt item={it} size={sz*0.72}/>
                 </div>
-                {isNear && <div style={{ position:'absolute', top:-(sz/2+8), left:'50%', transform:'translateX(-50%)', background:'rgba(15,23,42,0.9)', color:'#fbbf24', padding:'2px 8px', borderRadius:6, fontSize:10, fontWeight:800, whiteSpace:'nowrap', border:'1px solid #fbbf24' }}>E / SPACE</div>}
+                {isNear && <div style={{ position:'absolute', top:-(sz/2+8), left:'50%', transform:'translateX(-50%)', background:'rgba(15,23,42,0.92)', color:'#fbbf24', padding:'3px 10px', borderRadius:8, fontSize:10, fontWeight:800, whiteSpace:'nowrap', border:'1.5px solid #fbbf24', boxShadow:'0 4px 12px rgba(0,0,0,0.5)', animation:'bob-sm 0.8s ease-in-out infinite' }}>E / SPACE</div>}
               </div>
             )
           })}
 
           {/* Player */}
-          <div ref={playerElRef} style={{ position:'absolute', width:PLAYER_W, height:PLAYER_H, zIndex:20, left:100, top:480 }}>
-            <div style={{ width:18, height:18, borderRadius:'50%', background:'#fbbf24', border:'2px solid #78350f', position:'absolute', top:-2, left:3 }}/>
-            <div style={{ width:22, height:18, background:'#ea580c', border:'2px solid #9a3412', borderRadius:'3px 3px 0 0', position:'absolute', top:14, left:1 }}/>
-            <div style={{ width:7, height:11, background:'#1d4ed8', borderRadius:'0 0 2px 2px', position:'absolute', top:30, left:3 }}/>
-            <div style={{ width:7, height:11, background:'#1d4ed8', borderRadius:'0 0 2px 2px', position:'absolute', top:30, left:14 }}/>
+          <div ref={playerElRef} style={{ position:'absolute', width:PLAYER_W, height:PLAYER_H, zIndex:20, left:100, top:480, filter:'drop-shadow(0 4px 6px rgba(0,0,0,0.5))' }}>
+            {/* Hard hat */}
+            <div style={{ position:'absolute', top:-6, left:1, width:22, height:8, background:'linear-gradient(180deg,#fde047,#eab308)', borderRadius:'12px 12px 2px 2px', border:'1.5px solid #78350f' }}/>
+            {/* Head */}
+            <div style={{ width:18, height:18, borderRadius:'50%', background:'radial-gradient(circle at 35% 35%, #fed7aa, #fbbf24)', border:'2px solid #78350f', position:'absolute', top:-2, left:3 }}/>
+            {/* Eyes */}
+            <div style={{ width:2, height:2, borderRadius:'50%', background:'#1f2937', position:'absolute', top:5, left:9 }}/>
+            <div style={{ width:2, height:2, borderRadius:'50%', background:'#1f2937', position:'absolute', top:5, left:13 }}/>
+            {/* Body / vest */}
+            <div style={{ width:22, height:18, background:'linear-gradient(180deg,#f97316,#ea580c)', border:'2px solid #9a3412', borderRadius:'3px 3px 0 0', position:'absolute', top:14, left:1 }}>
+              <div style={{ position:'absolute', top:6, left:0, right:0, height:2, background:'#fde047' }}/>
+            </div>
+            {/* Legs */}
+            <div style={{ width:7, height:11, background:'linear-gradient(180deg,#2563eb,#1d4ed8)', borderRadius:'0 0 2px 2px', position:'absolute', top:30, left:3 }}/>
+            <div style={{ width:7, height:11, background:'linear-gradient(180deg,#2563eb,#1d4ed8)', borderRadius:'0 0 2px 2px', position:'absolute', top:30, left:14 }}/>
           </div>
         </div>
 
@@ -877,22 +1005,30 @@ export default function Module2_HomeDefense() {
 
           {/* Material choices for current step */}
           {currentSlot && !allDone && (
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:12, marginTop:16 }}>
-              {availableForSlot.map(item => (
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:14, marginTop:16 }}>
+              {availableForSlot.map((item, idx) => (
                 <div key={item.id} onClick={()=>handleAssemblyPick(item.id)}
-                  onMouseEnter={e=>{setHoveredItem(item);setHoverPos({x:e.clientX,y:e.clientY})}}
-                  onMouseLeave={()=>setHoveredItem(null)}
+                  onMouseEnter={e=>{setHoveredItem(item);setHoverPos({x:e.clientX,y:e.clientY});e.currentTarget.style.transform='translateY(-6px)';e.currentTarget.style.boxShadow=`0 14px 32px ${currentSlot.color}66, 0 0 0 2px ${currentSlot.color}`;e.currentTarget.style.borderColor=currentSlot.color}}
+                  onMouseLeave={e=>{setHoveredItem(null);e.currentTarget.style.transform='translateY(0)';e.currentTarget.style.boxShadow='0 4px 12px rgba(0,0,0,0.3)';e.currentTarget.style.borderColor=currentSlot.color+'44'}}
                   style={{
-                    padding:16, borderRadius:16, cursor:'pointer', textAlign:'center',
-                    background:'rgba(255,255,255,0.04)', border:`2px solid ${currentSlot.color}44`,
-                    transition:'all 0.2s',
+                    padding:18, borderRadius:18, cursor:'pointer', textAlign:'center',
+                    background:`linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02))`,
+                    border:`2px solid ${currentSlot.color}44`,
+                    boxShadow:'0 4px 12px rgba(0,0,0,0.3)',
+                    transition:'all 0.25s cubic-bezier(.34,1.56,.64,1)',
+                    animation:`cardEnter 0.4s ease-out ${idx*0.08}s both`,
+                    position:'relative', overflow:'hidden',
                   }}
-                  onMouseOver={e=>e.currentTarget.style.borderColor=currentSlot.color}
-                  onMouseOut={e=>e.currentTarget.style.borderColor=currentSlot.color+'44'}
                 >
-                  <div style={{ fontSize:40, marginBottom:6 }}>{item.emoji}</div>
-                  <div style={{ fontSize:13, fontWeight:700, color:'#e2e8f0' }}>{item.name}</div>
-                  <div style={{ fontSize:11, color:'#64748b', marginTop:2 }}>⚖️ {item.wt} kg</div>
+                  {/* Top sparkle accent */}
+                  <div style={{ position:'absolute', top:-30, right:-30, width:80, height:80, borderRadius:'50%', background:`radial-gradient(circle, ${currentSlot.color}33, transparent 70%)`, pointerEvents:'none' }}/>
+                  <div style={{ display:'flex', justifyContent:'center', marginBottom:8 }}>
+                    <div style={{ width:72, height:72, borderRadius:16, background:`radial-gradient(circle at 30% 30%, ${currentSlot.color}22, ${currentSlot.color}08)`, border:`1.5px solid ${currentSlot.color}44`, display:'flex', alignItems:'center', justifyContent:'center', boxShadow:`inset 0 2px 4px rgba(255,255,255,0.1), 0 4px 10px rgba(0,0,0,0.3)` }}>
+                      <ItemArt item={item} size={56}/>
+                    </div>
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:800, color:'#f1f5f9', letterSpacing:0.2 }}>{item.name}</div>
+                  <div style={{ display:'inline-block', marginTop:6, padding:'2px 10px', borderRadius:999, background:'rgba(255,255,255,0.06)', fontSize:10, color:'#94a3b8', fontWeight:700 }}>⚖️ {item.wt} kg</div>
                 </div>
               ))}
               {/* Items from wrong category that were collected (show greyed out) */}
@@ -1147,32 +1283,64 @@ export default function Module2_HomeDefense() {
   if (phase === 'result' && result) {
     const sc = result.passed?'#10b981':result.score>=40?'#f59e0b':'#ef4444'
     return (
-      <div style={{ minHeight:'100vh', background:result.passed?'linear-gradient(135deg,#bbf7d0,#86efac,#34d399)':'linear-gradient(135deg,#fecaca,#f87171,#dc2626)', padding:32 }}>
+      <div style={{ minHeight:'100vh', background:result.passed?'linear-gradient(135deg,#bbf7d0,#86efac,#34d399)':'linear-gradient(135deg,#fecaca,#f87171,#dc2626)', padding:32, position:'relative', overflow:'hidden' }}>
         <style>{KEYFRAMES}</style>
-        <div style={{ maxWidth:820, margin:'0 auto' }}>
-          <div style={{ background:'rgba(255,255,255,0.96)', borderRadius:28, padding:32, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.3)', textAlign:'center', marginBottom:20 }}>
-            <div style={{ fontSize:72, animation:'bob 2s ease-in-out infinite' }}>{result.passed?'🛶':'💀'}</div>
-            <div style={{ fontSize:22, fontWeight:900, color:sc, letterSpacing:1, marginTop:6 }}>{result.headline}</div>
-            <div style={{ marginTop:14, fontSize:64, fontWeight:900, color:sc }}>{result.score}<span style={{ fontSize:24, color:'#94a3b8' }}>/100</span></div>
+        {/* Atmospheric backdrop — sky/storm tinted by outcome */}
+        <SceneBackdrop src={SCENE_IMG.stormSky} style={{ opacity: result.passed ? 0.18 : 0.35, filter: result.passed ? 'brightness(1.1) hue-rotate(60deg)' : 'brightness(0.5)' }}/>
+        {/* Confetti / debris particles */}
+        {Array.from({length: 24}).map((_,i)=>(
+          <div key={i} style={{
+            position:'absolute', left:`${(i*7+3)%97}%`, top:`-${10+(i%5)*8}px`,
+            width:8, height:14, borderRadius:2,
+            background: result.passed ? ['#fbbf24','#34d399','#60a5fa','#f472b6'][i%4] : ['#7c2d12','#1f2937','#475569'][i%3],
+            animation:`debrisFly ${3+i*0.15}s ease-in ${i*0.1}s infinite`,
+            opacity: 0.8,
+          }}/>
+        ))}
+        <div style={{ maxWidth:820, margin:'0 auto', position:'relative', zIndex:1 }}>
+          <div style={{ background:'rgba(255,255,255,0.97)', borderRadius:28, padding:32, border:'4px solid #0f172a', boxShadow:'0 24px 60px rgba(0,0,0,0.4)', textAlign:'center', marginBottom:20, position:'relative', overflow:'hidden' }}>
+            {/* Hero raft visual — image if present, else animated emoji */}
+            {result.passed && (
+              <div style={{ position:'relative', width:160, height:120, margin:'0 auto', animation:'raftFloat 3s ease-in-out infinite' }}>
+                <SceneBackdrop src={SCENE_IMG.raftFinished} style={{ backgroundSize:'contain', backgroundRepeat:'no-repeat' }}/>
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:72 }}>🛶</div>
+              </div>
+            )}
+            {!result.passed && (
+              <div style={{ fontSize:72, animation:'tiltRock 1.5s ease-in-out infinite', filter:'drop-shadow(0 8px 12px rgba(0,0,0,0.3))' }}>💀</div>
+            )}
+            <div style={{ fontSize:22, fontWeight:900, color:sc, letterSpacing:1, marginTop:6, animation:'fadeIn 0.6s ease-out 0.2s both' }}>{result.headline}</div>
+            <div style={{ marginTop:14, fontSize:72, fontWeight:900, color:sc, animation:'scoreCount 0.8s cubic-bezier(.34,1.56,.64,1) 0.4s both', textShadow:`0 4px 12px ${sc}55` }}>{result.score}<span style={{ fontSize:26, color:'#94a3b8' }}>/100</span></div>
             <p style={{ color:'#334155', fontSize:14, lineHeight:1.7, margin:'12px auto 0', maxWidth:580 }}>{result.lesson}</p>
-            <div style={{ display:'flex', gap:12, justifyContent:'center', marginTop:12 }}>
-              <span style={{ background:'#f0fdf4', color:'#166534', padding:'4px 12px', borderRadius:999, fontSize:11, fontWeight:700 }}>🧩 {result.correctCount}/4</span>
-              {result.timeBonus>0 && <span style={{ background:'#eff6ff', color:'#1e40af', padding:'4px 12px', borderRadius:999, fontSize:11, fontWeight:700 }}>⏱ +{result.timeBonus}</span>}
-              {result.bpBonus>0 && <span style={{ background:'#fefce8', color:'#854d0e', padding:'4px 12px', borderRadius:999, fontSize:11, fontWeight:700 }}>📋 +{result.bpBonus}</span>}
+            <div style={{ display:'flex', gap:12, justifyContent:'center', marginTop:14, flexWrap:'wrap' }}>
+              <span style={{ background:'#f0fdf4', color:'#166534', padding:'5px 14px', borderRadius:999, fontSize:12, fontWeight:800, border:'1.5px solid #86efac' }}>🧩 {result.correctCount}/4 correct</span>
+              {result.timeBonus>0 && <span style={{ background:'#eff6ff', color:'#1e40af', padding:'5px 14px', borderRadius:999, fontSize:12, fontWeight:800, border:'1.5px solid #93c5fd' }}>⏱ +{result.timeBonus} time bonus</span>}
+              {result.bpBonus>0 && <span style={{ background:'#fefce8', color:'#854d0e', padding:'5px 14px', borderRadius:999, fontSize:12, fontWeight:800, border:'1.5px solid #fde047' }}>📋 +{result.bpBonus} blueprint</span>}
             </div>
           </div>
+          {/* After-action report — per-component cards with item images */}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:20 }}>
-            {result.results.map((r,i) => (
-              <div key={i} style={{ background:r.correct?'rgba(16,185,129,0.12)':'rgba(239,68,68,0.12)', border:`2px solid ${r.correct?'#10b981':'#ef4444'}`, borderRadius:18, padding:14 }}>
-                <div style={{ fontWeight:800, fontSize:13, color:r.correct?'#065f46':'#991b1b', marginBottom:4 }}>{r.correct?'✅':'❌'} {r.slot}</div>
-                <div style={{ fontSize:12, color:'#374151', fontWeight:600 }}>{r.item}</div>
-                <div style={{ fontSize:11, color:'#6b7280', marginTop:4, lineHeight:1.5 }}>{r.msg}</div>
-              </div>
-            ))}
+            {result.results.map((r,i) => {
+              const stepDef = BUILD_STEPS[i]
+              const itemDef = CATALOGUE.find(c => c.name === r.item)
+              return (
+                <div key={i} style={{ background:r.correct?'rgba(16,185,129,0.14)':'rgba(239,68,68,0.14)', border:`2px solid ${r.correct?'#10b981':'#ef4444'}`, borderRadius:18, padding:14, animation:`cardEnter 0.5s ease-out ${0.6 + i*0.1}s both`, display:'flex', gap:12, alignItems:'flex-start' }}>
+                  {/* Item thumbnail */}
+                  <div style={{ flexShrink:0, width:54, height:54, borderRadius:12, background:`linear-gradient(135deg, ${stepDef.color}22, ${stepDef.color}05)`, border:`1.5px solid ${stepDef.color}55`, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    {itemDef ? <ItemArt item={itemDef} size={42}/> : <span style={{ fontSize:28 }}>❓</span>}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:800, fontSize:13, color:r.correct?'#065f46':'#991b1b', marginBottom:2 }}>{r.correct?'✅':'❌'} {r.slot}</div>
+                    <div style={{ fontSize:12, color:'#374151', fontWeight:700 }}>{r.item}</div>
+                    <div style={{ fontSize:11, color:'#6b7280', marginTop:4, lineHeight:1.45 }}>{r.msg}</div>
+                  </div>
+                </div>
+              )
+            })}
           </div>
           <div style={{ display:'flex', gap:12, justifyContent:'center' }}>
-            <button onClick={retry} style={{ padding:'12px 28px', borderRadius:999, background:'#fff', color:'#0f172a', border:'2px solid #0f172a', fontWeight:800, fontSize:13, cursor:'pointer' }}>🔄 Try Again</button>
-            <button onClick={()=>gameDispatch({type:'BACK_TO_MODULES'})} style={{ padding:'12px 28px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#1e40af,#1d4ed8)', color:'#fff', fontWeight:800, fontSize:13, cursor:'pointer' }}>← Back to Modules</button>
+            <button onClick={retry} style={{ padding:'14px 32px', borderRadius:999, background:'#fff', color:'#0f172a', border:'2px solid #0f172a', fontWeight:800, fontSize:14, cursor:'pointer', boxShadow:'0 6px 16px rgba(0,0,0,0.2)', transition:'transform 0.15s' }} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>🔄 Try Again</button>
+            <button onClick={()=>gameDispatch({type:'BACK_TO_MODULES'})} style={{ padding:'14px 32px', borderRadius:999, border:'none', background:'linear-gradient(135deg,#1e40af,#1d4ed8)', color:'#fff', fontWeight:800, fontSize:14, cursor:'pointer', boxShadow:'0 6px 16px rgba(30,64,175,0.5)', transition:'transform 0.15s' }} onMouseEnter={e=>e.currentTarget.style.transform='translateY(-2px)'} onMouseLeave={e=>e.currentTarget.style.transform='translateY(0)'}>← Back to Modules</button>
           </div>
         </div>
       </div>
